@@ -9,8 +9,10 @@ export interface TabDef {
   disabled?: boolean;
 }
 
-export function TopicTabs({ tabs }: { tabs: TabDef[] }) {
-  const [active, setActive] = useState(tabs[0]?.key);
+export function TopicTabs({ tabs, initialTabKey }: { tabs: TabDef[]; initialTabKey?: string }) {
+  const [active, setActive] = useState(
+    initialTabKey && tabs.some((t) => t.key === initialTabKey) ? initialTabKey : tabs[0]?.key,
+  );
   const activeTab = tabs.find((t) => t.key === active) ?? tabs[0];
 
   return (

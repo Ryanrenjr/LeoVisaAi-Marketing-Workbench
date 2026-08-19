@@ -59,6 +59,31 @@ They require an explicit, separate instruction from a human.
    includes Topic AI scoring, Research AI, chat, publishing automation, and
    anything on the "explicitly NOT" list above.
 
+## Digital employee mental model (Boss Mode)
+
+LeoVisaAi 营销工作台 uses a **"digital employee" mental model** for its
+default (Boss Mode) presentation: the backend is workflow/agent-based
+(Topic → Research Agent → Content Agent, gated by human approval), but
+the user-facing Boss Mode presents that same backend as **four digital
+employees** (A 选题策划员 / B 政策研究员 / C 内容编辑 / D 合规审核员) doing the
+repetitive work, with **Leo** — the human — reviewing only the decisions
+AI cannot responsibly make. See
+[docs/digital-employee-ux.md](docs/digital-employee-ux.md) for the full
+mapping between employee UI and backend modules.
+
+This is a **presentation-layer distinction only**:
+- It never changes what a user is allowed to do — server-side role checks
+  remain the sole source of authorization truth.
+- It never invents data — every count, status, and queue item shown in
+  Boss Mode must trace to a real row via an existing (or thin, obviously
+  reusable) data-access function. Never fabricate a number.
+- The interface must remain extremely minimal — no robot avatars, no
+  cartoon illustrations, no gamified virtual office, no colourful AI
+  aesthetic. Professional, restrained, typography-first.
+- Admin Mode (for `ADMIN`) keeps full operational access to the
+  underlying system; Boss Mode is an abstraction over the same data, not
+  a separate product.
+
 ## Working agreement for this repo
 
 Before any non-trivial change:
@@ -93,6 +118,7 @@ in this application.
 - [docs/phase-3-plan.md](docs/phase-3-plan.md) — Research Agent milestone: AI architecture, anti-hallucination design, approval workflow
 - [docs/phase-3-5-plan.md](docs/phase-3-5-plan.md) — Research Agent hardening: RESEARCH_READY, confidence handling, full Phase 1 status model, expanded test coverage
 - [docs/phase-4-plan.md](docs/phase-4-plan.md) — Content Agent: one research → three platform drafts, evidence boundary, source traceability, versioning
+- [docs/digital-employee-ux.md](docs/digital-employee-ux.md) — Boss Mode / Admin Mode: the digital-employee presentation layer and its mapping to backend modules
 - [docs/security-boundaries.md](docs/security-boundaries.md) — the data boundary and key-handling rules
 
 @AGENTS.md

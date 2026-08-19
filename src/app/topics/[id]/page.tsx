@@ -62,10 +62,13 @@ function latestPlatformActivity(
 
 export default async function TopicDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }) {
   const { id } = await params;
+  const { tab: initialTabKey } = await searchParams;
   const [topic, demo, user] = await Promise.all([
     getTopicById(id),
     isDemoMode(),
@@ -462,7 +465,7 @@ export default async function TopicDetailPage({
       )}
 
       <section>
-        <TopicTabs tabs={tabs} />
+        <TopicTabs tabs={tabs} initialTabKey={initialTabKey} />
       </section>
     </div>
   );

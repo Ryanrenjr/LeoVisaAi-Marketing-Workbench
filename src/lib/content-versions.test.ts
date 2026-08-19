@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getLatestForLineage,
   groupContentAssetsByLineage,
+  groupContentAssetsByTopicId,
   groupSourcesByPackId,
   nextVersionNumber,
   sourcesForAsset,
@@ -199,5 +200,23 @@ describe("groupSourcesByPackId / sourcesForAsset — content stays traceable to 
     // pick up the new pack's sources just because it's now "the latest pack".
     const olderVersion = lineage.history.find((a) => a.id === "content-v1")!;
     expect(sourcesForAsset(olderVersion, byPack).map((s) => s.id)).toEqual(["v1-source"]);
+  });
+});
+
+describe("groupContentAssetsByTopicId", () => {
+  it("groups a flat asset list by topic_id", () => {
+    const assets = [
+      makeAsset({ id: "a", topic_id: "topic-1" }),
+      makeAsset({ id: "b", topic_id: "topic-1" }),
+      makeAsset({ id: "c", topic_id: "topic-2" }),
+    ];
+    const byTopic = groupContentAssetsByTopicId(assets);
+    expect(byTopic.get("topic-1")?.map((a) => a.id)).toEqual(["a", "b"]);
+    expect(byTopic.get("topic-2")?.map((a) => a.id)).toEqual(["c"]);
+    expect(byTopic.get("topic-3")).toBeUndefined();
+  });
+
+  it("returns an empty map for no assets", () => {
+    expect(groupContentAssetsByTopicId([]).size).toBe(0);
   });
 });

@@ -85,3 +85,14 @@ export function sourcesForAsset(
 ): ResearchSource[] {
   return sourcesByPackId.get(asset.research_pack_id) ?? [];
 }
+
+/** Groups a flat content_assets list (e.g. from getAllContentAssets()) by topic_id. */
+export function groupContentAssetsByTopicId(assets: ContentAsset[]): Map<string, ContentAsset[]> {
+  const byTopicId = new Map<string, ContentAsset[]>();
+  for (const asset of assets) {
+    const list = byTopicId.get(asset.topic_id);
+    if (list) list.push(asset);
+    else byTopicId.set(asset.topic_id, [asset]);
+  }
+  return byTopicId;
+}

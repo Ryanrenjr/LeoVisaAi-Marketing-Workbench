@@ -267,3 +267,37 @@ export async function getContentAssets(topicId: string): Promise<ContentAsset[]>
   if (error) return [];
   return data;
 }
+
+/**
+ * Every topic, any status — used only by the Boss Mode / digital-employee
+ * aggregation pages (Planner/Researcher/Editor summaries, Leo's review
+ * queue, the admin 内容资产库 listing). Small internal-tool scale, so a
+ * single unfiltered fetch plus in-memory filtering (via the existing pure
+ * helpers in employee-tasks.ts) is simpler than several bespoke queries.
+ */
+export async function getAllTopics(): Promise<Topic[]> {
+  if (!isSupabaseConfigured()) return DEMO_TOPICS;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("topics")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) return DEMO_TOPICS;
+  return data;
+}
+
+/** Every content asset across every topic — see getAllTopics() for why this is an unfiltered fetch. */
+export async function getAllContentAssets(): Promise<ContentAsset[]> {
+  if (!isSupabaseConfigured()) return DEMO_CONTENT_ASSETS;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("content_assets")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) return [];
+  return data;
+}
