@@ -63,13 +63,18 @@ They require an explicit, separate instruction from a human.
 
 LeoVisaAi 营销工作台 uses a **"digital employee" mental model** for its
 default (Boss Mode) presentation: the backend is workflow/agent-based
-(Topic → Research Agent → Content Agent, gated by human approval), but
-the user-facing Boss Mode presents that same backend as **four digital
-employees** (A 选题策划员 / B 政策研究员 / C 内容编辑 / D 合规审核员) doing the
-repetitive work, with **Leo** — the human — reviewing only the decisions
-AI cannot responsibly make. See
-[docs/digital-employee-ux.md](docs/digital-employee-ux.md) for the full
-mapping between employee UI and backend modules.
+(Topic → Research Agent → Content Agent → Compliance Agent, gated by
+human approval), but the user-facing Boss Mode presents that same backend
+as **five digital employees** (A 选题策划员 / B 政策研究员 / C 内容编辑 / D
+合规审核员 / E 数据分析员) doing the repetitive work, with **Leo** — the
+human — reviewing only the decisions AI cannot responsibly make. D and E
+went live by explicit live user instruction, overriding this file's
+earlier "exactly four, do not add a fifth without instruction" note — any
+further employee beyond these five still requires an explicit instruction.
+An ADMIN can give any employee a custom display name
+(`employee_names` table); this never changes which employee owns which
+task. See [docs/digital-employee-ux.md](docs/digital-employee-ux.md) for
+the full mapping between employee UI and backend modules.
 
 This is a **presentation-layer distinction only**:
 - It never changes what a user is allowed to do — server-side role checks
@@ -83,6 +88,42 @@ This is a **presentation-layer distinction only**:
 - Admin Mode (for `ADMIN`) keeps full operational access to the
   underlying system; Boss Mode is an abstraction over the same data, not
   a separate product.
+
+## Digital employee ≠ AI model (Model Router)
+
+No digital employee, and no task, is permanently tied to one AI provider
+or model. The real chain is always **Digital Employee → Task Type →
+Model Router → Provider → Model**, implemented in
+[src/lib/ai/router.ts](src/lib/ai/router.ts). Do not write code that
+hard-codes a provider for an employee or a task (e.g. `ResearchAgent =
+Claude`) — always route through a task type and look up model metadata in
+the Model Registry ([src/lib/ai/providers/registry.ts](src/lib/ai/providers/registry.ts)),
+never scattered elsewhere. See
+[docs/model-router.md](docs/model-router.md) for the full design.
+
+Two rules that must hold for any future provider or model added to this
+system:
+- **No automatic FREE → PAID fallback.** If Development Mode can't find a
+  free model that satisfies a task, the task fails with a clear message —
+  it never silently reaches for a paid model.
+- **A PAID or MIXED-cost model always shows a warning before running**,
+  with provider/model/task named, and requires an explicit "继续运行"
+  click. Boss Mode never shows model/provider details — this is
+  exclusively an ADMIN concern.
+
+## Search Provider ≠ AI Model (Search Router)
+
+Retrieving evidence and reasoning about it are two independent steps for
+Research: **Research Task → Search Router → Search Provider → Retrieved
+Sources → Model Router → AI Model → Research Pack**, implemented in
+[src/lib/search/](src/lib/search/) and
+[src/lib/ai/router.ts](src/lib/ai/router.ts). Do not write code that
+couples a search provider to a specific AI model (`GeminiResearchAgent`,
+`BraveResearchAgent`) — the two route independently. See
+[docs/search-router.md](docs/search-router.md) for the full design. The
+same two rules from the Model Router apply here: no automatic FREE → PAID
+fallback for search providers, and Boss Mode never shows search/provider
+internals.
 
 ## Working agreement for this repo
 
@@ -119,6 +160,10 @@ in this application.
 - [docs/phase-3-5-plan.md](docs/phase-3-5-plan.md) — Research Agent hardening: RESEARCH_READY, confidence handling, full Phase 1 status model, expanded test coverage
 - [docs/phase-4-plan.md](docs/phase-4-plan.md) — Content Agent: one research → three platform drafts, evidence boundary, source traceability, versioning
 - [docs/digital-employee-ux.md](docs/digital-employee-ux.md) — Boss Mode / Admin Mode: the digital-employee presentation layer and its mapping to backend modules
+- [docs/model-router.md](docs/model-router.md) — the multi-provider AI Model Router: task routing, the Model Registry, free-first Development Mode, paid-model warnings, provider/model override
+- [docs/search-router.md](docs/search-router.md) — the Search Router: Search Provider ≠ AI Model, Tavily Search → analysis-model handoff, source-manifest grounding, free-first/no-fallback rule
+- [docs/ai-workflows.md](docs/ai-workflows.md) — Research + Content generation walked through end to end, from an ADMIN's perspective
+- [docs/provider-smoke-test.md](docs/provider-smoke-test.md) — real end-to-end verification results: migration status, provider connectivity, live smoke-test findings
 - [docs/security-boundaries.md](docs/security-boundaries.md) — the data boundary and key-handling rules
 
 @AGENTS.md

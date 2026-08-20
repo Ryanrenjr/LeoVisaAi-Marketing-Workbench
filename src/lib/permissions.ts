@@ -45,3 +45,12 @@ export function canGenerateContent(status: TopicStatus): boolean {
 export function canManageContentAssets(role: UserRole): boolean {
   return role === "ADMIN";
 }
+
+/**
+ * Running Compliance (Employee D) is ADMIN-only, same posture as
+ * generating content in the first place — it re-checks an already
+ * generated draft, never a separate approval a different role must give.
+ */
+export function canRunCompliance(role: UserRole): boolean {
+  return role === "ADMIN";
+}

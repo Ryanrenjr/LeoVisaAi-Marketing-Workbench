@@ -203,3 +203,30 @@ export interface ContentAsset {
   created_at: string;
   updated_at: string;
 }
+
+export type ComplianceRisk = "LOW" | "MEDIUM" | "HIGH";
+
+export interface ComplianceReviewRow {
+  id: string;
+  topic_id: string;
+  content_asset_id: string;
+  overall_risk: ComplianceRisk;
+  findings: Array<{ issue_type: string; quote: string; explanation: string }>;
+  model_alias: string | null;
+  provider: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface PublishPerformanceRow {
+  id: string;
+  topic_id: string;
+  platform: ContentPlatform;
+  screenshot_path: string;
+  extracted_metrics: Record<string, unknown>;
+  analysis_note: string;
+  model_alias: string | null;
+  provider: string | null;
+  created_by: string | null;
+  created_at: string;
+}

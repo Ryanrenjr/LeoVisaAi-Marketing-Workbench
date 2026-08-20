@@ -1,13 +1,13 @@
 "use client";
 
 import { useActionState } from "react";
-import { CONTENT_PILLAR_LABEL } from "@/lib/status";
+import { CONTENT_PILLAR_LABEL, PRIORITY_LABEL } from "@/lib/status";
 import type { ContentPillar, TopicPriority } from "@/lib/types";
 import type { TopicFormState } from "@/app/topics/actions";
 import { Button } from "./ui/button";
 
 const PILLAR_OPTIONS = Object.entries(CONTENT_PILLAR_LABEL) as [ContentPillar, string][];
-const PRIORITY_OPTIONS: TopicPriority[] = ["LOW", "MEDIUM", "HIGH"];
+const PRIORITY_OPTIONS = Object.entries(PRIORITY_LABEL) as [TopicPriority, string][];
 
 const inputClass =
   "w-full rounded-md border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm";
@@ -65,8 +65,8 @@ export function TopicForm({
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1 text-sm">
-          Business（业务线）
-          <input name="business" defaultValue={initial?.business} className={inputClass} />
+          业务线
+          <input name="business" defaultValue={initial?.business} className={inputClass} placeholder="例如：永居 / ILR" />
         </label>
         <label className="flex flex-col gap-1 text-sm">
           目标受众
@@ -94,9 +94,9 @@ export function TopicForm({
             defaultValue={initial?.priority ?? "MEDIUM"}
             className={inputClass}
           >
-            {PRIORITY_OPTIONS.map((value) => (
+            {PRIORITY_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>
-                {value}
+                {label}
               </option>
             ))}
           </select>

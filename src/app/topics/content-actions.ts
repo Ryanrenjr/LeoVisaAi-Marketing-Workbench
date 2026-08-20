@@ -8,12 +8,12 @@ import { getContentAssets, getLatestResearchPack, getResearchSources, getTopicBy
 import { canGenerateContent, canManageContentAssets } from "@/lib/permissions";
 import { getLatestForLineage, nextVersionNumber } from "@/lib/content-versions";
 import { deriveTitleAndContent, mergeEditIntoStructuredContent } from "@/lib/content-mapping";
-import {
-  generateVideoChannelContent,
-  generateXiaohongshuContent,
-  generateWechatOutline,
-  generateWechatFullArticle,
-} from "@/lib/ai/content-agent";
+import { runContentTask, runWechatFullArticleTask, isRouterResolutionFailure } from "@/lib/ai/router";
+import { getModel } from "@/lib/ai/providers/registry";
+import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
+import { writeUsageLog } from "@/lib/ai/usage-log";
+import type { GenericContentTaskType } from "@/lib/ai/content-schemas";
+import type { ModelRef, TaskType } from "@/lib/ai/providers/types";
 import type {
   ContentPlatform,
   ContentType,
@@ -38,12 +38,19 @@ const PLATFORM_CONTENT_TYPE: Record<
   WECHAT_OFFICIAL_ACCOUNT: "wechat_outline",
 };
 
+const PLATFORM_TASK_TYPE: Record<ContentPlatform, GenericContentTaskType> = {
+  VIDEO_CHANNEL: "VIDEO_WRITING",
+  XIAOHONGSHU: "XIAOHONGSHU_WRITING",
+  WECHAT_OFFICIAL_ACCOUNT: "WECHAT_WRITING",
+};
+
 /**
- * Generates one platform's content, saves it as a new version, and logs
- * both the AI usage and the activity — regardless of success or failure.
- * Shared by the initial 3-platform batch and single-platform regeneration
- * so a failure in one never touches the others (see docs/phase-4-plan.md
- * "Failure handling").
+ * Generates one platform's content via the Model Router, saves it as a new
+ * version, and logs both the AI usage and the activity — regardless of
+ * success or failure. Shared by the initial 3-platform batch and
+ * single-platform regeneration so a failure in one never touches the
+ * others (see docs/phase-4-plan.md "Failure handling"). `override` is the
+ * section-9 one-off model choice for this single execution.
  */
 async function generateAndPersistPlatform(
   supabase: SupabaseServerClient,
@@ -52,30 +59,15 @@ async function generateAndPersistPlatform(
   sources: ResearchSource[],
   platform: ContentPlatform,
   user: CurrentUser,
+  override?: ModelRef | null,
 ): Promise<{ ok: boolean; version?: number; error?: string }> {
   const contentType = PLATFORM_CONTENT_TYPE[platform];
+  const taskType = PLATFORM_TASK_TYPE[platform];
   const evidenceInput = { topic, researchPack, sources };
 
-  const result =
-    platform === "VIDEO_CHANNEL"
-      ? await generateVideoChannelContent(evidenceInput)
-      : platform === "XIAOHONGSHU"
-        ? await generateXiaohongshuContent(evidenceInput)
-        : await generateWechatOutline(evidenceInput);
+  const result = await runContentTask(taskType, evidenceInput, override);
 
-  await supabase.from("ai_usage_log").insert({
-    workflow_type: "content",
-    model_alias: result.modelAlias,
-    topic_id: topic.id,
-    platform,
-    input_tokens: result.inputTokens,
-    output_tokens: result.outputTokens,
-    latency_ms: result.latencyMs,
-    success: result.ok,
-    error: result.ok ? null : result.error,
-  });
-
-  if (!result.ok) {
+  if (isRouterResolutionFailure(result)) {
     await supabase.from("topic_activity_log").insert({
       topic_id: topic.id,
       activity_type: "content_generation_failed",
@@ -85,9 +77,36 @@ async function generateAndPersistPlatform(
     return { ok: false, error: result.error };
   }
 
+  const model = getModel(result.provider, result.modelId);
+  const { usageLogFailed } = await writeUsageLog(supabase, {
+    workflow_type: "content",
+    model_alias: `${result.provider}/${result.modelId}`,
+    topic_id: topic.id,
+    platform,
+    input_tokens: result.inputTokens,
+    output_tokens: result.outputTokens,
+    latency_ms: result.latencyMs,
+    success: result.ok,
+    error: result.ok ? null : result.error,
+    provider: result.provider,
+    task_type: taskType satisfies TaskType,
+    digital_employee: TASK_TYPE_EMPLOYEE[taskType],
+    pricing_type_at_execution: model?.pricingType ?? null,
+  });
+
+  if (!result.ok || !result.data) {
+    await supabase.from("topic_activity_log").insert({
+      topic_id: topic.id,
+      activity_type: "content_generation_failed",
+      actor_id: user.id,
+      detail: { platform, error: result.error, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
+    });
+    return { ok: false, error: result.error ?? "生成失败" };
+  }
+
   const existing = await getContentAssets(topic.id);
   const version = nextVersionNumber(existing, platform, contentType);
-  const { title, content } = deriveTitleAndContent(platform, result.content);
+  const { title, content } = deriveTitleAndContent(platform, result.data);
 
   const { error: insertError } = await supabase.from("content_assets").insert({
     topic_id: topic.id,
@@ -96,7 +115,7 @@ async function generateAndPersistPlatform(
     content_type: contentType,
     title,
     content,
-    structured_content: result.content,
+    structured_content: result.data,
     version,
     created_by: user.id,
   });
@@ -106,7 +125,7 @@ async function generateAndPersistPlatform(
     topic_id: topic.id,
     activity_type: version === 1 ? "content_generated" : "content_regenerated",
     actor_id: user.id,
-    detail: { platform, version },
+    detail: { platform, version, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
   });
 
   return { ok: true, version };
@@ -158,7 +177,7 @@ async function loadGenerationContext(topicId: string) {
   return { user, topic, researchPack, sources };
 }
 
-/** "生成内容" — the initial "One Research → Three Outputs" batch. */
+/** "生成内容" — the initial "One Research → Three Outputs" batch. Each platform routes independently, so a per-platform override doesn't make sense here — see regeneratePlatformContent for single-platform override. */
 export async function generateContent(topicId: string) {
   const { user, topic, researchPack, sources } = await loadGenerationContext(topicId);
   const supabase = await createClient();
@@ -183,19 +202,23 @@ export async function generateContent(topicId: string) {
   revalidatePath("/research-completed");
 }
 
-/** Retry/regenerate a single platform — used both for retrying a failed platform and deliberate regeneration. */
-export async function regeneratePlatformContent(topicId: string, platform: ContentPlatform) {
+/** Retry/regenerate a single platform — used both for retrying a failed platform and deliberate regeneration. `override` is the section-9 one-off model choice for this single execution; it never changes the persisted default. */
+export async function regeneratePlatformContent(
+  topicId: string,
+  platform: ContentPlatform,
+  override?: ModelRef | null,
+) {
   const { user, topic, researchPack, sources } = await loadGenerationContext(topicId);
   const supabase = await createClient();
 
-  await generateAndPersistPlatform(supabase, topic, researchPack, sources, platform, user);
+  await generateAndPersistPlatform(supabase, topic, researchPack, sources, platform, user, override);
   await maybeAdvanceToContentDraft(supabase, topicId, user);
 
   revalidatePath(`/topics/${topicId}`);
 }
 
 /** The separate, deliberate "生成完整文章" action — never runs automatically. */
-export async function generateFullArticle(topicId: string) {
+export async function generateFullArticle(topicId: string, override?: ModelRef | null) {
   const { user, topic, researchPack, sources } = await loadGenerationContext(topicId);
 
   const existingAssets = await getContentAssets(topicId);
@@ -210,11 +233,23 @@ export async function generateFullArticle(topicId: string) {
   };
 
   const supabase = await createClient();
-  const result = await generateWechatFullArticle({ topic, researchPack, sources, outline });
+  const result = await runWechatFullArticleTask({ topic, researchPack, sources, outline }, override);
 
-  await supabase.from("ai_usage_log").insert({
+  if (isRouterResolutionFailure(result)) {
+    await supabase.from("topic_activity_log").insert({
+      topic_id: topicId,
+      activity_type: "content_generation_failed",
+      actor_id: user.id,
+      detail: { platform: "WECHAT_OFFICIAL_ACCOUNT", contentType: "wechat_full_article", error: result.error },
+    });
+    revalidatePath(`/topics/${topicId}`);
+    return;
+  }
+
+  const model = getModel(result.provider, result.modelId);
+  const { usageLogFailed } = await writeUsageLog(supabase, {
     workflow_type: "content",
-    model_alias: result.modelAlias,
+    model_alias: `${result.provider}/${result.modelId}`,
     topic_id: topicId,
     platform: "WECHAT_OFFICIAL_ACCOUNT",
     input_tokens: result.inputTokens,
@@ -222,14 +257,23 @@ export async function generateFullArticle(topicId: string) {
     latency_ms: result.latencyMs,
     success: result.ok,
     error: result.ok ? null : result.error,
+    provider: result.provider,
+    task_type: "WECHAT_FULL_ARTICLE" satisfies TaskType,
+    digital_employee: TASK_TYPE_EMPLOYEE.WECHAT_FULL_ARTICLE,
+    pricing_type_at_execution: model?.pricingType ?? null,
   });
 
-  if (!result.ok) {
+  if (!result.ok || !result.data) {
     await supabase.from("topic_activity_log").insert({
       topic_id: topicId,
       activity_type: "content_generation_failed",
       actor_id: user.id,
-      detail: { platform: "WECHAT_OFFICIAL_ACCOUNT", contentType: "wechat_full_article", error: result.error },
+      detail: {
+        platform: "WECHAT_OFFICIAL_ACCOUNT",
+        contentType: "wechat_full_article",
+        error: result.error,
+        ...(usageLogFailed ? { usageLogFailed: true } : {}),
+      },
     });
     revalidatePath(`/topics/${topicId}`);
     return;
@@ -241,9 +285,9 @@ export async function generateFullArticle(topicId: string) {
     research_pack_id: researchPack.id,
     platform: "WECHAT_OFFICIAL_ACCOUNT",
     content_type: "wechat_full_article",
-    title: result.content.title,
-    content: result.content.full_article,
-    structured_content: result.content,
+    title: result.data.title,
+    content: result.data.full_article,
+    structured_content: result.data,
     version,
     created_by: user.id,
   });
@@ -252,7 +296,7 @@ export async function generateFullArticle(topicId: string) {
     topic_id: topicId,
     activity_type: "full_article_generated",
     actor_id: user.id,
-    detail: { version },
+    detail: { version, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
   });
 
   revalidatePath(`/topics/${topicId}`);

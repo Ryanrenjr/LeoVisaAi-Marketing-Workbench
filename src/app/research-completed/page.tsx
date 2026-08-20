@@ -16,7 +16,7 @@ export default async function ResearchCompletedPage() {
         </p>
       )}
       <p className="text-sm text-[var(--muted)]">
-        以下选题的研究已获批准，等待内容生成（Content AI 尚未上线，暂无法在此手动推进）。
+        以下选题的研究已获批准，可以进入选题详情页生成视频号/小红书/公众号内容。
       </p>
       {topics.length === 0 ? (
         <p className="text-sm text-[var(--muted)]">暂无选题。</p>

@@ -4,19 +4,14 @@ import type { ViewMode } from "@/lib/view-mode";
 import { LogoutButton } from "./logout-button";
 import { ModeSwitch } from "./mode-switch";
 
-const ADMIN_LINKS = [
-  { href: "/", label: "总览" },
-  { href: "/topics", label: "选题库" },
-  { href: "/team/researcher", label: "研究中心" },
-  { href: "/ready-to-shoot", label: "可进入拍摄" },
-  { href: "/published", label: "本周已发布" },
-  { href: "/team/editor", label: "内容工作台" },
-  { href: "/content-assets", label: "内容资产库" },
-];
-
+/**
+ * Admin Mode's home page now shows the same employee cards as Boss Mode
+ * (plus a collapsed "运营列表" section for the pipeline-stage pages no
+ * employee owns — see src/app/page.tsx), so the nav no longer needs a
+ * permanent 8-item link list. "管理" is the only thing genuinely not
+ * reachable by clicking an employee card.
+ */
 export function Nav({ user, mode }: { user: CurrentUser | null; mode: ViewMode }) {
-  const isAdminNav = mode === "admin";
-
   return (
     <header className="border-b border-[var(--border)]">
       <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -24,19 +19,10 @@ export function Nav({ user, mode }: { user: CurrentUser | null; mode: ViewMode }
           <Link href="/" className="font-semibold">
             LeoVisaAi 营销工作台
           </Link>
-          {isAdminNav && (
-            <nav className="flex flex-wrap gap-3 text-sm text-[var(--muted)]">
-              {ADMIN_LINKS.map((link) => (
-                <Link key={link.href} href={link.href} className="hover:text-[var(--foreground)]">
-                  {link.label}
-                </Link>
-              ))}
-              {user?.role === "ADMIN" && (
-                <Link href="/admin" className="hover:text-[var(--foreground)]">
-                  管理
-                </Link>
-              )}
-            </nav>
+          {user?.role === "ADMIN" && mode === "admin" && (
+            <Link href="/admin" className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]">
+              管理
+            </Link>
           )}
         </div>
         {user && (

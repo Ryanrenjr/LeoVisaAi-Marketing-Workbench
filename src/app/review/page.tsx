@@ -2,14 +2,16 @@ import Link from "next/link";
 import { getAllContentAssets, getAllTopics, getLatestResearchPack, isDemoMode } from "@/lib/topics";
 import { groupContentAssetsByTopicId } from "@/lib/content-versions";
 import { buildLeoReviewQueue } from "@/lib/employee-tasks";
+import { getEmployeeNames } from "@/lib/employee-names";
 import { Button } from "@/components/ui/button";
 import type { ResearchConfidence } from "@/lib/types";
 
 export default async function ReviewQueuePage() {
-  const [allTopics, allContentAssets, demo] = await Promise.all([
+  const [allTopics, allContentAssets, demo, employeeNames] = await Promise.all([
     getAllTopics(),
     getAllContentAssets(),
     isDemoMode(),
+    getEmployeeNames(),
   ]);
 
   const assetsByTopicId = groupContentAssetsByTopicId(allContentAssets);
@@ -25,7 +27,7 @@ export default async function ReviewQueuePage() {
     confidenceEntries.filter((e): e is [string, ResearchConfidence] => Boolean(e[1])),
   );
 
-  const queue = buildLeoReviewQueue(allTopics, assetsByTopicId, confidenceByTopicId);
+  const queue = buildLeoReviewQueue(allTopics, assetsByTopicId, confidenceByTopicId, employeeNames);
 
   return (
     <div className="flex flex-col gap-6">

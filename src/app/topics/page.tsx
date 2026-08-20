@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { getLibraryTopics, isDemoMode } from "@/lib/topics";
-import { STATUS_LABEL } from "@/lib/status";
+import { PRIORITY_LABEL, STATUS_LABEL } from "@/lib/status";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 
@@ -38,7 +38,7 @@ export default async function TopicsPage() {
                   <div className="mt-1.5 flex items-center gap-2">
                     <StatusBadge status={topic.status} />
                     <span className="text-xs text-[var(--muted)]">
-                      {STATUS_LABEL[topic.status]} · 优先级 {topic.priority}
+                      {STATUS_LABEL[topic.status]} · 优先级{PRIORITY_LABEL[topic.priority]}
                     </span>
                   </div>
                 </div>

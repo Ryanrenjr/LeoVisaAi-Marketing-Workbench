@@ -1,7 +1,8 @@
 import { groupContentAssetsByLineage } from "./content-versions";
 import { canGenerateContent } from "./permissions";
-import { getEmployee, BOSS_CONFIDENCE_LABEL } from "./boss-language";
-import type { ContentAsset, ResearchConfidence, Topic } from "./types";
+import { BOSS_CONFIDENCE_LABEL, resolveEmployeeDisplayName } from "./boss-language";
+import type { EmployeeId } from "./boss-language";
+import type { ComplianceReviewRow, ContentAsset, ResearchConfidence, Topic } from "./types";
 import type { EvidenceNote } from "./ai/content-schemas";
 
 /**
@@ -96,6 +97,7 @@ export function buildLeoReviewQueue(
   topics: Topic[],
   contentAssetsByTopicId: Map<string, ContentAsset[]>,
   confidenceByTopicId: Map<string, ResearchConfidence> = new Map(),
+  employeeNames: Partial<Record<EmployeeId, string>> = {},
 ): ReviewItem[] {
   const items: ReviewItem[] = [];
 
@@ -106,10 +108,10 @@ export function buildLeoReviewQueue(
       topicId: topic.id,
       topicTitle: topic.title,
       employeeId: "researcher",
-      employeeName: getEmployee("researcher").name,
+      employeeName: resolveEmployeeDisplayName("researcher", employeeNames),
       description: "研究已完成，请确认是否可以使用",
       warning: confidence === "LOW" ? BOSS_CONFIDENCE_LABEL.LOW : null,
-      href: `/topics/${topic.id}?tab=research`,
+      href: `/topics/${topic.id}/research/review`,
     });
   }
 
@@ -123,11 +125,52 @@ export function buildLeoReviewQueue(
       topicId: topic.id,
       topicTitle: topic.title,
       employeeId: "editor",
-      employeeName: getEmployee("editor").name,
+      employeeName: resolveEmployeeDisplayName("editor", employeeNames),
       description: `内容草稿有 ${noteCount} 项需要确认`,
       warning: null,
       href: `/topics/${topic.id}?tab=video`,
     });
+  }
+
+  return items;
+}
+
+export interface ComplianceQueueItem {
+  topicId: string;
+  topicTitle: string;
+  contentAssetId: string;
+  platformLabel: string;
+  /** Null = never reviewed yet. */
+  latestReview: ComplianceReviewRow | null;
+}
+
+/**
+ * Every latest-version content asset, paired with its most recent
+ * compliance review if one exists. "Needs attention" (never reviewed, or
+ * last review was MEDIUM/HIGH) is a UI-level filter on this list, not a
+ * separate query — see /team/compliance.
+ */
+export function buildComplianceQueue(
+  topics: Topic[],
+  contentAssetsByTopicId: Map<string, ContentAsset[]>,
+  reviewsByContentAssetId: Map<string, ComplianceReviewRow>,
+): ComplianceQueueItem[] {
+  const items: ComplianceQueueItem[] = [];
+  const topicById = new Map(topics.map((t) => [t.id, t]));
+
+  for (const [topicId, assets] of contentAssetsByTopicId) {
+    const topic = topicById.get(topicId);
+    if (!topic) continue;
+    const lineages = groupContentAssetsByLineage(assets);
+    for (const lineage of lineages) {
+      items.push({
+        topicId,
+        topicTitle: topic.title,
+        contentAssetId: lineage.latest.id,
+        platformLabel: lineage.latest.platform,
+        latestReview: reviewsByContentAssetId.get(lineage.latest.id) ?? null,
+      });
+    }
   }
 
   return items;

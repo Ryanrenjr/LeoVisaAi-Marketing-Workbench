@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+html {
+  /* Baseline readability bump — every Tailwind text-* utility is rem-based,
+     so this scales the whole app proportionally instead of hunting down
+     individual text-sm/text-xs usages. See CLAUDE.md "idiot-proof" UI ask. */
+  font-size: 19px;
+}
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -29,6 +36,7 @@
 body {
   background: var(--background);
   color: var(--foreground);
+  line-height: 1.6;
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Microsoft YaHei", sans-serif;

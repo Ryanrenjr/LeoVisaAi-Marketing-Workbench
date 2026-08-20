@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ZodType } from "zod";
 import type { ResearchConfidence, ResearchSource } from "../types";
 
 /**
@@ -143,6 +144,39 @@ export function buildForbiddenPhraseNotes(texts: string[]): EvidenceNote[] {
   }));
 }
 
+export type Groundable = { source_references: string[]; expert_review_notes: EvidenceNote[] };
+
+/**
+ * The same source-grounding + forbidden-phrase safety net content-agent.ts
+ * applies inline for the Anthropic path, factored out so every other
+ * provider's generic structured-content path (see router.ts) gets the
+ * identical anti-hallucination guarantee rather than a re-implementation.
+ */
+export function applyGroundingAndSafety<T extends Groundable>(
+  parsed: T,
+  labelToId: Map<string, string>,
+  textFieldsForScan: (parsed: T) => string[],
+): T {
+  const { sourceIds, droppedCount } = groundContentSources(parsed.source_references, labelToId);
+  const droppedNote: EvidenceNote[] =
+    droppedCount > 0
+      ? [
+          {
+            claim: "来源引用",
+            reason: "expert_review_required",
+            note: `已自动移除 ${droppedCount} 条未在验证来源中找到的引用标签。`,
+          },
+        ]
+      : [];
+  const forbiddenNotes = buildForbiddenPhraseNotes(textFieldsForScan(parsed));
+
+  return {
+    ...parsed,
+    source_references: sourceIds,
+    expert_review_notes: [...parsed.expert_review_notes, ...droppedNote, ...forbiddenNotes],
+  };
+}
+
 // ---------------------------------------------------------------------
 // Prompts
 // ---------------------------------------------------------------------
@@ -236,3 +270,45 @@ export function buildOutlineContextBlock(outline: {
     `关键主张：\n${outline.key_claims.map((c) => `- ${c}`).join("\n")}`,
   ].join("\n");
 }
+
+// ---------------------------------------------------------------------
+// Task config for the generic multi-provider content path (router.ts).
+// Mirrors the per-platform config content-agent.ts builds inline for its
+// Anthropic-specific calls — kept as a separate, explicit map here so a
+// non-Anthropic provider never needs to guess a prompt/schema pairing.
+// ---------------------------------------------------------------------
+
+export interface ContentTaskConfig<T extends Groundable> {
+  systemPrompt: string;
+  taskInstruction: string;
+  schema: ZodType<T>;
+  maxTokens: number;
+  textFieldsForScan: (parsed: T) => string[];
+}
+
+export const CONTENT_TASK_CONFIG = {
+  VIDEO_WRITING: {
+    systemPrompt: VIDEO_SYSTEM_PROMPT,
+    taskInstruction: "Write the VIDEO_CHANNEL script now, following the structure and rules above.",
+    schema: VideoChannelContentSchema,
+    maxTokens: 8000,
+    textFieldsForScan: (c: VideoChannelContent) => [c.title, c.hook, c.cover_text, c.full_script, c.cta],
+  } satisfies ContentTaskConfig<VideoChannelContent>,
+  XIAOHONGSHU_WRITING: {
+    systemPrompt: XHS_SYSTEM_PROMPT,
+    taskInstruction: "Write the Xiaohongshu content now, following the structure and rules above.",
+    schema: XiaohongshuContentSchema,
+    maxTokens: 8000,
+    textFieldsForScan: (c: XiaohongshuContent) => [...c.title_options, c.cover_title, ...c.pages, c.caption],
+  } satisfies ContentTaskConfig<XiaohongshuContent>,
+  WECHAT_WRITING: {
+    systemPrompt: WECHAT_OUTLINE_SYSTEM_PROMPT,
+    taskInstruction:
+      "Write the WeChat Official Account OUTLINE now (not the full article), following the rules above.",
+    schema: WechatOutlineSchema,
+    maxTokens: 8000,
+    textFieldsForScan: (c: WechatOutline) => [...c.title_options, c.summary, ...c.detailed_outline, ...c.key_claims],
+  } satisfies ContentTaskConfig<WechatOutline>,
+} as const;
+
+export type GenericContentTaskType = keyof typeof CONTENT_TASK_CONFIG;

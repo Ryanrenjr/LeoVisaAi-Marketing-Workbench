@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  getAllComplianceReviews,
   getAllContentAssets,
   getAllTopics,
   getLibraryTopics,
@@ -9,8 +10,11 @@ import {
 import { getCurrentUser } from "@/lib/auth";
 import { getCurrentViewMode } from "@/lib/get-current-view-mode";
 import { PIPELINE_STAGES } from "@/lib/status";
-import { timeBasedGreeting } from "@/lib/boss-language";
+import { timeBasedGreeting, resolveEmployeeDisplayName } from "@/lib/boss-language";
+import { getEmployeeNames } from "@/lib/employee-names";
+import { getRecentPublishPerformanceCount } from "@/lib/analytics";
 import {
+  buildComplianceQueue,
   buildLeoReviewQueue,
   filterContentEligibleTopics,
   summarizeEditorTasks,
@@ -20,6 +24,7 @@ import {
 import { groupContentAssetsByTopicId } from "@/lib/content-versions";
 import { EmployeeCard } from "@/components/employee-card";
 import { Button } from "@/components/ui/button";
+import type { ComplianceReviewRow } from "@/lib/types";
 
 function DemoNotice() {
   return (
@@ -29,16 +34,21 @@ function DemoNotice() {
   );
 }
 
-/** Unchanged from before this milestone — the operational dashboard for Admin Mode. */
-async function AdminHome({ demo }: { demo: boolean }) {
+/**
+ * ADMIN-only, collapsed: the pipeline-stage pages (选题库/可进入拍摄/本周已发布/
+ * 内容资产库) that aren't any digital employee's job — Leo shoots and
+ * publishes by hand. Live user instruction: Admin Mode's home should be
+ * the same employee-card view as Boss Mode, so this is tucked away rather
+ * than a permanent 8-item nav bar (see src/components/nav.tsx).
+ */
+async function OperationalLinks() {
   const counts = await getStageCounts();
   const libraryCount = counts.IDEA + counts.RESEARCHING + counts.RESEARCH_READY;
 
   return (
-    <div className="flex flex-col gap-10">
-      {demo && <DemoNotice />}
-
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+    <details className="group">
+      <summary className="cursor-pointer text-sm font-medium text-[var(--muted)]">运营列表</summary>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
         <Link
           href="/topics"
           className="rounded-md border border-[var(--border)] px-4 py-3 hover:bg-[var(--border)]/20"
@@ -56,26 +66,48 @@ async function AdminHome({ demo }: { demo: boolean }) {
             <p className="mt-1 text-2xl font-semibold">{counts[stage.status]}</p>
           </Link>
         ))}
-      </section>
-    </div>
+        <Link
+          href="/content-assets"
+          className="rounded-md border border-[var(--border)] px-4 py-3 hover:bg-[var(--border)]/20"
+        >
+          <p className="text-sm text-[var(--muted)]">内容资产库</p>
+          <p className="mt-1 text-sm text-[var(--muted)]">查看全部版本</p>
+        </Link>
+      </div>
+    </details>
   );
 }
 
-async function BossHome({ demo }: { demo: boolean }) {
+async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) {
   const user = await getCurrentUser();
-  const [libraryTopics, allTopics, allContentAssets] = await Promise.all([
-    getLibraryTopics(),
-    getAllTopics(),
-    getAllContentAssets(),
-  ]);
+  const [libraryTopics, allTopics, allContentAssets, complianceReviews, performanceCount, employeeNames] =
+    await Promise.all([
+      getLibraryTopics(),
+      getAllTopics(),
+      getAllContentAssets(),
+      getAllComplianceReviews(),
+      getRecentPublishPerformanceCount(),
+      getEmployeeNames(),
+    ]);
 
   const contentAssetsByTopicId = groupContentAssetsByTopicId(allContentAssets);
   const eligibleTopics = filterContentEligibleTopics(allTopics);
 
+  const reviewsByContentAssetId = new Map<string, ComplianceReviewRow>();
+  for (const review of complianceReviews) {
+    if (!reviewsByContentAssetId.has(review.content_asset_id)) {
+      reviewsByContentAssetId.set(review.content_asset_id, review);
+    }
+  }
+  const complianceQueue = buildComplianceQueue(allTopics, contentAssetsByTopicId, reviewsByContentAssetId);
+  const complianceNeedsAttention = complianceQueue.filter(
+    (item) => !item.latestReview || item.latestReview.overall_risk !== "LOW",
+  ).length;
+
   const plannerSummary = summarizePlannerTasks(libraryTopics);
   const researcherSummary = summarizeResearcherTasks(libraryTopics);
   const editorSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId);
-  const reviewQueue = buildLeoReviewQueue(allTopics, contentAssetsByTopicId);
+  const reviewQueue = buildLeoReviewQueue(allTopics, contentAssetsByTopicId, new Map(), employeeNames);
   const researchReviewCount = reviewQueue.filter((i) => i.employeeId === "researcher").length;
   const contentReviewCount = reviewQueue.filter((i) => i.employeeId === "editor").length;
   const totalPending = researchReviewCount + contentReviewCount;
@@ -116,9 +148,9 @@ async function BossHome({ demo }: { demo: boolean }) {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <EmployeeCard
             letter="A"
-            name="选题策划员"
+            name={resolveEmployeeDisplayName("planner", employeeNames)}
             status={plannerSummary.todayCandidates > 0 ? "工作中" : "空闲"}
-            responsibility="帮你决定今天最值得做什么内容。"
+            responsibility="帮你决定今天最值得做什么内容，还能主动搜今天的新闻找选题。"
             stats={[
               { label: "今日候选", value: plannerSummary.todayCandidates },
               { label: "高优先级", value: plannerSummary.highPriority },
@@ -128,7 +160,7 @@ async function BossHome({ demo }: { demo: boolean }) {
           />
           <EmployeeCard
             letter="B"
-            name="政策研究员"
+            name={resolveEmployeeDisplayName("researcher", employeeNames)}
             status={
               researcherSummary.awaitingReview > 0
                 ? "等你确认"
@@ -146,7 +178,7 @@ async function BossHome({ demo }: { demo: boolean }) {
           />
           <EmployeeCard
             letter="C"
-            name="内容编辑"
+            name={resolveEmployeeDisplayName("editor", employeeNames)}
             status={
               editorSummary.pendingGeneration > 0
                 ? "工作中"
@@ -164,12 +196,21 @@ async function BossHome({ demo }: { demo: boolean }) {
           />
           <EmployeeCard
             letter="D"
-            name="合规审核员"
-            status="尚未启用"
-            responsibility="专门挑错，不负责写稿。"
-            stats={[]}
-            actionLabel="即将上线"
+            name={resolveEmployeeDisplayName("compliance", employeeNames)}
+            status={complianceNeedsAttention > 0 ? "有内容需要确认" : "空闲"}
+            responsibility="重新核对内容有没有超出研究依据、有没有风险用语。"
+            stats={[{ label: "需要确认", value: complianceNeedsAttention }]}
+            actionLabel="查看合规"
             href="/team/compliance"
+          />
+          <EmployeeCard
+            letter="E"
+            name={resolveEmployeeDisplayName("analyst", employeeNames)}
+            status={performanceCount > 0 ? "已有数据" : "等待数据"}
+            responsibility="看发布后的数据表现，帮你判断下次该往哪个方向选题。"
+            stats={[{ label: "已上传数据", value: performanceCount }]}
+            actionLabel="查看数据"
+            href="/team/analyst"
           />
         </div>
       </section>
@@ -192,11 +233,13 @@ async function BossHome({ demo }: { demo: boolean }) {
           </Link>
         </div>
       </section>
+
+      {isAdmin && <OperationalLinks />}
     </div>
   );
 }
 
 export default async function HomePage() {
   const [mode, demo] = await Promise.all([getCurrentViewMode(), isDemoMode()]);
-  return mode === "admin" ? <AdminHome demo={demo} /> : <BossHome demo={demo} />;
+  return <BossHome demo={demo} isAdmin={mode === "admin"} />;
 }

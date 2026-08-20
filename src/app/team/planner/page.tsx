@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { getLibraryTopics, isDemoMode } from "@/lib/topics";
-import { getEmployee, BOSS_STATUS_LABEL } from "@/lib/boss-language";
+import { getEmployee, BOSS_STATUS_LABEL, resolveEmployeeDisplayName } from "@/lib/boss-language";
+import { getEmployeeNames } from "@/lib/employee-names";
 import { Button } from "@/components/ui/button";
+import { TopicDiscoveryPanel } from "@/components/topic-discovery-panel";
 import type { Topic } from "@/lib/types";
 
 function TopicRow({ topic }: { topic: Topic }) {
@@ -28,7 +30,12 @@ function TopicList({ topics, empty }: { topics: Topic[]; empty: string }) {
 
 export default async function PlannerPage() {
   const employee = getEmployee("planner");
-  const [libraryTopics, demo] = await Promise.all([getLibraryTopics(), isDemoMode()]);
+  const [libraryTopics, demo, employeeNames] = await Promise.all([
+    getLibraryTopics(),
+    isDemoMode(),
+    getEmployeeNames(),
+  ]);
+  const employeeName = resolveEmployeeDisplayName("planner", employeeNames);
 
   const highPriority = libraryTopics.filter((t) => t.priority === "HIGH");
   const notStarted = libraryTopics.filter((t) => t.status === "IDEA");
@@ -43,14 +50,14 @@ export default async function PlannerPage() {
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-sm font-semibold">
             {employee.letter}
           </span>
-          <h1 className="text-lg font-semibold">{employee.name}</h1>
+          <h1 className="text-lg font-semibold">{employeeName}</h1>
         </div>
         <p className="mt-2 text-sm text-[var(--muted)]">今天值得做什么？</p>
       </div>
 
       {demo && (
         <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
-          当前为演示数据（未连接 Supabase）。
+          当前为演示数据（未连接 Supabase），选题搜索已禁用。
         </p>
       )}
 
@@ -62,6 +69,8 @@ export default async function PlannerPage() {
           <Button variant="secondary">新建想法</Button>
         </Link>
       </div>
+
+      {!demo && <TopicDiscoveryPanel />}
 
       <section>
         <h2 className="mb-2 text-sm font-medium text-[var(--muted)]">高优先级选题</h2>

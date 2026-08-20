@@ -2,7 +2,8 @@ import Link from "next/link";
 import { getAllContentAssets, getAllTopics, isDemoMode } from "@/lib/topics";
 import { groupContentAssetsByLineage, groupContentAssetsByTopicId } from "@/lib/content-versions";
 import { filterContentEligibleTopics } from "@/lib/employee-tasks";
-import { getEmployee } from "@/lib/boss-language";
+import { getEmployee, resolveEmployeeDisplayName } from "@/lib/boss-language";
+import { getEmployeeNames } from "@/lib/employee-names";
 import type { ContentAsset, Topic } from "@/lib/types";
 
 function platformStatus(assets: ContentAsset[] | undefined): string {
@@ -44,11 +45,13 @@ function TopicContentRow({ topic, assets }: { topic: Topic; assets: ContentAsset
 
 export default async function EditorPage() {
   const employee = getEmployee("editor");
-  const [allTopics, allContentAssets, demo] = await Promise.all([
+  const [allTopics, allContentAssets, demo, employeeNames] = await Promise.all([
     getAllTopics(),
     getAllContentAssets(),
     isDemoMode(),
+    getEmployeeNames(),
   ]);
+  const employeeName = resolveEmployeeDisplayName("editor", employeeNames);
 
   const eligibleTopics = filterContentEligibleTopics(allTopics).sort(
     (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
@@ -62,7 +65,7 @@ export default async function EditorPage() {
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-sm font-semibold">
             {employee.letter}
           </span>
-          <h1 className="text-lg font-semibold">{employee.name}</h1>
+          <h1 className="text-lg font-semibold">{employeeName}</h1>
         </div>
         <p className="mt-2 text-sm text-[var(--muted)]">哪些内容已经写好了？</p>
       </div>

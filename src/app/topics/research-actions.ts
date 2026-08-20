@@ -11,7 +11,11 @@ import {
   canRequestResearchChangesFromStatus,
   canRunResearchFromStatus,
 } from "@/lib/research-workflow";
-import { runResearchAgent, researchAgentModelAlias } from "@/lib/ai/research-agent";
+import { runResearchTask, isRouterResolutionFailure } from "@/lib/ai/router";
+import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
+import { getModel } from "@/lib/ai/providers/registry";
+import { writeUsageLog, writeSearchUsageLog } from "@/lib/ai/usage-log";
+import type { ModelRef } from "@/lib/ai/providers/types";
 import type { TopicStatus } from "@/lib/types";
 
 export interface ResearchEditState {
@@ -19,13 +23,15 @@ export interface ResearchEditState {
 }
 
 /**
- * The mandatory human-approval-gate action for the research stage: runs
- * the Research Agent, saves the (already-grounded) pack, and logs both
- * the AI usage and the activity. On success, moves the topic to
- * RESEARCH_READY ("a pack exists, awaiting Expert review") — never
- * further than that; only approveResearch can reach RESEARCH_APPROVED.
+ * The mandatory human-approval-gate action for the research stage: routes
+ * the RESEARCH task through the Model Router, saves the (already-grounded)
+ * pack, and logs both the AI usage and the activity. On success, moves the
+ * topic to RESEARCH_READY ("a pack exists, awaiting Expert review") —
+ * never further than that; only approveResearch can reach
+ * RESEARCH_APPROVED. `override` is the section-9 one-off model choice —
+ * it never changes the persisted default in model_routing_config.
  */
-export async function runResearch(topicId: string) {
+export async function runResearch(topicId: string, override?: ModelRef | null) {
   const user = await requireUser();
   if (!canRunResearch(user.role)) throw new Error("Forbidden: ADMIN role required");
 
@@ -34,11 +40,52 @@ export async function runResearch(topicId: string) {
   const fromStatus = topic.status;
 
   const supabase = await createClient();
-  const modelAlias = researchAgentModelAlias();
+  const started = Date.now();
+  const { result, searchMeta } = await runResearchTask(topic, override);
+
+  if (searchMeta) {
+    await writeSearchUsageLog(supabase, {
+      provider: searchMeta.provider,
+      digital_employee: TASK_TYPE_EMPLOYEE.RESEARCH,
+      task_type: "RESEARCH",
+      topic_id: topicId,
+      query_count: searchMeta.queryCount,
+      result_count: searchMeta.resultCount,
+      latency_ms: searchMeta.latencyMs,
+      success: searchMeta.success,
+      error: searchMeta.error,
+    });
+  }
+
+  if (isRouterResolutionFailure(result)) {
+    // No provider was ever contacted — nothing to log to ai_usage_log,
+    // but the ADMIN still needs to see why nothing happened.
+    await supabase.from("research_runs").insert({
+      topic_id: topicId,
+      status: "failed",
+      model_alias: "unresolved",
+      requested_by: user.id,
+      completed_at: new Date().toISOString(),
+      error: result.error,
+    });
+    await supabase.from("topic_activity_log").insert({
+      topic_id: topicId,
+      activity_type: "research_run_failed",
+      actor_id: user.id,
+      detail: { error: result.error },
+    });
+    revalidatePath(`/topics/${topicId}`);
+    return;
+  }
 
   const { data: run, error: runInsertError } = await supabase
     .from("research_runs")
-    .insert({ topic_id: topicId, status: "running", model_alias: modelAlias, requested_by: user.id })
+    .insert({
+      topic_id: topicId,
+      status: "running",
+      model_alias: `${result.provider}/${result.modelId}`,
+      requested_by: user.id,
+    })
     .select("id")
     .single();
   if (runInsertError || !run) return;
@@ -49,18 +96,21 @@ export async function runResearch(topicId: string) {
     actor_id: user.id,
   });
 
-  const started = Date.now();
-  const result = await runResearchAgent(topic);
+  const model = getModel(result.provider, result.modelId);
 
-  await supabase.from("ai_usage_log").insert({
+  const { usageLogFailed } = await writeUsageLog(supabase, {
     workflow_type: "research",
-    model_alias: result.modelAlias,
+    model_alias: `${result.provider}/${result.modelId}`,
     topic_id: topicId,
     input_tokens: result.inputTokens,
     output_tokens: result.outputTokens,
     latency_ms: result.latencyMs,
     success: result.ok,
     error: result.ok ? null : result.error,
+    provider: result.provider,
+    task_type: "RESEARCH",
+    digital_employee: TASK_TYPE_EMPLOYEE.RESEARCH,
+    pricing_type_at_execution: model?.pricingType ?? null,
   });
 
   if (!result.ok) {
@@ -73,12 +123,14 @@ export async function runResearch(topicId: string) {
       topic_id: topicId,
       activity_type: "research_run_failed",
       actor_id: user.id,
-      detail: { error: result.error },
+      detail: { error: result.error, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
     });
 
     revalidatePath(`/topics/${topicId}`);
     return;
   }
+  if (!result.data) return;
+  const resultPack = result.data;
 
   await supabase
     .from("research_runs")
@@ -90,17 +142,17 @@ export async function runResearch(topicId: string) {
     .insert({
       research_run_id: run.id,
       topic_id: topicId,
-      summary: result.pack.summary,
-      key_findings: result.pack.keyFindings,
-      warnings: result.pack.warnings,
-      confidence: result.pack.confidence,
+      summary: resultPack.summary,
+      key_findings: resultPack.keyFindings,
+      warnings: resultPack.warnings,
+      confidence: resultPack.confidence,
     })
     .select("id")
     .single();
 
-  if (!packInsertError && pack && result.pack.sources.length > 0) {
+  if (!packInsertError && pack && resultPack.sources.length > 0) {
     await supabase.from("research_sources").insert(
-      result.pack.sources.map((s) => ({
+      resultPack.sources.map((s) => ({
         research_pack_id: pack.id,
         title: s.title,
         url: s.url,
@@ -131,9 +183,10 @@ export async function runResearch(topicId: string) {
     activity_type: "research_run_completed",
     actor_id: user.id,
     detail: {
-      sourceCount: result.pack.sources.length,
-      confidence: result.pack.confidence,
+      sourceCount: resultPack.sources.length,
+      confidence: resultPack.confidence,
       latencyMs: Date.now() - started,
+      ...(usageLogFailed ? { usageLogFailed: true } : {}),
     },
   });
 

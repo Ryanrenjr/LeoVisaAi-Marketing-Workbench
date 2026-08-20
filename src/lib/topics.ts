@@ -12,8 +12,10 @@ import {
   DEMO_TOPICS,
 } from "./demo-data";
 import { startOfCurrentWeek } from "./status";
+import { findResearchIntegrityIssues, type IntegrityIssue } from "./data-integrity";
 import type {
   AiUsageLogEntry,
+  ComplianceReviewRow,
   ContentAsset,
   Profile,
   ResearchPack,
@@ -268,6 +270,57 @@ export async function getContentAssets(topicId: string): Promise<ContentAsset[]>
   return data;
 }
 
+export async function getContentAssetById(id: string): Promise<ContentAsset | null> {
+  if (!isSupabaseConfigured()) {
+    return DEMO_CONTENT_ASSETS.find((a) => a.id === id) ?? null;
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("content_assets").select("*").eq("id", id).maybeSingle();
+  if (error) return null;
+  return data;
+}
+
+export async function getResearchPackById(id: string): Promise<ResearchPack | null> {
+  if (!isSupabaseConfigured()) {
+    return DEMO_RESEARCH_PACKS.find((p) => p.id === id) ?? null;
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.from("research_packs").select("*").eq("id", id).maybeSingle();
+  if (error) return null;
+  return data;
+}
+
+/** Every compliance review ever run for a topic, most recent first. */
+export async function getComplianceReviews(topicId: string): Promise<ComplianceReviewRow[]> {
+  if (!isSupabaseConfigured()) return [];
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("compliance_reviews")
+    .select("*")
+    .eq("topic_id", topicId)
+    .order("created_at", { ascending: false });
+
+  if (error) return [];
+  return data;
+}
+
+/** Every compliance review across every topic — the Compliance work-queue page's data source. Small internal-tool scale (see getAllTopics). */
+export async function getAllComplianceReviews(): Promise<ComplianceReviewRow[]> {
+  if (!isSupabaseConfigured()) return [];
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("compliance_reviews")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) return [];
+  return data;
+}
+
 /**
  * Every topic, any status — used only by the Boss Mode / digital-employee
  * aggregation pages (Planner/Researcher/Editor summaries, Leo's review
@@ -300,4 +353,27 @@ export async function getAllContentAssets(): Promise<ContentAsset[]> {
 
   if (error) return [];
   return data;
+}
+
+/**
+ * Admin-visible data-integrity check — see src/lib/data-integrity.ts.
+ * Demo mode has no such inconsistency by construction (demo-data.ts is
+ * hand-authored to be internally consistent), so it always returns [].
+ */
+export async function getResearchIntegrityIssues(): Promise<IntegrityIssue[]> {
+  if (!isSupabaseConfigured()) return [];
+
+  const supabase = await createClient();
+  const [{ data: topics }, { data: packRows }, { data: assetRows }] = await Promise.all([
+    supabase.from("topics").select("id, code, title, status"),
+    supabase.from("research_packs").select("topic_id"),
+    supabase.from("content_assets").select("topic_id"),
+  ]);
+
+  if (!topics) return [];
+
+  const topicIdsWithResearchPack = new Set((packRows ?? []).map((r) => r.topic_id as string));
+  const topicIdsWithContentAsset = new Set((assetRows ?? []).map((r) => r.topic_id as string));
+
+  return findResearchIntegrityIssues(topics, topicIdsWithResearchPack, topicIdsWithContentAsset);
 }

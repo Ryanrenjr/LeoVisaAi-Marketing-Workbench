@@ -18,7 +18,7 @@ This isn't enforced by a filter or validator — it's enforced by never
 adding a field, table, upload capability, or free-text box that could hold
 this data. `topics.question`/`business`/`audience` are short plain-text
 *marketing* fields describing a content idea (e.g. "老永居离境超过2年，身份还在吗？"),
-not a case file. There is no document upload feature anywhere in this app.
+not a case file.
 
 This also governs what the Research Agent is allowed to be told and asked
 to produce — see "AI usage" below.
@@ -26,6 +26,46 @@ to produce — see "AI usage" below.
 If a future instruction asks for something that would require storing any
 of the above, treat that as a conflict with this document and flag it
 before implementing.
+
+### Post-publish performance data — the one narrow upload exception
+
+**"No document upload feature anywhere in this app" had exactly one
+exception carved out, by explicit live user instruction** (Digital
+Employee Expansion milestone — see CLAUDE.md history): Employee E (数据分析员,
+`/team/analyst`) accepts a screenshot upload, and ONLY this:
+
+- **What it's for:** a screenshot of a platform's OWN public
+  post-performance dashboard for a post LeoVisaAi itself published
+  (views/likes/comments/saves/shares) — never anything else.
+- **What it must never become:** a general document upload. Never accept
+  or extract passport data, DOB, addresses, bank info, refusal letters,
+  case numbers, or any client document — the boundary at the top of this
+  file still applies in full. If a future request asks to upload
+  anything other than a post's own performance screenshot through this
+  or any other surface, treat that as a conflict with this document and
+  flag it before implementing.
+- **Storage:** a private Supabase Storage bucket (`publish-screenshots`,
+  `public: false`), readable/writable only by authenticated staff via
+  RLS-equivalent storage policies — never a public URL. Read access from
+  the app always goes through a short-lived signed URL
+  (`getScreenshotSignedUrl()` in `src/lib/analytics.ts`), never a direct
+  public link.
+- **Processing:** the screenshot is sent to a vision-capable model
+  (`runPerformanceAnalysisTask()` in `src/lib/ai/router.ts`) with a
+  system prompt that explicitly instructs it to read only the visible
+  aggregate counters and ignore any names/avatars/comment text in the
+  image (`src/lib/ai/performance-schemas.ts`). The extracted numbers are
+  stored in `publish_performance.extracted_metrics` — never the comment
+  text or any personal detail from the screenshot.
+- **Validation:** `uploadPerformanceScreenshot()`
+  (`src/app/team/analyst/actions.ts`) rejects anything that isn't
+  `image/png`, `image/jpeg`, or `image/webp`, and anything over 8MB.
+- **No AI-generated "insight" copy:** the "哪类选题表现更好" view
+  (`/team/analyst`) is a deterministic average over real extracted
+  numbers (`computePillarPerformance()` in
+  `src/lib/performance-analytics.ts`) — not another LLM call summarizing
+  the data, so it can never fabricate a trend that isn't in the real
+  numbers.
 
 ## Things this application must NOT become
 
@@ -51,21 +91,53 @@ before implementing.
   - Every code path that uses it must first check the caller's session and
     role in application code; RLS bypass is not a substitute for that
     check, it's why the check is mandatory.
-- **`ANTHROPIC_API_KEY`**: same rules as the service role key. Never
-  prefix with `NEXT_PUBLIC_`. Only `src/lib/ai/research-agent.ts` and
-  `src/lib/ai/content-agent.ts` read it (implicitly, via the SDK's default
-  env lookup). Only Server Actions (`src/app/topics/research-actions.ts`,
-  `src/app/topics/content-actions.ts`) trigger a call, and only after
-  checking the caller's role (`canRunResearch`/`canManageContentAssets`)
-  *and* the topic's status gate.
+- **AI provider keys** (`ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY`,
+  `GROQ_API_KEY`, `OPENROUTER_API_KEY`): same rules as the service role
+  key. Never prefix with `NEXT_PUBLIC_`. Each is only read inside its
+  matching `src/lib/ai/providers/*-provider.ts` file (or, for Anthropic,
+  `research-agent.ts`/`content-agent.ts`), all `"server-only"`. No
+  business-logic file, page, or Client Component ever imports a provider
+  SDK or reads these env vars directly — every call goes through
+  `src/lib/ai/router.ts`. Only Server Actions
+  (`src/app/topics/research-actions.ts`, `content-actions.ts`) trigger a
+  call, and only after checking the caller's role
+  (`canRunResearch`/`canManageContentAssets`) *and* the topic's status
+  gate. `/admin/ai-models` shows each provider as "已连接"/"未配置" —
+  **never** the key value itself; there is no reveal button anywhere.
+- **`TAVILY_API_KEY`** / **`BRAVE_SEARCH_API_KEY`**: same rules — server-side
+  only, never `NEXT_PUBLIC_`, only read by their matching
+  `src/lib/search/providers/*-provider.ts` file, never logged or rendered
+  into HTML. Every call goes through `src/lib/search/router.ts`, reached
+  only from `src/lib/ai/router.ts`'s Research flow. `/admin/ai-models`'s
+  "搜索服务连接状态" shows "已连接"/"未配置" only, same as the AI provider keys.
 - No API key (of any kind) is ever passed as a prop into a Client
   Component, embedded in a data attribute, or logged.
 
+### Free-tier AI models — an additional data boundary
+
+Free-tier models (see `docs/model-router.md`) may be operated by a third
+party under different data-handling terms than Anthropic's paid API —
+some free tiers permit the provider to use requests to improve their own
+models. This does **not** change the rule above ("no real client
+information ever enters a prompt") — it makes it more load-bearing:
+
+- Free models are for **public policy research, topic ideation, and
+  marketing content experimentation only**.
+- Never send passport data, dates of birth, addresses, bank information,
+  refusal letters, case numbers, or any real client file through *any*
+  provider, free or paid — the same boundary as the rest of this document,
+  reiterated to ADMIN directly in `/admin/ai-models`.
+- This is a process/UI-education boundary, not a code-enforced filter —
+  the same category of guarantee as "no individualized legal advice"
+  below: reasonable to prompt-request and document, not mechanically
+  verifiable from within this app.
+
 ## AI usage
 
-`src/lib/ai/research-agent.ts` and `src/lib/ai/content-agent.ts` are the
-only places in this app that call a model. Rules that apply to both, and
-to any future model integration:
+`src/lib/ai/router.ts` is the only place in this app's business logic
+that resolves and dispatches a model call — see `docs/model-router.md`.
+Rules that apply to every provider it can route to, and to any future
+provider added later:
 
 - **General marketing content only — never individualized legal advice.**
   Both agents' system prompts explicitly state this. The Topic Detail page
@@ -90,25 +162,49 @@ to any future model integration:
   `audience`, `content_pillar` — general-marketing fields. There is no
   code path that reads from a client/case data source (none exists in
   this app) and includes it in a model call.
-- **Sources must be real, not fabricated — for both agents.** The
-  Research Agent cross-checks every source it claims against the actual
-  `web_search` tool results in that response (`groundSources`). The
-  Content Agent never lets the model see a real URL at all — sources are
-  presented as numbered labels ("S1", "S2"), the model may only cite by
-  label, and any label that doesn't match one actually given is dropped
-  before resolving to a real `research_sources.id`
-  (`groundContentSources`). Both are code-level guarantees with test
-  coverage, not prompting requests.
+- **Sources must be real, not fabricated — for every provider capable of
+  research.** The grounding check (`groundSources` in `research-pack.ts`)
+  cross-checks every claimed source against the actual search-tool
+  results returned in that response — applied identically whether the
+  search results came from Anthropic's `web_search` tool or Google's
+  `googleSearch` grounding. Content generation never lets any provider see
+  a real URL at all — sources are presented as numbered labels ("S1",
+  "S2"), the model may only cite by label, and any label that doesn't
+  match one actually given is dropped before resolving to a real
+  `research_sources.id` (`groundContentSources` /
+  `applyGroundingAndSafety`). All code-level guarantees with test
+  coverage, not prompting requests. A provider/model that doesn't have
+  real web-search capability is structurally rejected for `RESEARCH` by
+  the Router (`isModelSuitableForTask`) — it can't reach this stage.
 - **Every model call is logged**, success or failure, to `ai_usage_log`
   (`workflow_type`, `model_alias`, `topic_id`, `platform` for content
-  calls, token counts, latency, success/failure, timestamp) — see
-  `docs/data-model.md`.
+  calls, token counts, latency, success/failure, timestamp, plus
+  `provider`/`task_type`/`digital_employee`/`pricing_type_at_execution`
+  as of the Model Router milestone) — see `docs/data-model.md`.
+- **No automatic FREE → PAID fallback, ever.** If Development Mode can't
+  find a free model that satisfies a task's requirements, the task fails
+  with a clear message rather than silently reaching for a paid model.
+  Choosing a paid/mixed-cost model is always an explicit, visible ADMIN
+  action with a warning shown first. See `docs/model-router.md`.
 - **Content generation is gated behind research approval, enforced
   server-side.** `canGenerateContent()` in `src/lib/permissions.ts`
   requires the topic's status to be `RESEARCH_APPROVED` or later; every
   content Server Action checks it directly (`loadGenerationContext` in
   `src/app/topics/content-actions.ts`) before calling Anthropic or writing
   any row — not only by hiding the button. See `docs/phase-4-plan.md`.
+- **Compliance (Employee D) never issues a "compliant/approved"
+  verdict.** `runComplianceTask()` re-checks already-generated content
+  against the SAME approved Research Pack it was written from, plus a
+  deterministic forbidden-phrase scan that runs regardless of what the
+  model itself reports (`mergeComplianceFindings()` in
+  `src/lib/ai/compliance-schemas.ts`). Its only output is findings for a
+  human (`compliance_reviews` table) — it never sets `topics.status` or
+  `content_assets.status`, and it is explicitly instructed never to use
+  the word "compliant." This is not eligibility assessment or legal
+  advice — it flags marketing-copy risk (unsupported claims,
+  individualized-advice phrasing, hype language), the same category of
+  check the Content Agent's own `expert_review_notes` already does, just
+  as a second, independent pass.
 
 ## Human approval gates
 

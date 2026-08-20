@@ -210,11 +210,60 @@ research and content alike. Written on both success and failure.
 |---|---|---|
 | `id` | uuid, PK | |
 | `workflow_type` | text | `"research"` or `"content"` |
-| `model_alias` | text | |
+| `model_alias` | text | `"{provider}/{modelId}"` as of the Model Router milestone (e.g. `"GOOGLE/gemini-3.6-flash"`) |
 | `topic_id` | uuid, FK → `topics.id`, nullable | |
 | `platform` | `content_platform` enum, nullable | set for `"content"` rows, null for `"research"` rows |
 | `input_tokens` / `output_tokens` | integer, nullable | null if the call failed before a response was returned |
 | `latency_ms` | integer, not null | |
+| `success` | boolean, not null | |
+| `error` | text, nullable | |
+| `provider` | text, nullable | one of `AIProviderId` — added by the Model Router milestone (0006); null on pre-existing rows |
+| `task_type` | text, nullable | one of `TaskType` — see `docs/model-router.md` |
+| `digital_employee` | text, nullable | which digital employee this task belongs to (derived from `task_type`, stored for easy querying) |
+| `pricing_type_at_execution` | text, nullable | `FREE`/`PAID`/`MIXED` **as it was classified at the time this row was written** — a snapshot, not a live lookup; pricing changes over time |
+| `created_at` | timestamptz | |
+
+No row is ever written when the Model Router fails to resolve a model at
+all (no provider was contacted — see `docs/model-router.md`
+`RouterResolutionFailure`); that failure is only visible in
+`topic_activity_log`, not here, since "one row per model call" wouldn't
+be honest for a call that never happened.
+
+### `model_routing_config`
+
+ADMIN's persisted per-task default provider/model, set from
+`/admin/ai-models`. One row per task type; absence of a row means "no
+explicit default" — the Model Router then falls back to its Development
+Mode free-first search. See `docs/model-router.md`.
+
+| column | type | notes |
+|---|---|---|
+| `task_type` | text, PK | one of `TaskType` |
+| `provider` | text, not null | one of `AIProviderId` |
+| `model_id` | text, not null | must exist in the Model Registry at read time, or the Router treats it as stale |
+| `updated_by` | uuid, FK → `profiles.id`, nullable | |
+| `updated_at` | timestamptz, not null | |
+
+### `search_usage_log`
+
+One row per search execution on the Research external-search path
+(Tavily/Brave → analysis model). A separate table from `ai_usage_log` rather than an
+extension of it — a search call has no model/tokens/pricing-per-call
+semantics, its unit of "usage" is queries, not tokens. Written only when
+the Search Router actually ran (not written for the native-grounding
+fallback, since no separate search step happened then). See
+`docs/search-router.md`.
+
+| column | type | notes |
+|---|---|---|
+| `id` | uuid, PK | |
+| `provider` | text, not null | one of `SearchProviderId` (currently only `BRAVE`) |
+| `digital_employee` | text, not null | which digital employee this belongs to |
+| `task_type` | text, not null | one of `TaskType` (currently only `RESEARCH` triggers a search) |
+| `topic_id` | uuid, FK → `topics.id`, nullable | |
+| `query_count` | integer, not null | how many queries were issued (3-5, see `buildResearchQueries`) |
+| `result_count` | integer, not null | total results retrieved across all queries |
+| `latency_ms` | integer, not null | summed latency across all queries |
 | `success` | boolean, not null | |
 | `error` | text, nullable | |
 | `created_at` | timestamptz | |

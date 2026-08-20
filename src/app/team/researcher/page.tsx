@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getAllTopics, getLatestResearchPack, getResearchSources, isDemoMode } from "@/lib/topics";
-import { getEmployee, BOSS_CONFIDENCE_LABEL, BOSS_STATUS_LABEL } from "@/lib/boss-language";
+import { getEmployee, resolveEmployeeDisplayName, BOSS_CONFIDENCE_LABEL, BOSS_STATUS_LABEL } from "@/lib/boss-language";
+import { getEmployeeNames } from "@/lib/employee-names";
 import type { ResearchConfidence, Topic } from "@/lib/types";
 
 interface PackInfo {
@@ -9,9 +10,13 @@ interface PackInfo {
 }
 
 function ResearchRow({ topic, info }: { topic: Topic; info?: PackInfo }) {
+  // Awaiting-review items go to the dedicated, single-purpose approval
+  // screen — everything else still goes to the full Topic Detail page.
+  const href =
+    topic.status === "RESEARCH_READY" ? `/topics/${topic.id}/research/review` : `/topics/${topic.id}?tab=research`;
   return (
     <li className="border-b border-[var(--border)] py-3 last:border-b-0">
-      <Link href={`/topics/${topic.id}?tab=research`} className="flex flex-col gap-1 hover:underline">
+      <Link href={href} className="flex flex-col gap-1 hover:underline">
         <span className="font-medium">{topic.title}</span>
       </Link>
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted)]">
@@ -48,7 +53,12 @@ function TopicList({
 
 export default async function ResearcherPage() {
   const employee = getEmployee("researcher");
-  const [allTopics, demo] = await Promise.all([getAllTopics(), isDemoMode()]);
+  const [allTopics, demo, employeeNames] = await Promise.all([
+    getAllTopics(),
+    isDemoMode(),
+    getEmployeeNames(),
+  ]);
+  const employeeName = resolveEmployeeDisplayName("researcher", employeeNames);
 
   const inProgress = allTopics.filter((t) => t.status === "RESEARCHING");
   const awaitingReview = allTopics.filter((t) => t.status === "RESEARCH_READY");
@@ -77,7 +87,7 @@ export default async function ResearcherPage() {
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-sm font-semibold">
             {employee.letter}
           </span>
-          <h1 className="text-lg font-semibold">{employee.name}</h1>
+          <h1 className="text-lg font-semibold">{employeeName}</h1>
         </div>
         <p className="mt-2 text-sm text-[var(--muted)]">哪些事情已经查清楚了？</p>
       </div>

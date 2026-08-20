@@ -37,24 +37,29 @@ do — every existing server-side check (`canRunResearch`,
 only source of authorization truth, completely unaware that view modes
 exist.
 
-## The four digital employees
+## The five digital employees
 
 Defined once, centrally, in `src/lib/boss-language.ts` →
-`DIGITAL_EMPLOYEES`. Exactly four this phase — do not add a fifth
-without instruction.
+`DIGITAL_EMPLOYEES`. Originally exactly four ("do not add a fifth
+without instruction") — Compliance (D) and Analyst (E) went live by
+explicit live user instruction (see CLAUDE.md history), overriding that
+note. A signed-in ADMIN can rename any employee (`employee_names` table,
+`/admin` → "数字员工姓名") — always resolve a display name through
+`resolveEmployeeDisplayName()`, never `DIGITAL_EMPLOYEES` directly.
 
-| Letter | Name | "What I do" (shown to Leo) | Backend module | Route |
+| Letter | Default name | "What I do" (shown to Leo) | Backend module | Route |
 |---|---|---|---|---|
-| A | 选题策划员 | 帮你决定今天最值得做什么内容。 | Topic creation, scoring, prioritisation (`src/lib/scoring.ts`, `src/app/topics/`) | `/team/planner` |
+| A | 选题策划员 | 帮你决定今天最值得做什么内容，还能主动搜今天的新闻找选题。 | Topic creation/scoring (`src/lib/scoring.ts`, `src/app/topics/`) + active news search (`src/lib/ai/topic-discovery.ts`, `src/app/team/planner/actions.ts`) | `/team/planner` |
 | B | 政策研究员 | 帮你查官方规则、找依据、整理结论。 | Research Agent — real web search, grounding, approval workflow (`src/lib/ai/research-agent.ts`, `research-workflow.ts`) | `/team/researcher` |
 | C | 内容编辑 | 把审核过的研究变成视频号、小红书和公众号内容。 | Content Agent — video/Xiaohongshu/WeChat generation (`src/lib/ai/content-agent.ts`, `content-versions.ts`) | `/team/editor` |
-| D | 合规审核员 | 专门挑错，检查内容有没有风险。 | **Not implemented.** A truthful "尚未启用" placeholder — see `src/app/team/compliance/page.tsx`. Never fabricates findings. | `/team/compliance` |
+| D | 合规审核员 | 重新核对内容有没有超出研究依据、有没有风险用语。 | Compliance Agent — re-checks generated content against its own Research Pack + a deterministic forbidden-phrase scan (`src/lib/ai/compliance-schemas.ts`, `src/app/topics/compliance-actions.ts`). Advisory only — never a "compliant" verdict. | `/team/compliance` |
+| E | 数据分析员 | 看发布后的数据表现，帮你判断下次该往哪个方向选题。 | Reads a post-publish screenshot Leo uploads (vision model), stores real extracted numbers, aggregates by content pillar (`src/lib/analytics.ts`, `src/lib/performance-analytics.ts`) | `/team/analyst` |
 
-**Leo is not employee E.** He's the human professional decision-maker —
-visually and conceptually separate, surfaced through a dedicated **Leo
-待处理** queue (`/review`), not through an employee card. Possible items:
-研究等待确认 (from B), 内容草稿有需确认事项 (from C). Both are grounded in real
-data — see "No fabricated numbers" below.
+**Leo is not a digital employee.** He's the human professional
+decision-maker — visually and conceptually separate, surfaced through a
+dedicated **Leo 待处理** queue (`/review`), not through an employee card.
+Possible items: 研究等待确认 (from B), 内容草稿有需确认事项 (from C). Both are
+grounded in real data — see "No fabricated numbers" below.
 
 ## Employee pages — what each one shows, and where the data comes from
 
@@ -77,7 +82,15 @@ new *aggregation-only* functions, see below) and existing pure helpers
   already enforces), shows 视频号/小红书/公众号 status derived from
   `getAllContentAssets()` (new, thin `select *`) grouped by
   `groupContentAssetsByLineage()` (existing, unchanged).
-- **D 合规审核员** (`/team/compliance`) — static placeholder, no data.
+- **D 合规审核员** (`/team/compliance`) — work queue of latest content
+  assets paired with their most recent `compliance_reviews` row (if any),
+  from `buildComplianceQueue()`. "运行合规审核" dispatches
+  `runComplianceReview()`, ADMIN-only.
+- **E 数据分析员** (`/team/analyst`) — upload form (screenshot →
+  `uploadPerformanceScreenshot()`) + real `publish_performance` rows +
+  `computePillarPerformance()`'s real averages, no LLM-generated
+  "insight" text (see docs/security-boundaries.md "Post-publish
+  performance data" for why).
 
 ## Leo's review queue — no fabricated numbers
 
@@ -97,31 +110,32 @@ If nothing needs Leo, the queue (and the home page's "今天需要你处理"
 banner) says so plainly rather than showing an empty/zero state that
 looks broken.
 
-## Boss Mode home page (`/`, mode = boss)
+## Home page (`/`) — one presentation for both modes
 
 `早上好，{name}。你的数字团队正在工作。` (`timeBasedGreeting()` — 早上好 / 下午好 /
 晚上好 by server hour), then: a pending-work summary linking to `/review`,
-the four employee cards (`EmployeeCard` component — letter marker, name,
+the five employee cards (`EmployeeCard` component — letter marker, name,
 one-line responsibility, 2-3 real stats, one primary action; no shadow,
 thin border, matches the rest of the app's minimal system), and the Leo
 待处理 count summary. No charts, no colourful widgets.
 
-## Admin Mode (`/`, mode = admin)
-
-**Unchanged** operational dashboard (stage-count cards). Nav gains
-relabeled/new entries but nothing is removed:
+**Admin Mode shows the exact same page**, live user instruction
+overriding the original "unchanged separate operational dashboard"
+design — see `BossHome({ isAdmin })` in `src/app/page.tsx`. The only
+difference: a collapsed `<details>` "运营列表" section at the bottom,
+ADMIN-only, linking to the pipeline-stage pages no digital employee
+owns (选题库/可进入拍摄/本周已发布/内容资产库 — Leo shoots and publishes by
+hand, there's no AI employee for that). `src/components/nav.tsx`'s old
+8-item admin nav (`ADMIN_LINKS`) is gone for the same reason — 选题库/研究中心/
+内容工作台 are already one click away via the employee cards; only "管理"
+remains as a nav link, since it's the one thing genuinely not reachable
+by clicking an employee.
 
 选题库 (`/topics`) · 研究中心 (`/team/researcher`, shared with Boss Mode's B
 page) · 可进入拍摄 (`/ready-to-shoot`) · 本周已发布 (`/published`) · 内容工作台
 (`/team/editor`, shared with Boss Mode's C page) · 内容资产库
-(`/content-assets`, new — flat cross-topic listing of latest content
+(`/content-assets` — flat cross-topic listing of latest content
 versions) · 管理 (`/admin`).
-
-Note: the spec's suggested nav also listed a separate "系统设置" entry.
-There is no distinct settings functionality in this app (only staff/role
-management, already at `/admin`) — rather than build an empty page to
-hold a nav item, `/admin` covers both; flagging this scope decision
-rather than fabricating a settings page with nothing in it.
 
 ## New routes
 

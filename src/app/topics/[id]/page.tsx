@@ -20,8 +20,8 @@ import {
 } from "@/lib/permissions";
 import { canArchive, canStartResearch } from "@/lib/topic-workflow";
 import { canApproveResearchFromStatus, canRunResearchFromStatus } from "@/lib/research-workflow";
-import { isResearchAgentConfigured } from "@/lib/ai/research-agent";
-import { isContentAgentConfigured } from "@/lib/ai/content-agent";
+import { getTaskModelOptions } from "@/lib/ai/task-model-options";
+import { GenerateAction } from "@/components/ai/generate-action";
 import { groupContentAssetsByLineage, groupSourcesByPackId } from "@/lib/content-versions";
 import {
   CONTENT_PILLAR_LABEL,
@@ -99,7 +99,6 @@ export default async function TopicDetailPage({
   const showStartResearch = canShowActions && canStartResearch(topic.status);
   const showArchive = canShowActions && canArchiveTopic(user.role) && canArchive(topic.status);
 
-  const aiConfigured = isResearchAgentConfigured();
   const showRunResearch =
     canShowActions && canRunResearch(user.role) && canRunResearchFromStatus(topic.status);
   const showEditResearch = canShowActions && canRunResearch(user.role) && Boolean(researchPack);
@@ -110,9 +109,30 @@ export default async function TopicDetailPage({
     Boolean(researchPack);
 
   // --- Content Agent -----------------------------------------------------
-  const contentReady = isContentAgentConfigured();
   const contentGateOpen = canGenerateContent(topic.status);
   const canManageContent = canShowActions && canManageContentAssets(user.role);
+
+  // Model Router options — only needed for the ADMIN who can actually run
+  // these tasks. Each option set is independent (per task type), computed
+  // without executing anything. See docs/model-router.md.
+  const isAdmin = canShowActions && user.role === "ADMIN";
+  const [researchOptions, videoOptions, xhsOptions, wechatOptions, wechatFullOptions] = isAdmin
+    ? await Promise.all([
+        getTaskModelOptions("RESEARCH"),
+        getTaskModelOptions("VIDEO_WRITING"),
+        getTaskModelOptions("XIAOHONGSHU_WRITING"),
+        getTaskModelOptions("WECHAT_WRITING"),
+        getTaskModelOptions("WECHAT_FULL_ARTICLE"),
+      ])
+    : [null, null, null, null, null];
+
+  const aiConfigured = Boolean(researchOptions?.models.some((m) => m.configured));
+  const contentReady = Boolean(videoOptions?.models.some((m) => m.configured));
+  const platformTaskOptions: Record<ContentPlatform, typeof videoOptions> = {
+    VIDEO_CHANNEL: videoOptions,
+    XIAOHONGSHU: xhsOptions,
+    WECHAT_OFFICIAL_ACCOUNT: wechatOptions,
+  };
 
   const lineages = groupContentAssetsByLineage(contentAssets);
   const videoLineage = lineages.find(
@@ -139,12 +159,19 @@ export default async function TopicDetailPage({
     if (!contentReady) {
       return (
         <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
-          AI 未配置：请在 .env.local 设置 ANTHROPIC_API_KEY 后才能生成内容。
+          AI 未配置：请在 .env.local 设置至少一个 AI 供应商的 API Key（ANTHROPIC_API_KEY /
+          GOOGLE_AI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY）后才能生成内容。
         </p>
       );
     }
     return null;
   }
+
+  const PLATFORM_TASK_TYPE: Record<ContentPlatform, "VIDEO_WRITING" | "XIAOHONGSHU_WRITING" | "WECHAT_WRITING"> = {
+    VIDEO_CHANNEL: "VIDEO_WRITING",
+    XIAOHONGSHU: "XIAOHONGSHU_WRITING",
+    WECHAT_OFFICIAL_ACCOUNT: "WECHAT_WRITING",
+  };
 
   const platformTab = (
     platform: ContentPlatform,
@@ -155,6 +182,7 @@ export default async function TopicDetailPage({
     const showFailure =
       failed?.activity_type === "content_generation_failed" &&
       (!lineage || new Date(failed.created_at) > new Date(lineage.latest.created_at));
+    const taskOptions = platformTaskOptions[platform];
 
     return (
       <div className="flex flex-col gap-4">
@@ -170,13 +198,17 @@ export default async function TopicDetailPage({
           </p>
         )}
         {canManageContent && generateGateNotice()}
-        {canManageContent && contentGateOpen && contentReady && (
-          <div className="flex flex-wrap gap-2">
-            <form action={regeneratePlatformContent.bind(null, topic.id, platform)}>
-              <Button type="submit" variant={lineage ? "secondary" : "primary"}>
-                {lineage ? "重新生成" : "生成"}
-              </Button>
-            </form>
+        {canManageContent && contentGateOpen && contentReady && taskOptions && (
+          <div className="flex flex-wrap items-start gap-2">
+            <GenerateAction
+              action={regeneratePlatformContent.bind(null, topic.id, platform)}
+              label={lineage ? "重新生成" : "生成"}
+              variant={lineage ? "secondary" : "primary"}
+              taskType={PLATFORM_TASK_TYPE[platform]}
+              models={taskOptions.models}
+              defaultModel={taskOptions.defaultModel}
+              resolutionError={taskOptions.resolutionError}
+            />
             {lineage && (
               <Link href={`/topics/${topic.id}/content/${lineage.latest.id}/edit`}>
                 <Button variant="secondary">编辑</Button>
@@ -204,16 +236,20 @@ export default async function TopicDetailPage({
             )}
             {showRunResearch && !aiConfigured && (
               <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
-                AI 未配置：请在 .env.local 设置 ANTHROPIC_API_KEY 后才能运行研究。
+                AI 未配置：请在 .env.local 设置至少一个支持联网研究的供应商（ANTHROPIC_API_KEY 或
+                GOOGLE_AI_API_KEY）后才能运行研究。
               </p>
             )}
-            <div className="flex flex-wrap items-center gap-2">
-              {showRunResearch && (
-                <form action={runResearch.bind(null, topic.id)}>
-                  <Button type="submit" disabled={!aiConfigured}>
-                    {researchPack ? "重新运行研究" : "运行研究"}
-                  </Button>
-                </form>
+            <div className="flex flex-wrap items-start gap-2">
+              {showRunResearch && researchOptions && (
+                <GenerateAction
+                  action={runResearch.bind(null, topic.id)}
+                  label={researchPack ? "重新运行研究" : "运行研究"}
+                  taskType="RESEARCH"
+                  models={researchOptions.models}
+                  defaultModel={researchOptions.defaultModel}
+                  resolutionError={researchOptions.resolutionError}
+                />
               )}
               {showEditResearch && (
                 <Link href={`/topics/${topic.id}/research/edit`}>
@@ -296,13 +332,17 @@ export default async function TopicDetailPage({
               ) : (
                 <p className="text-sm text-[var(--muted)]">尚未生成完整文章。</p>
               )}
-              {canManageContent && contentGateOpen && contentReady && (
-                <div className="flex flex-wrap gap-2">
-                  <form action={generateFullArticle.bind(null, topic.id)}>
-                    <Button type="submit" variant={wechatFullArticleLineage ? "secondary" : "primary"}>
-                      生成完整文章
-                    </Button>
-                  </form>
+              {canManageContent && contentGateOpen && contentReady && wechatFullOptions && (
+                <div className="flex flex-wrap items-start gap-2">
+                  <GenerateAction
+                    action={generateFullArticle.bind(null, topic.id)}
+                    label="生成完整文章"
+                    variant={wechatFullArticleLineage ? "secondary" : "primary"}
+                    taskType="WECHAT_FULL_ARTICLE"
+                    models={wechatFullOptions.models}
+                    defaultModel={wechatFullOptions.defaultModel}
+                    resolutionError={wechatFullOptions.resolutionError}
+                  />
                   {wechatFullArticleLineage && (
                     <Link href={`/topics/${topic.id}/content/${wechatFullArticleLineage.latest.id}/edit`}>
                       <Button variant="secondary">编辑</Button>
@@ -359,6 +399,9 @@ export default async function TopicDetailPage({
                     — {String(event.detail.platform)} v{String(event.detail.version ?? "")}
                   </span>
                 ) : null}
+                {canManageContent && event.detail?.usageLogFailed ? (
+                  <span className="text-[var(--muted)]"> · AI 使用记录写入失败</span>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -383,39 +426,44 @@ export default async function TopicDetailPage({
         </p>
       )}
 
-      <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <p className="text-xs text-[var(--muted)]">选题问题</p>
-          <p className="mt-0.5 text-sm">{topic.question || "—"}</p>
-        </div>
-        <div>
-          <p className="text-xs text-[var(--muted)]">Business（业务线）</p>
-          <p className="mt-0.5 text-sm">{topic.business || "—"}</p>
-        </div>
-        <div>
-          <p className="text-xs text-[var(--muted)]">目标受众</p>
-          <p className="mt-0.5 text-sm">{topic.audience || "—"}</p>
-        </div>
-        <div>
-          <p className="text-xs text-[var(--muted)]">内容支柱</p>
-          <p className="mt-0.5 text-sm">
-            {topic.content_pillar ? CONTENT_PILLAR_LABEL[topic.content_pillar] : "—"}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs text-[var(--muted)]">优先级</p>
-          <p className="mt-0.5 text-sm">{PRIORITY_LABEL[topic.priority]}</p>
-        </div>
-      </section>
+      {topic.question && <p className="text-sm">{topic.question}</p>}
 
-      <section className="rounded-md border border-[var(--border)] px-4 py-3">
-        <p className="text-xs text-[var(--muted)]">选题评分</p>
-        <p className="mt-1 text-3xl font-semibold">{topic.topic_score}</p>
-        <div className="mt-2 flex gap-4 text-xs text-[var(--muted)]">
-          <span>优先级权重 {topic.score_breakdown.priority}</span>
-          <span>完整度 {topic.score_breakdown.completeness}</span>
+      <details className="group rounded-md border border-[var(--border)]">
+        <summary className="cursor-pointer list-none px-4 py-2.5 text-sm text-[var(--muted)] hover:text-[var(--foreground)]">
+          更多信息（业务线、受众、评分等）
+        </summary>
+        <div className="flex flex-col gap-4 border-t border-[var(--border)] px-4 py-4">
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <p className="text-xs text-[var(--muted)]">业务线</p>
+              <p className="mt-0.5 text-sm">{topic.business || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--muted)]">目标受众</p>
+              <p className="mt-0.5 text-sm">{topic.audience || "—"}</p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--muted)]">内容支柱</p>
+              <p className="mt-0.5 text-sm">
+                {topic.content_pillar ? CONTENT_PILLAR_LABEL[topic.content_pillar] : "—"}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-[var(--muted)]">优先级</p>
+              <p className="mt-0.5 text-sm">{PRIORITY_LABEL[topic.priority]}</p>
+            </div>
+          </section>
+
+          <section>
+            <p className="text-xs text-[var(--muted)]">选题评分</p>
+            <p className="mt-1 text-2xl font-semibold">{topic.topic_score}</p>
+            <div className="mt-1 flex gap-4 text-xs text-[var(--muted)]">
+              <span>优先级权重 {topic.score_breakdown.priority}</span>
+              <span>完整度 {topic.score_breakdown.completeness}</span>
+            </div>
+          </section>
         </div>
-      </section>
+      </details>
 
       <section className="flex flex-wrap gap-2">
         {!demo && (
@@ -454,12 +502,17 @@ export default async function TopicDetailPage({
           </div>
           {!contentReady ? (
             <p className="text-sm text-[var(--muted)]">
-              AI 未配置：请在 .env.local 设置 ANTHROPIC_API_KEY 后才能生成内容。
+              AI 未配置：请在 .env.local 设置至少一个 AI 供应商的 API Key 后才能生成内容。
             </p>
           ) : (
-            <form action={generateContent.bind(null, topic.id)}>
-              <Button type="submit">生成内容</Button>
-            </form>
+            <>
+              <p className="text-xs text-[var(--muted)]">
+                三个平台各自按「AI 模型配置」中的默认模型独立生成；如需为单个平台更换模型，请在生成后使用对应标签页的「重新生成」。
+              </p>
+              <form action={generateContent.bind(null, topic.id)}>
+                <Button type="submit">生成内容</Button>
+              </form>
+            </>
           )}
         </section>
       )}

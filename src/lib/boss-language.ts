@@ -27,25 +27,31 @@ export const BOSS_CONFIDENCE_LABEL: Record<ResearchConfidence, string> = {
   HIGH: "证据较充分",
 };
 
-export type EmployeeId = "planner" | "researcher" | "editor" | "compliance";
+export type EmployeeId = "planner" | "researcher" | "editor" | "compliance" | "analyst";
 
 export interface DigitalEmployee {
   id: EmployeeId;
-  letter: "A" | "B" | "C" | "D";
+  letter: "A" | "B" | "C" | "D" | "E";
   name: string;
   responsibility: string;
   href: string;
-  /** Compliance is not implemented yet — see CLAUDE.md. */
   enabled: boolean;
 }
 
-/** Exactly four digital employees this phase — do not add a fifth without instruction. */
+/**
+ * Five digital employees — Compliance (D) and Analyst (E) went live by
+ * explicit live user instruction, overriding this list's earlier
+ * "exactly four, no fifth without instruction" note. `name` here is the
+ * default; a signed-in ADMIN can override it per employee via
+ * employee_names (see src/lib/employee-names.ts) — always resolve display
+ * names through resolveEmployeeDisplayName, not this array directly.
+ */
 export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
   {
     id: "planner",
     letter: "A",
     name: "选题策划员",
-    responsibility: "帮你决定今天最值得做什么内容。",
+    responsibility: "帮你决定今天最值得做什么内容，还能主动搜今天的新闻找选题。",
     href: "/team/planner",
     enabled: true,
   },
@@ -69,9 +75,17 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
     id: "compliance",
     letter: "D",
     name: "合规审核员",
-    responsibility: "专门挑错，检查内容有没有风险。",
+    responsibility: "专门挑错，重新核对内容有没有超出研究依据、有没有风险用语。",
     href: "/team/compliance",
-    enabled: false,
+    enabled: true,
+  },
+  {
+    id: "analyst",
+    letter: "E",
+    name: "数据分析员",
+    responsibility: "看发布后的数据表现，帮你判断下次该往哪个方向选题。",
+    href: "/team/analyst",
+    enabled: true,
   },
 ];
 
@@ -79,6 +93,19 @@ export function getEmployee(id: EmployeeId): DigitalEmployee {
   const employee = DIGITAL_EMPLOYEES.find((e) => e.id === id);
   if (!employee) throw new Error(`Unknown digital employee: ${id}`);
   return employee;
+}
+
+/**
+ * The name to actually display: an ADMIN-set custom name if one exists,
+ * otherwise the default from DIGITAL_EMPLOYEES. Pure — callers fetch
+ * `customNames` once (getEmployeeNames() in employee-names.ts) and pass it
+ * in, so every page resolves names the same way.
+ */
+export function resolveEmployeeDisplayName(
+  id: EmployeeId,
+  customNames: Partial<Record<EmployeeId, string>>,
+): string {
+  return customNames[id] || getEmployee(id).name;
 }
 
 /** `hour` is 0-23, server local time. */

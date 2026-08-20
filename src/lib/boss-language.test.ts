@@ -4,6 +4,7 @@ import {
   BOSS_STATUS_LABEL,
   DIGITAL_EMPLOYEES,
   getEmployee,
+  resolveEmployeeDisplayName,
   timeBasedGreeting,
 } from "./boss-language";
 import type { TopicStatus } from "./types";
@@ -50,15 +51,13 @@ describe("BOSS_CONFIDENCE_LABEL", () => {
 });
 
 describe("DIGITAL_EMPLOYEES", () => {
-  it("defines exactly four employees, lettered A-D in order", () => {
-    expect(DIGITAL_EMPLOYEES).toHaveLength(4);
-    expect(DIGITAL_EMPLOYEES.map((e) => e.letter)).toEqual(["A", "B", "C", "D"]);
+  it("defines exactly five employees, lettered A-E in order", () => {
+    expect(DIGITAL_EMPLOYEES).toHaveLength(5);
+    expect(DIGITAL_EMPLOYEES.map((e) => e.letter)).toEqual(["A", "B", "C", "D", "E"]);
   });
 
-  it("marks only compliance (D) as not yet enabled", () => {
-    const disabled = DIGITAL_EMPLOYEES.filter((e) => !e.enabled);
-    expect(disabled).toHaveLength(1);
-    expect(disabled[0].id).toBe("compliance");
+  it("all five are enabled — Compliance and Analyst went live by explicit user instruction", () => {
+    expect(DIGITAL_EMPLOYEES.every((e) => e.enabled)).toBe(true);
   });
 
   it("getEmployee looks up a specific employee by id", () => {
@@ -69,6 +68,16 @@ describe("DIGITAL_EMPLOYEES", () => {
   it("getEmployee throws for an unknown id rather than returning undefined", () => {
     // @ts-expect-error - intentionally invalid id to test the guard
     expect(() => getEmployee("nonexistent")).toThrow();
+  });
+});
+
+describe("resolveEmployeeDisplayName", () => {
+  it("falls back to the default name when no custom name is set", () => {
+    expect(resolveEmployeeDisplayName("researcher", {})).toBe("政策研究员");
+  });
+
+  it("prefers a custom name when one is set", () => {
+    expect(resolveEmployeeDisplayName("researcher", { researcher: "小研" })).toBe("小研");
   });
 });
 

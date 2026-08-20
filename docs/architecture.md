@@ -12,10 +12,13 @@
   (RLS), and privileged operations (role changes) run through Next.js
   Server Actions using the Supabase service-role key, which never leaves
   the server.
-- **AI**: Anthropic Messages API (`@anthropic-ai/sdk`), called only from
-  `src/lib/ai/research-agent.ts` and `src/lib/ai/content-agent.ts`
-  (server-only). Structured output validated with Zod. See "AI
-  architecture" below, `docs/phase-3-plan.md`, and `docs/phase-4-plan.md`.
+- **AI**: multi-provider via the Model Router (`src/lib/ai/router.ts`) —
+  Anthropic (`@anthropic-ai/sdk`), Google Gemini (`@google/genai`), Groq
+  (`groq-sdk`), and OpenRouter (raw HTTP). No business logic calls a
+  provider SDK directly; everything routes through task-type-based
+  selection. Structured output validated with Zod regardless of provider.
+  See "AI architecture" below, `docs/model-router.md`,
+  `docs/phase-3-plan.md`, and `docs/phase-4-plan.md`.
 - **Testing**: Vitest + React Testing Library.
 
 ## Why this stack
@@ -48,6 +51,8 @@ src/
     ready-to-shoot/        pipeline stage view
     published/             pipeline stage view, scoped to the current week
     admin/                 ADMIN-only: manage staff roles, view approval log
+      ai-models/page.tsx     AI 模型配置 — per-task-type model default selection,
+                              provider connection status, dev-mode indicator
   components/              presentational + small interactive components
     ui/                     generic primitives (button, etc.)
     content/                 platform-specific content views, tabs, shared bits
@@ -58,13 +63,64 @@ src/
       server.ts              server Supabase client (anon key, cookie-bound session)
       admin.ts               server-only Supabase client (service role key)
     ai/
-      research-agent.ts      orchestration: calls Anthropic, server-only
+      router.ts                the Model Router — the ONLY entry point research-actions.ts
+                                /content-actions.ts call; resolves a task to a
+                                provider+model and dispatches, server-only
+      model-selection.ts        pure: dev-mode free-first / override / configured-default
+                                 precedence — no Supabase, fully unit-tested
+      model-config.ts            data-access: ADMIN's persisted per-task model
+                                  defaults (model_routing_config), server-only
+      task-model-options.ts       server-only: precomputes what the Topic Detail
+                                   page's <GenerateAction> needs to render
+      providers/
+        types.ts                  provider-agnostic types (AIProviderId, TaskType,
+                                   ModelRegistryEntry, AIExecutionResult<T>) — pure
+        registry.ts                 the Model Registry — single source of truth for
+                                     model metadata (pricing type, capabilities, etc) — pure
+        anthropic-provider.ts        adapter: delegates to research-agent.ts /
+                                      content-agent.ts unchanged, normalizes the result
+        google-provider.ts            real Gemini implementation (web-search
+                                       grounding for research, JSON mode for content)
+        groq-provider.ts               real Groq implementation (JSON mode; no
+                                        web-search capability registered)
+        openrouter-provider.ts          real OpenRouter implementation via raw HTTP
+      research-agent.ts      Anthropic-specific orchestration, server-only —
+                              UNCHANGED by the Model Router milestone
       research-pack.ts        pure parsing/grounding logic — no network,
                                no server-only import, fully unit-tested
-      content-agent.ts         orchestration: calls Anthropic (structured
-                                outputs via Zod), server-only
+      content-agent.ts         Anthropic-specific orchestration (structured
+                                outputs via Zod), server-only — UNCHANGED
       content-schemas.ts        pure: Zod schemas, source-manifest/grounding,
-                                 prompts — no network, fully unit-tested
+                                 prompts, plus the provider-agnostic
+                                 applyGroundingAndSafety() every non-Anthropic
+                                 provider's content path also uses — no network,
+                                 fully unit-tested
+      research-queries.ts       pure: derives up to 3 search queries from
+                                 topic context, ranks results toward
+                                 primary (gov.uk etc) sources — no network
+      research-external.ts       pure: the external-search (Search Router
+                                  → model) Research prompt, Zod schema,
+                                  label manifest, and grounding — mirrors
+                                  content-schemas.ts's pattern, no network
+    search/
+      types.ts                  SearchProviderId, SearchResult,
+                                 SearchExecutionResult — pure
+      registry.ts                 the Search Provider Registry (Tavily —
+                                   FREE, the dev default; Brave — PAID,
+                                   available but not preferred) — pure
+      search-selection.ts          pure selection logic, mirrors
+                                    ai/model-selection.ts exactly
+      router.ts                    the Search Router — runs queries,
+                                    classifies failures, server-only
+      search-health.ts             ADMIN-only real connectivity check
+      providers/
+        tavily-provider.ts           real Tavily Search API implementation
+        brave-provider.ts            real Brave Search API implementation
+    data-integrity.ts        pure: flags topics whose pipeline status
+                              implies AI-generated data that doesn't
+                              actually exist (e.g. seeded directly at an
+                              advanced status) — admin-visible check, not
+                              a database constraint
     auth.ts                  session/role helpers used by pages and actions
     types.ts                  shared TypeScript types for the data model
     status.ts                 labels for status/pillar/priority/activity/platform
@@ -106,43 +162,67 @@ docs/                       this documentation set
 
 ## AI architecture
 
-`src/lib/ai/research-agent.ts` is the only place in the app that calls a
-model — see `docs/phase-3-plan.md` for the full design. In short:
+`src/lib/ai/router.ts` — the Model Router — is the only place in the app
+`research-actions.ts` / `content-actions.ts` reach to run an AI task. No
+Server Action, page, or business-logic file calls a provider SDK directly.
+See `docs/model-router.md` for the full multi-provider design; this
+section covers what's provider-*specific*.
 
-1. `src/app/topics/research-actions.ts` → `runResearch()` checks the
-   caller is `ADMIN`, inserts a `research_runs` row, then calls
-   `runResearchAgent(topic)`.
-2. That function calls the Anthropic Messages API with the server-side
-   `web_search` tool enabled — Claude performs real web searches within
-   that single call (no client-side search loop to write).
-3. The model's final reply is parsed as JSON (`research-pack.ts` →
+**Research has a Search Router in front of it now** (see
+`docs/search-router.md`). `runResearchTask()` first tries
+`src/lib/search/router.ts` — with Tavily configured (the free,
+Development Mode default), it retrieves real sources first and hands them
+to the resolved AI model for analysis only (no native grounding tool
+call). If no search provider is configured at all, it falls through to
+the native-grounding paths described below, unchanged. This is what
+actually unblocked the first real Research run — Google's native
+`googleSearch` grounding quota turned out to be far tighter than plain
+generation on a free-tier key.
+
+**Anthropic** (`src/lib/ai/research-agent.ts` / `content-agent.ts`) —
+unchanged by either the Model Router or Search Router milestone,
+byte-for-byte:
+
+1. `runResearchAgent(topic)` calls the Anthropic Messages API with the
+   server-side `web_search` tool enabled — Claude performs real web
+   searches within that single call (no client-side search loop to write).
+2. The model's final reply is parsed as JSON (`research-pack.ts` →
    `parseResearchPackJson`), then every claimed source is checked against
    the *actual* search results the tool returned in that response
    (`groundSources`) — anything not backed by a real result is dropped.
-   This is the anti-hallucination guarantee, enforced in code.
-4. The result (success or failure) is logged to `ai_usage_log`
-   unconditionally, and the grounded pack is saved to `research_packs` /
-   `research_sources` on success.
-5. `research-agent.ts` requires `ANTHROPIC_API_KEY`; `research-pack.ts`
-   has no such dependency and no `"server-only"` import, which is what
-   makes its parsing/grounding logic directly unit-testable.
+   This is the anti-hallucination guarantee, enforced in code, and it's
+   provider-agnostic — see below for how Google reuses it.
+3. Content generation uses Anthropic **structured outputs**
+   (`client.messages.parse` + `zodOutputFormat`). Four independent
+   generation functions (video, Xiaohongshu, WeChat outline, WeChat full
+   article) each build an evidence context block, call the model,
+   re-validate with Zod, resolve cited source labels back to real
+   `research_sources.id` values, and scan for forbidden hype phrases.
 
-### Content Agent
+**Google Gemini** (`src/lib/ai/providers/google-provider.ts`) — research
+uses Gemini's `googleSearch` grounding tool; the returned grounding chunks
+are mapped into the same `RealSearchResult` shape the Anthropic path
+produces, so `research-pack.ts`'s `buildGroundedPack` applies the
+*identical* anti-hallucination check regardless of provider. Content
+generation uses `responseMimeType: "application/json"` (no schema
+enforcement at the API level — Zod validates on the way back, same as
+every other provider).
 
-`src/lib/ai/content-agent.ts` follows the same server-only/pure-module
-split, but calls the Anthropic API differently — no tool use is needed
-(no web search), so it uses **structured outputs**
-(`client.messages.parse` + `zodOutputFormat`) instead of Research Agent's
-manual-JSON-in-text parsing. Four independent generation functions (video,
-Xiaohongshu, WeChat outline, WeChat full article) each: build an evidence
-context block from the topic + approved research pack + a source manifest
-that labels sources ("S1", "S2"...) instead of showing real URLs, call the
-model, re-validate the parsed result with Zod, resolve cited labels back
-to real `research_sources.id` values (dropping anything unverified), and
-scan the output for a short list of forbidden hype phrases — flagging
-hits into `expert_review_notes` rather than blocking generation. See
-`docs/phase-4-plan.md` for the full design and `docs/data-model.md` for
-`content_assets`.
+**Groq / OpenRouter** (`groq-provider.ts` / `openrouter-provider.ts`) —
+JSON-mode structured generation only; neither has a registered
+web-search-capable model, so the Router never selects them for `RESEARCH`
+(enforced by `isModelSuitableForTask`, not by convention).
+
+**The result, every provider**: logged to `ai_usage_log` unconditionally
+(now including `provider`/`task_type`/`digital_employee`/
+`pricing_type_at_execution`), grounded pack/content saved on success. Each
+provider requires its own env var (see `.env.example`); an unconfigured
+provider fails fast with a clear inline message rather than a stack trace.
+`research-pack.ts` / `content-schemas.ts` have no such dependency and no
+`"server-only"` import, which is what makes their parsing/grounding logic
+directly unit-testable — and shareable across every provider. See
+`docs/phase-4-plan.md` for the original Content Agent design and
+`docs/data-model.md` for `content_assets`.
 
 ## Demo-data fallback
 
@@ -153,10 +233,11 @@ page's data-fetch is wrapped so that if Supabase isn't configured yet (no
 This means `npm run dev` produces a working UI immediately, before any
 Supabase project is connected. Once real credentials are set, live data is
 used automatically — there is no separate "demo mode" toggle to maintain.
-The same idea extends to AI: without `ANTHROPIC_API_KEY`, "运行研究" is
-disabled with an inline notice rather than failing; `demo-data.ts` also
-ships one placeholder research pack purely so the review UI has something
-to look at without spending API credits (clearly labeled as such).
+The same idea extends to AI: without at least one AI provider's API key
+configured, "运行研究"/"生成内容" are disabled with an inline notice rather
+than failing; `demo-data.ts` also ships one placeholder research pack
+purely so the review UI has something to look at without spending API
+credits (clearly labeled as such).
 
 ## Minimal UI principles
 
