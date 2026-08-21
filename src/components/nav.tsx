@@ -13,14 +13,20 @@ import { ModeSwitch } from "./mode-switch";
  */
 export function Nav({ user, mode }: { user: CurrentUser | null; mode: ViewMode }) {
   return (
-    <header className="border-b border-[var(--border)]">
-      <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <div className="flex flex-wrap items-center gap-4">
-          <Link href="/" className="font-semibold">
+    <header className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--background)]/80 backdrop-blur">
+      <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 px-4 py-4">
+        <div className="flex flex-wrap items-center gap-5">
+          <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-xs font-bold text-[var(--accent-foreground)]">
+              L
+            </span>
             LeoVisaAi 营销工作台
           </Link>
           {user?.role === "ADMIN" && mode === "admin" && (
-            <Link href="/admin" className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]">
+            <Link
+              href="/admin"
+              className="text-sm font-medium text-[var(--muted)] hover:text-[var(--foreground)]"
+            >
               管理
             </Link>
           )}
@@ -28,7 +34,7 @@ export function Nav({ user, mode }: { user: CurrentUser | null; mode: ViewMode }
         {user && (
           <div className="flex items-center gap-3 text-sm text-[var(--muted)]">
             {user.role === "ADMIN" && <ModeSwitch mode={mode} />}
-            <span>
+            <span className="rounded-full border border-[var(--border)] px-3 py-1">
               {user.displayName} · {user.role === "ADMIN" ? "管理员" : "专员"}
             </span>
             <LogoutButton />

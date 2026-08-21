@@ -95,7 +95,10 @@ describe("filterContentEligibleTopics / summarizeEditorTasks", () => {
       // topic "2" has no entry at all — pending
       ["3", []], // present but empty — still pending
     ]);
-    expect(summarizeEditorTasks(eligible, byTopic)).toEqual({ pendingGeneration: 2, draftsComplete: 1 });
+    expect(summarizeEditorTasks(eligible, byTopic, "VIDEO_CHANNEL")).toEqual({
+      pendingGeneration: 2,
+      draftsComplete: 1,
+    });
   });
 });
 
@@ -138,7 +141,11 @@ describe("buildLeoReviewQueue — Leo review queue aggregation", () => {
     ]);
     const queue = buildLeoReviewQueue(topics, assets);
     expect(queue).toHaveLength(1);
-    expect(queue[0]).toMatchObject({ topicId: "1", employeeId: "editor", description: "内容草稿有 1 项需要确认" });
+    expect(queue[0]).toMatchObject({
+      topicId: "1",
+      employeeId: "video-editor",
+      description: "内容草稿有 1 项需要确认",
+    });
   });
 
   it("does NOT fabricate an editor item when expert_review_notes is empty", () => {

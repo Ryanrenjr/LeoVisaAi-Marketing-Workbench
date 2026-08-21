@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   getAllProfiles,
+  getComplianceReviews,
   getContentAssets,
   getLatestResearchPack,
   getResearchSources,
@@ -10,21 +11,25 @@ import {
   getTopicById,
   isDemoMode,
 } from "@/lib/topics";
+import { getContentImagesForTopic } from "@/lib/content-images";
 import { getCurrentUser } from "@/lib/auth";
 import {
   canApproveResearch,
   canArchiveTopic,
   canGenerateContent,
   canManageContentAssets,
+  canRunCompliance,
   canRunResearch,
 } from "@/lib/permissions";
-import { canArchive, canStartResearch } from "@/lib/topic-workflow";
+import { canArchive, canStartResearch, isAtOrPastStage } from "@/lib/topic-workflow";
+import { AdvanceButton } from "@/components/advance-button";
 import { canApproveResearchFromStatus, canRunResearchFromStatus } from "@/lib/research-workflow";
 import { getTaskModelOptions } from "@/lib/ai/task-model-options";
 import { GenerateAction } from "@/components/ai/generate-action";
 import { groupContentAssetsByLineage, groupSourcesByPackId } from "@/lib/content-versions";
 import {
   CONTENT_PILLAR_LABEL,
+  CONTENT_PLATFORM_LABEL,
   PRIORITY_LABEL,
   STATUS_LABEL,
   TOPIC_ACTIVITY_LABEL,
@@ -36,6 +41,7 @@ import { TopicTabs, type TabDef } from "@/components/content/topic-tabs";
 import { VideoContentView } from "@/components/content/video-content-view";
 import { XiaohongshuContentView } from "@/components/content/xiaohongshu-content-view";
 import { WechatFullArticleView, WechatOutlineView } from "@/components/content/wechat-content-view";
+import { ComplianceReviewResult } from "@/components/compliance-review-result";
 import { archiveTopic, rescoreTopic, startResearch } from "../actions";
 import { approveResearch, requestResearchChanges, runResearch } from "../research-actions";
 import {
@@ -43,6 +49,7 @@ import {
   generateFullArticle,
   regeneratePlatformContent,
 } from "../content-actions";
+import { runComplianceReview } from "../compliance-actions";
 import type { ContentPlatform, TopicActivity } from "@/lib/types";
 
 function latestPlatformActivity(
@@ -77,12 +84,28 @@ export default async function TopicDetailPage({
 
   if (!topic) notFound();
 
-  const [activity, profiles, researchPack, contentAssets] = await Promise.all([
+  const [activity, profiles, researchPack, contentAssets, complianceReviews, contentImages] = await Promise.all([
     getTopicActivity(topic.id),
     getAllProfiles(),
     getLatestResearchPack(topic.id),
     getContentAssets(topic.id),
+    getComplianceReviews(topic.id),
+    getContentImagesForTopic(topic.id),
   ]);
+  const imagesByAssetId = new Map<string, typeof contentImages>();
+  for (const image of contentImages) {
+    if (!image.content_asset_id) continue;
+    const list = imagesByAssetId.get(image.content_asset_id);
+    if (list) list.push(image);
+    else imagesByAssetId.set(image.content_asset_id, [image]);
+  }
+  const latestComplianceReviewByAssetId = new Map<string, (typeof complianceReviews)[number]>();
+  for (const review of complianceReviews) {
+    // reviews are sorted newest-first (getComplianceReviews), keep only the first (latest) per asset
+    if (!latestComplianceReviewByAssetId.has(review.content_asset_id)) {
+      latestComplianceReviewByAssetId.set(review.content_asset_id, review);
+    }
+  }
   const researchSources = researchPack ? await getResearchSources(researchPack.id) : [];
   const profileById = new Map(profiles.map((p) => [p.id, p]));
 
@@ -111,20 +134,22 @@ export default async function TopicDetailPage({
   // --- Content Agent -----------------------------------------------------
   const contentGateOpen = canGenerateContent(topic.status);
   const canManageContent = canShowActions && canManageContentAssets(user.role);
+  const canRunComplianceHere = canShowActions && canRunCompliance(user.role);
 
   // Model Router options — only needed for the ADMIN who can actually run
   // these tasks. Each option set is independent (per task type), computed
   // without executing anything. See docs/model-router.md.
   const isAdmin = canShowActions && user.role === "ADMIN";
-  const [researchOptions, videoOptions, xhsOptions, wechatOptions, wechatFullOptions] = isAdmin
+  const [researchOptions, videoOptions, xhsOptions, wechatOptions, wechatFullOptions, complianceOptions] = isAdmin
     ? await Promise.all([
         getTaskModelOptions("RESEARCH"),
         getTaskModelOptions("VIDEO_WRITING"),
         getTaskModelOptions("XIAOHONGSHU_WRITING"),
         getTaskModelOptions("WECHAT_WRITING"),
         getTaskModelOptions("WECHAT_FULL_ARTICLE"),
+        getTaskModelOptions("COMPLIANCE"),
       ])
-    : [null, null, null, null, null];
+    : [null, null, null, null, null, null];
 
   const aiConfigured = Boolean(researchOptions?.models.some((m) => m.configured));
   const contentReady = Boolean(videoOptions?.models.some((m) => m.configured));
@@ -220,6 +245,37 @@ export default async function TopicDetailPage({
     );
   };
 
+  const complianceSection = (platformLabel: string, asset: (typeof contentAssets)[number] | undefined) => {
+    if (!asset) return null;
+    const review = latestComplianceReviewByAssetId.get(asset.id);
+    return (
+      <div key={asset.id} className="border-b border-[var(--border)] pb-4 last:border-b-0">
+        <p className="text-sm font-medium">{platformLabel}</p>
+        {review && <ComplianceReviewResult review={review} />}
+        {canRunComplianceHere && complianceOptions && (
+          <div className="mt-2">
+            <GenerateAction
+              action={runComplianceReview.bind(null, asset.id)}
+              label={review ? "重新审核" : "运行合规审核"}
+              taskType="COMPLIANCE"
+              className="w-full py-3"
+              models={complianceOptions.models}
+              defaultModel={complianceOptions.defaultModel}
+              resolutionError={complianceOptions.resolutionError}
+            />
+          </div>
+        )}
+        {canManageContent && (
+          <Link href={`/topics/${topic.id}/content/${asset.id}/edit`} className="mt-2 inline-block">
+            <Button variant="secondary" className="text-sm">
+              编辑
+            </Button>
+          </Link>
+        )}
+      </div>
+    );
+  };
+
   const tabs: TabDef[] = [
     {
       key: "research",
@@ -230,7 +286,7 @@ export default async function TopicDetailPage({
         ) : (
           <div className="flex flex-col gap-4">
             {researchPack ? (
-              <ResearchPackView pack={researchPack} sources={researchSources} />
+              <ResearchPackView pack={researchPack} sources={researchSources} topic={topic} />
             ) : (
               <p className="text-sm text-[var(--muted)]">尚未运行研究。</p>
             )}
@@ -291,7 +347,11 @@ export default async function TopicDetailPage({
         "VIDEO_CHANNEL",
         videoLineage,
         videoLineage && (
-          <VideoContentView history={videoLineage.history} sourcesByPackId={contentSourcesByPackId} />
+          <VideoContentView
+            history={videoLineage.history}
+            sourcesByPackId={contentSourcesByPackId}
+            images={imagesByAssetId.get(videoLineage.latest.id) ?? []}
+          />
         ),
       ),
     },
@@ -302,7 +362,11 @@ export default async function TopicDetailPage({
         "XIAOHONGSHU",
         xhsLineage,
         xhsLineage && (
-          <XiaohongshuContentView history={xhsLineage.history} sourcesByPackId={contentSourcesByPackId} />
+          <XiaohongshuContentView
+            history={xhsLineage.history}
+            sourcesByPackId={contentSourcesByPackId}
+            images={imagesByAssetId.get(xhsLineage.latest.id) ?? []}
+          />
         ),
       ),
     },
@@ -318,6 +382,7 @@ export default async function TopicDetailPage({
               <WechatOutlineView
                 history={wechatOutlineLineage.history}
                 sourcesByPackId={contentSourcesByPackId}
+                images={imagesByAssetId.get(wechatOutlineLineage.latest.id) ?? []}
               />
             ),
           )}
@@ -358,8 +423,20 @@ export default async function TopicDetailPage({
     {
       key: "compliance",
       label: "合规",
-      disabled: true,
-      content: <p className="text-sm text-[var(--muted)]">合规审核功能将在下一阶段开放。</p>,
+      content:
+        !videoLineage && !xhsLineage && !wechatOutlineLineage && !wechatFullArticleLineage ? (
+          <p className="text-sm text-[var(--muted)]">尚未生成任何内容草稿，暂无可审核的内容。</p>
+        ) : (
+          <div className="flex flex-col gap-4">
+            {complianceSection(CONTENT_PLATFORM_LABEL.VIDEO_CHANNEL, videoLineage?.latest)}
+            {complianceSection(CONTENT_PLATFORM_LABEL.XIAOHONGSHU, xhsLineage?.latest)}
+            {complianceSection(`${CONTENT_PLATFORM_LABEL.WECHAT_OFFICIAL_ACCOUNT}大纲`, wechatOutlineLineage?.latest)}
+            {complianceSection(
+              `${CONTENT_PLATFORM_LABEL.WECHAT_OFFICIAL_ACCOUNT}完整文章`,
+              wechatFullArticleLineage?.latest,
+            )}
+          </div>
+        ),
     },
     {
       key: "activity",
@@ -490,6 +567,7 @@ export default async function TopicDetailPage({
             </Button>
           </form>
         )}
+        {canShowActions && isAtOrPastStage(topic.status, "CONTENT_DRAFT") && <AdvanceButton topic={topic} />}
       </section>
 
       {canManageContent && contentGateOpen && contentAssets.length === 0 && (
@@ -515,6 +593,15 @@ export default async function TopicDetailPage({
             </>
           )}
         </section>
+      )}
+
+      {videoLineage && xhsLineage && wechatOutlineLineage && (
+        <p className="card px-4 py-3 text-sm">
+          三个平台的内容草稿都已就绪 →{" "}
+          <Link href={`/topics/${topic.id}?tab=compliance`} className="font-medium text-[var(--accent)] hover:underline">
+            去审核
+          </Link>
+        </p>
       )}
 
       <section>

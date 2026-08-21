@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getAllTopics, getLatestResearchPack, getResearchSources, isDemoMode } from "@/lib/topics";
 import { getEmployee, resolveEmployeeDisplayName, BOSS_CONFIDENCE_LABEL, BOSS_STATUS_LABEL } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
+import { EmployeeHeader } from "@/components/employee-header";
 import type { ResearchConfidence, Topic } from "@/lib/types";
 
 interface PackInfo {
@@ -9,7 +10,7 @@ interface PackInfo {
   sourceCount: number;
 }
 
-function ResearchRow({ topic, info }: { topic: Topic; info?: PackInfo }) {
+function ResearchRow({ topic, info, showGenerateLink }: { topic: Topic; info?: PackInfo; showGenerateLink?: boolean }) {
   // Awaiting-review items go to the dedicated, single-purpose approval
   // screen — everything else still goes to the full Topic Detail page.
   const href =
@@ -21,6 +22,7 @@ function ResearchRow({ topic, info }: { topic: Topic; info?: PackInfo }) {
       </Link>
       <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted)]">
         <span>状态：{BOSS_STATUS_LABEL[topic.status]}</span>
+        <span>选题分数：{topic.topic_score}</span>
         {info && (
           <>
             <span>官方来源：{info.sourceCount}</span>
@@ -28,6 +30,14 @@ function ResearchRow({ topic, info }: { topic: Topic; info?: PackInfo }) {
           </>
         )}
       </div>
+      {showGenerateLink && (
+        <Link
+          href={`/topics/${topic.id}?tab=video`}
+          className="mt-1 inline-block text-xs font-medium text-[var(--accent)] hover:underline"
+        >
+          去生成内容 →
+        </Link>
+      )}
     </li>
   );
 }
@@ -35,17 +45,19 @@ function ResearchRow({ topic, info }: { topic: Topic; info?: PackInfo }) {
 function TopicList({
   topics,
   infoByTopicId,
+  showGenerateLink,
   empty,
 }: {
   topics: Topic[];
   infoByTopicId?: Map<string, PackInfo>;
+  showGenerateLink?: boolean;
   empty: string;
 }) {
   if (topics.length === 0) return <p className="text-sm text-[var(--muted)]">{empty}</p>;
   return (
     <ul>
       {topics.map((t) => (
-        <ResearchRow key={t.id} topic={t} info={infoByTopicId?.get(t.id)} />
+        <ResearchRow key={t.id} topic={t} info={infoByTopicId?.get(t.id)} showGenerateLink={showGenerateLink} />
       ))}
     </ul>
   );
@@ -82,15 +94,12 @@ export default async function ResearcherPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <div>
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-sm font-semibold">
-            {employee.letter}
-          </span>
-          <h1 className="text-lg font-semibold">{employeeName}</h1>
-        </div>
-        <p className="mt-2 text-sm text-[var(--muted)]">哪些事情已经查清楚了？</p>
-      </div>
+      <EmployeeHeader
+        avatarId="researcher"
+        letter={employee.letter}
+        name={employeeName}
+        subtitle="哪些事情已经查清楚了？"
+      />
 
       {demo && (
         <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
@@ -110,7 +119,7 @@ export default async function ResearcherPage() {
 
       <section>
         <h2 className="mb-2 text-sm font-medium text-[var(--muted)]">已批准研究</h2>
-        <TopicList topics={approved} infoByTopicId={infoByTopicId} empty="暂无已批准的研究。" />
+        <TopicList topics={approved} infoByTopicId={infoByTopicId} showGenerateLink empty="暂无已批准的研究。" />
       </section>
     </div>
   );

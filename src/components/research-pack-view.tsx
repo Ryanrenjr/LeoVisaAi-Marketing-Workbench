@@ -1,5 +1,26 @@
 import { CONFIDENCE_LABEL } from "@/lib/status";
-import type { ResearchPack, ResearchSource } from "@/lib/types";
+import { bossScoreLabel } from "@/lib/boss-language";
+import type { ResearchPack, ResearchSource, ScoreBreakdown } from "@/lib/types";
+
+/**
+ * `topic_score`/`score_breakdown` (see src/lib/scoring.ts) — surfaced here
+ * so the researcher sees it right next to the research quality signal
+ * (ConfidenceBadge), rather than buried in a collapsed admin-only panel.
+ */
+function ScoreCard({ score, breakdown }: { score: number; breakdown: ScoreBreakdown }) {
+  return (
+    <div className="card flex flex-col gap-1 px-4 py-3">
+      <div className="flex items-baseline gap-2">
+        <span className="text-2xl font-semibold">{score}</span>
+        <span className="text-xs text-[var(--muted)]">/ 100 分</span>
+      </div>
+      <p className="text-sm">{bossScoreLabel(score)}</p>
+      <p className="text-xs text-[var(--muted)]">
+        优先级 {breakdown.priority}/60 · 信息完整度 {breakdown.completeness}/40
+      </p>
+    </div>
+  );
+}
 
 /**
  * Always rendered whenever a research pack is shown, regardless of what
@@ -41,12 +62,15 @@ function ConfidenceBadge({ confidence }: { confidence: ResearchPack["confidence"
 export function ResearchPackView({
   pack,
   sources,
+  topic,
 }: {
   pack: ResearchPack;
   sources: ResearchSource[];
+  topic?: { topic_score: number; score_breakdown: ScoreBreakdown };
 }) {
   return (
     <div className="flex flex-col gap-4">
+      {topic && <ScoreCard score={topic.topic_score} breakdown={topic.score_breakdown} />}
       <ExpertWarningBanner />
       <ConfidenceBadge confidence={pack.confidence} />
 

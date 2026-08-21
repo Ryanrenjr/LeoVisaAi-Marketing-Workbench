@@ -11,6 +11,7 @@ import {
 import { runGoogleResearch, generateGoogleStructured, generateGoogleStructuredFromImage } from "./providers/google-provider";
 import { generateGroqStructured } from "./providers/groq-provider";
 import { generateOpenRouterStructured } from "./providers/openrouter-provider";
+import { generateOpenAIStructured, generateOpenAIImage } from "./providers/openai-provider";
 import { buildSourceManifest, buildEvidenceContextBlock, buildOutlineContextBlock } from "./content-schemas";
 import { applyGroundingAndSafety, CONTENT_TASK_CONFIG, WECHAT_FULL_ARTICLE_SYSTEM_PROMPT, WechatFullArticleSchema } from "./content-schemas";
 import { runResearchSearch } from "../search/router";
@@ -135,6 +136,7 @@ async function dispatchStructuredAnyProvider<T>(
   if (provider === "ANTHROPIC") return generateAnthropicStructured({ ...params, modelId });
   if (provider === "GOOGLE") return generateGoogleStructured({ ...params, modelId });
   if (provider === "GROQ") return generateGroqStructured({ ...params, modelId });
+  if (provider === "OPENAI") return generateOpenAIStructured({ ...params, modelId });
   return generateOpenRouterStructured({ ...params, modelId });
 }
 
@@ -246,6 +248,7 @@ async function dispatchStructured<T>(
 ): Promise<AIExecutionResult<T>> {
   if (provider === "GOOGLE") return generateGoogleStructured({ ...params, modelId });
   if (provider === "GROQ") return generateGroqStructured({ ...params, modelId });
+  if (provider === "OPENAI") return generateOpenAIStructured({ ...params, modelId });
   return generateOpenRouterStructured({ ...params, modelId });
 }
 
@@ -375,10 +378,11 @@ export async function runComplianceTask(
  * surfaced to the caller rather than guessing at topics with no evidence.
  */
 export async function runTopicDiscoveryTask(
+  keyword?: string,
   executionOverride?: ModelRef | null,
 ): Promise<RouterResult<TopicDiscoveryResult>> {
   const started = Date.now();
-  const queries = buildDiscoveryQueries();
+  const queries = buildDiscoveryQueries(new Date(), keyword);
   const searchOutcome = await runResearchSearch(queries);
 
   if (!searchOutcome.ok) {
@@ -438,6 +442,29 @@ export async function runPerformanceAnalysisTask(
   if (model.provider === "GOOGLE") return generateGoogleStructuredFromImage(params);
 
   return resolutionFailure("此模型不支持读取截图（缺少视觉能力）。", started);
+}
+
+/**
+ * Employee 小红书图片设计员 — generates a cover image from an already
+ * human-reviewed 小红书 post draft (never from raw research directly).
+ * Only OPENAI currently registers a supportsImageGeneration model — the
+ * registry filter makes any other resolution unreachable, but this stays a
+ * defensive guard rather than a silent fallback, matching every other task
+ * dispatcher in this file.
+ */
+export async function runImageGenerationTask(
+  prompt: string,
+  executionOverride?: ModelRef | null,
+): Promise<RouterResult<{ images: string[] }>> {
+  const started = Date.now();
+  const resolution = await resolveModelForTask("IMAGE_GENERATION", executionOverride);
+  if (!resolution.ok) return resolutionFailure(resolution.error, started);
+
+  const { model } = resolution;
+  if (model.provider !== "OPENAI") {
+    return resolutionFailure("此模型不支持图片生成。", started);
+  }
+  return generateOpenAIImage({ prompt, modelId: model.modelId, size: "1024x1536" });
 }
 
 export { resolveModelForTask };

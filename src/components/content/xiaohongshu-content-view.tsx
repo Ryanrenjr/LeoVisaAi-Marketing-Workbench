@@ -1,9 +1,10 @@
 import { sourcesForAsset } from "@/lib/content-versions";
 import type { XiaohongshuContent } from "@/lib/ai/content-schemas";
-import type { ContentAsset, ResearchSource } from "@/lib/types";
+import type { ContentAsset, ContentImageRow, ResearchSource } from "@/lib/types";
 import { Field } from "./field";
 import { ContentSources } from "./content-sources";
 import { ExpertReviewNotes } from "./expert-review-notes";
+import { ContentImageGrid } from "./content-image-grid";
 
 function XiaohongshuFields({ content, sources }: { content: XiaohongshuContent; sources: ResearchSource[] }) {
   return (
@@ -41,9 +42,11 @@ function XiaohongshuFields({ content, sources }: { content: XiaohongshuContent; 
 export function XiaohongshuContentView({
   history,
   sourcesByPackId,
+  images = [],
 }: {
   history: ContentAsset[];
   sourcesByPackId: Map<string, ResearchSource[]>;
+  images?: ContentImageRow[];
 }) {
   const [latest, ...older] = history;
   return (
@@ -53,6 +56,7 @@ export function XiaohongshuContentView({
         content={latest.structured_content as unknown as XiaohongshuContent}
         sources={sourcesForAsset(latest, sourcesByPackId)}
       />
+      <ContentImageGrid images={images} />
       {older.map((asset) => (
         <details key={asset.id} className="rounded-md border border-[var(--border)] px-3 py-2">
           <summary className="cursor-pointer text-sm text-[var(--muted)]">

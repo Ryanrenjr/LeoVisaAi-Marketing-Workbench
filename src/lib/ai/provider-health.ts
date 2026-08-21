@@ -1,14 +1,17 @@
 import "server-only";
 import { z } from "zod";
-import { listModels, isProviderConfigured } from "./providers/registry";
+import { listModels, isProviderConfigured, getModel } from "./providers/registry";
+import { generateAnthropicStructured } from "./providers/anthropic-provider";
 import { generateGoogleStructured } from "./providers/google-provider";
 import { generateGroqStructured } from "./providers/groq-provider";
+import { generateOpenRouterStructured } from "./providers/openrouter-provider";
+import { generateOpenAIStructured, isOpenAIModelAvailable } from "./providers/openai-provider";
 import type { AIProviderId } from "./providers/types";
 
 /**
  * ADMIN-only development diagnostic — NOT a product feature. Confirms a
- * provider is reachable with a single harmless synthetic request before
- * trusting it for a real Research/Content run. See
+ * provider/model is reachable with a single harmless synthetic request
+ * before trusting it for a real Research/Content run. See
  * docs/provider-smoke-test.md.
  */
 
@@ -38,12 +41,21 @@ function pickHealthCheckModel(provider: AIProviderId): string | null {
   return (recommended ?? candidates[0])?.modelId ?? null;
 }
 
-const HEALTH_CHECK_DISPATCH: Partial<
-  Record<
-    AIProviderId,
-    (modelId: string) => Promise<{ ok: boolean; error: string | null; inputTokens: number | null; outputTokens: number | null }>
-  >
+/** Every structured-output provider gets a real ping with the exact modelId given — never a substitute model. */
+const HEALTH_CHECK_DISPATCH: Record<
+  AIProviderId,
+  (modelId: string) => Promise<{ ok: boolean; error: string | null; inputTokens: number | null; outputTokens: number | null }>
 > = {
+  ANTHROPIC: async (modelId) => {
+    const result = await generateAnthropicStructured({
+      systemPrompt: "You respond only with the exact JSON requested.",
+      userMessage: HEALTH_CHECK_PROMPT,
+      schema: HealthPingSchema,
+      maxTokens: 64,
+      modelId,
+    });
+    return { ok: result.ok, error: result.error, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+  },
   GOOGLE: async (modelId) => {
     const result = await generateGoogleStructured({
       systemPrompt: "You respond only with the exact JSON requested.",
@@ -62,8 +74,75 @@ const HEALTH_CHECK_DISPATCH: Partial<
     });
     return { ok: result.ok, error: result.error, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
   },
+  OPENROUTER: async (modelId) => {
+    const result = await generateOpenRouterStructured({
+      systemPrompt: "You respond only with the exact JSON requested.",
+      userMessage: HEALTH_CHECK_PROMPT,
+      schema: HealthPingSchema,
+      modelId,
+    });
+    return { ok: result.ok, error: result.error, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+  },
+  OPENAI: async (modelId) => {
+    const result = await generateOpenAIStructured({
+      systemPrompt: "You respond only with the exact JSON requested.",
+      userMessage: HEALTH_CHECK_PROMPT,
+      schema: HealthPingSchema,
+      modelId,
+    });
+    return { ok: result.ok, error: result.error, inputTokens: result.inputTokens, outputTokens: result.outputTokens };
+  },
 };
 
+/**
+ * Tests ONE exact (provider, modelId) pair — the model actually selected
+ * for a task, not a stand-in "lightest model for this provider." Image-
+ * generation models (gpt-image-2) never run the real (billable) generation
+ * endpoint here — see isOpenAIModelAvailable — so this check never spends
+ * money on its own.
+ */
+export async function checkModelHealth(provider: AIProviderId, modelId: string): Promise<HealthCheckResult> {
+  if (!isProviderConfigured(provider)) {
+    return {
+      provider,
+      status: "NOT_CONFIGURED",
+      modelId,
+      latencyMs: null,
+      inputTokens: null,
+      outputTokens: null,
+      error: null,
+    };
+  }
+
+  const started = Date.now();
+  const model = getModel(provider, modelId);
+
+  if (model?.supportsImageGeneration) {
+    const { ok, error } = await isOpenAIModelAvailable(modelId);
+    return {
+      provider,
+      status: ok ? "SUCCESS" : "FAILED",
+      modelId,
+      latencyMs: Date.now() - started,
+      inputTokens: null,
+      outputTokens: null,
+      error: ok ? null : error,
+    };
+  }
+
+  const { ok, error, inputTokens, outputTokens } = await HEALTH_CHECK_DISPATCH[provider](modelId);
+  return {
+    provider,
+    status: ok ? "SUCCESS" : "FAILED",
+    modelId,
+    latencyMs: Date.now() - started,
+    inputTokens,
+    outputTokens,
+    error: ok ? null : error,
+  };
+}
+
+/** Provider-level check (供应商连接状态 section) — picks a representative model on the caller's behalf. */
 export async function checkProviderHealth(provider: AIProviderId): Promise<HealthCheckResult> {
   if (!isProviderConfigured(provider)) {
     return {
@@ -78,8 +157,7 @@ export async function checkProviderHealth(provider: AIProviderId): Promise<Healt
   }
 
   const modelId = pickHealthCheckModel(provider);
-  const dispatch = HEALTH_CHECK_DISPATCH[provider];
-  if (!modelId || !dispatch) {
+  if (!modelId) {
     return {
       provider,
       status: "FAILED",
@@ -91,17 +169,5 @@ export async function checkProviderHealth(provider: AIProviderId): Promise<Healt
     };
   }
 
-  const started = Date.now();
-  const { ok, error, inputTokens, outputTokens } = await dispatch(modelId);
-  const latencyMs = Date.now() - started;
-
-  return {
-    provider,
-    status: ok ? "SUCCESS" : "FAILED",
-    modelId,
-    latencyMs,
-    inputTokens,
-    outputTokens,
-    error: ok ? null : error,
-  };
+  return checkModelHealth(provider, modelId);
 }

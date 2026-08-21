@@ -1,39 +1,42 @@
 import Link from "next/link";
 import { getAllPublishPerformance } from "@/lib/analytics";
 import { getAllTopics, isDemoMode } from "@/lib/topics";
+import { getCurrentUser } from "@/lib/auth";
 import { getEmployeeNames } from "@/lib/employee-names";
-import { resolveEmployeeDisplayName } from "@/lib/boss-language";
+import { getEmployee, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { computePillarPerformance } from "@/lib/performance-analytics";
 import { CONTENT_PILLAR_LABEL, CONTENT_PLATFORM_LABEL } from "@/lib/status";
+import { getTaskModelOptions } from "@/lib/ai/task-model-options";
+import { EmployeeHeader } from "@/components/employee-header";
 import { UploadPerformanceForm } from "@/components/upload-performance-form";
 import type { ContentPillar, ContentPlatform } from "@/lib/types";
 
 export default async function AnalystPage() {
-  const [demo, allTopics, performance, employeeNames] = await Promise.all([
+  const [demo, allTopics, performance, employeeNames, user] = await Promise.all([
     isDemoMode(),
     getAllTopics(),
     getAllPublishPerformance(),
     getEmployeeNames(),
+    getCurrentUser(),
   ]);
 
   const publishedTopics = allTopics.filter((t) => t.status === "PUBLISHED");
   const topicsById = new Map(allTopics.map((t) => [t.id, t]));
   const pillarPerformance = computePillarPerformance(performance, topicsById);
+  const employee = getEmployee("analyst");
   const employeeName = resolveEmployeeDisplayName("analyst", employeeNames);
+
+  const isAdmin = !demo && user?.role === "ADMIN";
+  const modelOptions = isAdmin ? await getTaskModelOptions("PERFORMANCE_ANALYSIS") : null;
 
   return (
     <div className="flex flex-col gap-8">
-      <div>
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-sm font-semibold">
-            E
-          </span>
-          <h1 className="text-lg font-semibold">{employeeName}</h1>
-        </div>
-        <p className="mt-2 text-sm text-[var(--muted)]">
-          发布之后，把数据截图传给我，我帮你读数字、算平均，告诉你哪类选题表现更好。
-        </p>
-      </div>
+      <EmployeeHeader
+        avatarId="analyst"
+        letter={employee.letter}
+        name={employeeName}
+        subtitle="发布之后，把数据截图传给我，我帮你读数字、算平均，告诉你哪类选题表现更好。"
+      />
 
       {demo && (
         <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
@@ -44,7 +47,7 @@ export default async function AnalystPage() {
       {!demo && (
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-medium text-[var(--muted)]">上传发布数据截图</h2>
-          <UploadPerformanceForm publishedTopics={publishedTopics} />
+          <UploadPerformanceForm publishedTopics={publishedTopics} modelOptions={modelOptions} />
         </section>
       )}
 

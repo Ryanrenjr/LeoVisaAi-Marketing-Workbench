@@ -19,6 +19,7 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     supportsStructuredOutput: true,
     supportsToolUse: true,
     supportsVision: true,
+    supportsImageGeneration: false,
     supportsReasoning: true,
     enabled: true,
     // Not the automatic development default — retained for manual use.
@@ -49,6 +50,7 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     supportsStructuredOutput: true,
     supportsToolUse: true,
     supportsVision: true,
+    supportsImageGeneration: false,
     supportsReasoning: true,
     enabled: true,
     developmentRecommended: true,
@@ -66,6 +68,7 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     supportsStructuredOutput: true,
     supportsToolUse: true,
     supportsVision: true,
+    supportsImageGeneration: false,
     supportsReasoning: false,
     enabled: true,
     developmentRecommended: true,
@@ -91,6 +94,7 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     supportsStructuredOutput: true,
     supportsToolUse: true,
     supportsVision: false,
+    supportsImageGeneration: false,
     supportsReasoning: true,
     enabled: true,
     developmentRecommended: true,
@@ -108,6 +112,7 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     supportsStructuredOutput: true,
     supportsToolUse: true,
     supportsVision: false,
+    supportsImageGeneration: false,
     supportsReasoning: true,
     enabled: true,
     developmentRecommended: true,
@@ -130,6 +135,7 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     supportsStructuredOutput: true,
     supportsToolUse: false,
     supportsVision: false,
+    supportsImageGeneration: false,
     supportsReasoning: false,
     enabled: true,
     developmentRecommended: false,
@@ -147,6 +153,7 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     supportsStructuredOutput: true,
     supportsToolUse: false,
     supportsVision: false,
+    supportsImageGeneration: false,
     supportsReasoning: false,
     enabled: true,
     developmentRecommended: false,
@@ -154,6 +161,81 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     freeTierNote: "OpenRouter 免费模型（:free），有较严格的速率限制，供应商可用性会变化。",
     pricingNote: "免费额度用尽或该免费模型下线时会调用失败，不会自动切换为付费模型。",
     lastVerifiedAt: "2026-08-20",
+  },
+
+  // --- OpenAI ----------------------------------------------------------------
+  // Real calls via raw HTTP (Chat Completions, JSON mode) — no native
+  // web-search or vision path wired yet, so these never satisfy RESEARCH or
+  // PERFORMANCE_ANALYSIS. OpenAI has no free tier, so both entries are PAID
+  // and NOT developmentRecommended — Development Mode's free-first routing
+  // will never auto-select them; an ADMIN must explicitly set one as the
+  // default in /admin/ai-models. gpt-5-mini confirmed working end-to-end
+  // via a real chat completions call (JSON mode) on 2026-08-21; gpt-5
+  // confirmed present in this account's /v1/models listing the same day
+  // but not separately smoke-tested.
+  {
+    provider: "OPENAI",
+    modelId: "gpt-5-mini",
+    displayName: "GPT-5 mini (OpenAI)",
+    pricingType: "PAID",
+    supportsWebSearch: false,
+    supportsStructuredOutput: true,
+    supportsToolUse: true,
+    supportsVision: false,
+    supportsImageGeneration: false,
+    supportsReasoning: true,
+    enabled: true,
+    developmentRecommended: false,
+    dataPolicyNote: "通过 OpenAI API 直接调用；按 OpenAI API 数据使用政策，API 数据默认不用于训练模型。",
+    freeTierNote: null,
+    pricingNote: "按输入/输出 token 计费，需要在你的 OpenAI 账户绑定付款方式并保有余额，价格以 OpenAI 官方定价为准。",
+    lastVerifiedAt: "2026-08-21",
+  },
+  {
+    provider: "OPENAI",
+    modelId: "gpt-5",
+    displayName: "GPT-5 (OpenAI)",
+    pricingType: "PAID",
+    supportsWebSearch: false,
+    supportsStructuredOutput: true,
+    supportsToolUse: true,
+    supportsVision: false,
+    supportsImageGeneration: false,
+    supportsReasoning: true,
+    enabled: true,
+    developmentRecommended: false,
+    dataPolicyNote: "通过 OpenAI API 直接调用；按 OpenAI API 数据使用政策，API 数据默认不用于训练模型。",
+    freeTierNote: null,
+    pricingNote: "按输入/输出 token 计费，比 mini 版更贵，需要在你的 OpenAI 账户绑定付款方式并保有余额，价格以 OpenAI 官方定价为准。",
+    lastVerifiedAt: "2026-08-21",
+  },
+  // Image generation (Images API, not Chat Completions) — the ONLY entry
+  // with supportsImageGeneration: true. Deliberately supportsStructuredOutput:
+  // false: it is a different endpoint shape entirely and must never be
+  // selected for a text task. See openai-provider.ts generateOpenAIImage.
+  // gpt-image-1 (the original release) was superseded by gpt-image-1.5 /
+  // gpt-image-2 in this account's /v1/models listing by 2026-08-21 — this
+  // registers gpt-image-2 (dated 2026-04-21, the newest non-preview entry)
+  // and confirmed working end-to-end via a real /v1/images/generations
+  // call the same day. Re-verify against platform.openai.com/docs/models
+  // if OpenAI ships a newer generation later.
+  {
+    provider: "OPENAI",
+    modelId: "gpt-image-2",
+    displayName: "GPT Image 2 (OpenAI)",
+    pricingType: "PAID",
+    supportsWebSearch: false,
+    supportsStructuredOutput: false,
+    supportsToolUse: false,
+    supportsVision: false,
+    supportsImageGeneration: true,
+    supportsReasoning: false,
+    enabled: true,
+    developmentRecommended: false,
+    dataPolicyNote: "通过 OpenAI API 直接调用；按 OpenAI API 数据使用政策，API 数据默认不用于训练模型。",
+    freeTierNote: null,
+    pricingNote: "按生成图片的尺寸/质量计费，需要在你的 OpenAI 账户绑定付款方式并保有余额，价格以 OpenAI 官方定价为准。",
+    lastVerifiedAt: "2026-08-21",
   },
 ] as const;
 
@@ -175,6 +257,7 @@ export function isModelSuitableForTask(model: ModelRegistryEntry, taskType: Task
   if (!model.enabled) return false;
   if (taskType === "RESEARCH") return model.supportsWebSearch;
   if (taskType === "PERFORMANCE_ANALYSIS") return model.supportsVision && model.supportsStructuredOutput;
+  if (taskType === "IMAGE_GENERATION") return model.supportsImageGeneration;
   return model.supportsStructuredOutput;
 }
 
@@ -187,6 +270,7 @@ const PROVIDER_ENV_VAR: Record<AIProviderId, string> = {
   GOOGLE: "GOOGLE_AI_API_KEY",
   GROQ: "GROQ_API_KEY",
   OPENROUTER: "OPENROUTER_API_KEY",
+  OPENAI: "OPENAI_API_KEY",
 };
 
 export function isProviderConfigured(provider: AIProviderId): boolean {

@@ -11,17 +11,21 @@ export function canArchiveTopic(role: UserRole): boolean {
 }
 
 /**
- * Running/editing/re-running research is ADMIN-only. Approving that
- * research is EXPERT-only (see canApproveResearch) — this is a two-person
- * integrity control, not a privilege hierarchy: an ADMIN cannot approve
- * their own research run.
+ * Running/editing/re-running research is ADMIN-only.
  */
 export function canRunResearch(role: UserRole): boolean {
   return role === "ADMIN";
 }
 
+/**
+ * Approving research was originally EXPERT-only — a two-person integrity
+ * control so the ADMIN who ran the research couldn't approve their own
+ * run. Live user instruction: this app has a single ADMIN operator in
+ * practice, so ADMIN gains approval rights too, ADDITIVELY — EXPERT keeps
+ * it unchanged for whenever a second reviewer exists.
+ */
 export function canApproveResearch(role: UserRole): boolean {
-  return role === "EXPERT";
+  return role === "ADMIN" || role === "EXPERT";
 }
 
 /**

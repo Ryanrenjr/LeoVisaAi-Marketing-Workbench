@@ -8,6 +8,7 @@ import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
 import type { ContentPlatform } from "@/lib/types";
+import type { AIProviderId } from "@/lib/ai/providers/types";
 
 export interface UploadPerformanceState {
   error: string | null;
@@ -37,6 +38,9 @@ export async function uploadPerformanceScreenshot(
   const topicId = String(formData.get("topicId") ?? "");
   const platform = String(formData.get("platform") ?? "") as ContentPlatform;
   const file = formData.get("screenshot");
+  const modelKey = formData.get("modelKey");
+  const [modelProvider, modelId] = typeof modelKey === "string" ? modelKey.split("::") : [];
+  const override = modelProvider && modelId ? { provider: modelProvider as AIProviderId, modelId } : null;
 
   if (!topicId) return { error: "请选择对应的选题。" };
   if (!platform) return { error: "请选择平台。" };
@@ -58,7 +62,7 @@ export async function uploadPerformanceScreenshot(
     .upload(path, bytes, { contentType: mimeType });
   if (uploadError) return { error: "截图上传失败，请重试。" };
 
-  const result = await runPerformanceAnalysisTask({ base64, mimeType }, platform);
+  const result = await runPerformanceAnalysisTask({ base64, mimeType }, platform, override);
 
   if (isRouterResolutionFailure(result)) {
     return { error: `截图已保存，但读取数字失败：${result.error}` };

@@ -106,7 +106,10 @@ export async function updateEmployeeName(formData: FormData) {
   revalidatePath("/");
   revalidatePath("/team/planner");
   revalidatePath("/team/researcher");
-  revalidatePath("/team/editor");
+  revalidatePath("/team/video-editor");
+  revalidatePath("/team/xiaohongshu-editor");
+  revalidatePath("/team/image-designer");
+  revalidatePath("/team/wechat-editor");
   revalidatePath("/team/compliance");
   revalidatePath("/team/analyst");
 }

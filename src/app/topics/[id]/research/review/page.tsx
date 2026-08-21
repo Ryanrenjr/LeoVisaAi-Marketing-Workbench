@@ -10,10 +10,12 @@ import { approveResearch, requestResearchChanges } from "../../../research-actio
 
 /**
  * The dedicated, single-purpose approval screen — deliberately separate
- * from the full Topic Detail page. No tabs, no score, no edit controls:
- * just what's needed to decide 批准/请求修改. Reuses ResearchPackView and
- * the existing research-actions.ts unchanged — this is a presentation-only
- * addition, same principle as Boss Mode. See docs/digital-employee-ux.md.
+ * from the full Topic Detail page. No tabs, no edit controls: just what's
+ * needed to decide 批准/请求修改, plus the topic score (surfaced via
+ * ResearchPackView's `topic` prop) since that's directly relevant to the
+ * decision. Reuses ResearchPackView and the existing research-actions.ts
+ * unchanged — this is a presentation-only addition, same principle as
+ * Boss Mode. See docs/digital-employee-ux.md.
  */
 export default async function ReviewResearchPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -49,7 +51,7 @@ export default async function ReviewResearchPage({ params }: { params: Promise<{
         </p>
       )}
 
-      <ResearchPackView pack={researchPack} sources={sources} />
+      <ResearchPackView pack={researchPack} sources={sources} topic={topic} />
 
       {canDecide ? (
         <div className="flex flex-col gap-3 rounded-md border border-[var(--border)] px-4 py-4">

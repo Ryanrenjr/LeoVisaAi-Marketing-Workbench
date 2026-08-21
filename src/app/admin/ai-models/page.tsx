@@ -10,8 +10,7 @@ import { DIGITAL_EMPLOYEES, resolveEmployeeDisplayName } from "@/lib/boss-langua
 import { getEmployeeNames } from "@/lib/employee-names";
 import { ProviderHealthCheck } from "@/components/ai/provider-health-check";
 import { SearchProviderHealthCheck } from "@/components/ai/search-provider-health-check";
-import { AutoSubmitSelect } from "@/components/auto-submit-select";
-import { setTaskModelDefault } from "../actions";
+import { TaskModelPicker } from "@/components/ai/task-model-picker";
 
 export default async function AiModelsPage() {
   const demo = await isDemoMode();
@@ -105,9 +104,7 @@ export default async function AiModelsPage() {
                     : `未配置（设置 .env.local 中的 ${providerEnvVarName(provider)}）`}
                 </span>
               </div>
-              {!demo && (provider === "GOOGLE" || provider === "GROQ") && (
-                <ProviderHealthCheck provider={provider} />
-              )}
+              {!demo && <ProviderHealthCheck provider={provider} />}
             </li>
           ))}
         </ul>
@@ -148,10 +145,8 @@ export default async function AiModelsPage() {
                       ) : (
                         <>
                           <p className="text-xs text-[var(--muted)]">一选就生效，不用再点保存。</p>
-                          <AutoSubmitSelect
-                            action={setTaskModelDefault}
-                            hiddenFields={{ taskType }}
-                            name="modelChoice"
+                          <TaskModelPicker
+                            taskType={taskType}
                             defaultValue={currentValue}
                             options={[
                               { value: "", label: "使用开发模式免费优先（未单独配置）" },

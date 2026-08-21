@@ -10,6 +10,7 @@ import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
 import type { TopicCandidate } from "@/lib/ai/topic-discovery";
 import type { TopicInput } from "@/lib/types";
+import type { ModelRef } from "@/lib/ai/providers/types";
 
 export interface DiscoverTopicsResult {
   candidates: TopicCandidate[];
@@ -19,12 +20,17 @@ export interface DiscoverTopicsResult {
 /**
  * Employee A actively searches today's real UK immigration news and
  * proposes candidate topics — nothing is written to the topics table
- * here. See src/lib/ai/topic-discovery.ts and addDiscoveredTopic below.
+ * here. `keyword` is Leo's own typed-in direction; when empty this falls
+ * back to the generic "what changed this month" sweep. See
+ * src/lib/ai/topic-discovery.ts and addDiscoveredTopic below.
  */
-export async function discoverTopics(): Promise<DiscoverTopicsResult> {
+export async function discoverTopics(
+  keyword?: string,
+  override?: ModelRef | null,
+): Promise<DiscoverTopicsResult> {
   await requireUser();
 
-  const result = await runTopicDiscoveryTask();
+  const result = await runTopicDiscoveryTask(keyword, override);
   const supabase = await createClient();
 
   if (isRouterResolutionFailure(result)) {
@@ -55,10 +61,14 @@ export async function discoverTopics(): Promise<DiscoverTopicsResult> {
 }
 
 /**
- * Adds one reviewed candidate to the topic library — goes through the
- * exact same insert shape as manual topic creation (src/app/topics/actions.ts
- * createTopic), just without the redirect, so the planner page can add
- * several candidates in a row without losing the rest of the list.
+ * Adds one reviewed candidate to the topic library AND immediately queues
+ * it for research (IDEA → RESEARCHING, same free status flip
+ * src/app/topics/actions.ts startResearch does — no AI call, no cost) so
+ * it shows up in 政策研究员's "研究中" queue right away instead of sitting
+ * inert until someone finds it and clicks "开始研究" separately. Live user
+ * instruction: "打对勾之后就可以进入政策研究员了" — approving is the only
+ * step; actually running the (paid) research is still a deliberate,
+ * separate click on the researcher's queue.
  */
 export async function addDiscoveredTopic(candidate: TopicCandidate): Promise<{ ok: boolean }> {
   const user = await requireUser();
@@ -78,7 +88,7 @@ export async function addDiscoveredTopic(candidate: TopicCandidate): Promise<{ o
     .from("topics")
     .insert({
       ...input,
-      status: "IDEA",
+      status: "RESEARCHING",
       created_by: user.id,
       topic_score: total,
       score_breakdown: breakdown,
@@ -88,13 +98,26 @@ export async function addDiscoveredTopic(candidate: TopicCandidate): Promise<{ o
 
   if (error || !data) return { ok: false };
 
+  await supabase.from("topic_status_events").insert({
+    topic_id: data.id,
+    from_status: "IDEA",
+    to_status: "RESEARCHING",
+    approved_by: user.id,
+  });
+
   await supabase.from("topic_activity_log").insert({
     topic_id: data.id,
     activity_type: "topic_created",
     actor_id: user.id,
   });
+  await supabase.from("topic_activity_log").insert({
+    topic_id: data.id,
+    activity_type: "research_requested",
+    actor_id: user.id,
+  });
 
   revalidatePath("/topics");
   revalidatePath("/team/planner");
+  revalidatePath("/team/researcher");
   return { ok: true };
 }

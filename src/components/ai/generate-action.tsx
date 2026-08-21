@@ -1,9 +1,20 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useActionState, useState, useTransition } from "react";
 import { Button } from "../ui/button";
+import { ThinkingRow } from "./thinking-row";
+import { runModelHealthCheck } from "@/app/admin/ai-models/health-actions";
+import { getEmployee } from "@/lib/boss-language";
+import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import type { AIProviderId, PricingType, TaskType } from "@/lib/ai/providers/types";
 import { PRICING_LABEL } from "@/lib/ai/providers/types";
+import type { HealthCheckResult } from "@/lib/ai/provider-health";
+
+const STATUS_LABEL: Record<HealthCheckResult["status"], string> = {
+  NOT_CONFIGURED: "未配置",
+  SUCCESS: "成功",
+  FAILED: "失败",
+};
 
 /**
  * The one place PAID/MIXED warning UX (spec section 7) and the task-level
@@ -25,6 +36,7 @@ export interface GenerateActionProps {
   label: string;
   taskType: TaskType;
   variant?: "primary" | "secondary";
+  className?: string;
   models: OverridableModel[];
   defaultModel: OverridableModel | null;
   resolutionError: string | null;
@@ -37,15 +49,22 @@ function modelKey(m: Pick<OverridableModel, "provider" | "modelId">) {
 export function GenerateAction({
   action,
   label,
+  taskType,
   variant = "primary",
+  className = "",
   models,
   defaultModel,
   resolutionError,
 }: GenerateActionProps) {
+  const employee = getEmployee(TASK_TYPE_EMPLOYEE[taskType]);
   const [showPicker, setShowPicker] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string>("");
   const [confirming, setConfirming] = useState(false);
   const [pending, startTransition] = useTransition();
+  const [testResult, testAction, testPending] = useActionState<HealthCheckResult | null, FormData>(
+    runModelHealthCheck,
+    null,
+  );
 
   const selected = selectedKey ? (models.find((m) => modelKey(m) === selectedKey) ?? null) : null;
   const effective = selected ?? defaultModel;
@@ -88,7 +107,28 @@ export function GenerateAction({
             更换本次模型
           </button>
         )}
+        {effective && (
+          <form action={testAction} className="contents">
+            <input type="hidden" name="provider" value={effective.provider} />
+            <input type="hidden" name="modelId" value={effective.modelId} />
+            <button
+              type="submit"
+              disabled={testPending}
+              className="cursor-pointer underline-offset-2 hover:underline disabled:opacity-50"
+            >
+              {testPending ? "测试中…" : "测试这个模型"}
+            </button>
+          </form>
+        )}
       </div>
+
+      {testResult && (
+        <p className="text-xs text-[var(--muted)]">
+          测试结果：{STATUS_LABEL[testResult.status]}
+          {testResult.latencyMs !== null && ` · ${testResult.latencyMs}ms`}
+          {testResult.error && ` · ${testResult.error}`}
+        </p>
+      )}
 
       {showPicker && (
         <select
@@ -106,7 +146,9 @@ export function GenerateAction({
         </select>
       )}
 
-      {confirming && effective && (
+      {pending ? (
+        <ThinkingRow avatarId={employee.id} name={employee.name} />
+      ) : confirming && effective ? (
         <div className="flex flex-col gap-2 rounded-md border border-amber-600/40 bg-amber-600/10 px-3 py-2 text-sm">
           <p>此任务将调用可能产生费用的 AI 模型。</p>
           <p className="text-xs text-[var(--muted)]">
@@ -116,17 +158,15 @@ export function GenerateAction({
             <Button type="button" variant="secondary" onClick={() => setConfirming(false)}>
               取消
             </Button>
-            <Button type="button" onClick={run} disabled={pending}>
+            <Button type="button" onClick={run}>
               继续运行
             </Button>
           </div>
         </div>
-      )}
-
-      {!confirming && (
+      ) : (
         <div>
-          <Button type="button" variant={variant} disabled={!effective || pending} onClick={handleSubmit}>
-            {pending ? "处理中…" : label}
+          <Button type="button" variant={variant} className={className} disabled={!effective} onClick={handleSubmit}>
+            {label}
           </Button>
         </div>
       )}

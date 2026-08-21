@@ -8,11 +8,27 @@ html {
 }
 
 :root {
+  /* Without this, native controls (the <select> dropdown popup,
+     scrollbars, checkboxes) always render light-mode chrome regardless of
+     this page's own dark-mode CSS variables below — the exact bug behind
+     "灰字配白底看不清" in the AI-model <select> dropdown. `light dark`
+     lets the browser pick to match prefers-color-scheme, same signal the
+     media query below already reacts to. */
+  color-scheme: light dark;
   --background: #ffffff;
   --foreground: #171717;
   --muted: #6b7280;
-  --border: #e5e7eb;
+  /* Low-alpha instead of a flat gray — hairline, barely-there dividers
+     (Mobbin reference: measured ~7-10% black borders, not solid #e5e7eb). */
+  --border: rgba(23, 23, 23, 0.08);
   --accent: #16532d;
+  --accent-foreground: #ffffff;
+  /* Two-tier radius scale (Mobbin reference: cards 16-24px, controls
+     ~12px, buttons/tags fully pill via Tailwind's rounded-full/999px). */
+  --radius-card: 20px;
+  --radius-control: 12px;
+  --shadow-card: 0 1px 2px rgba(23, 23, 23, 0.04), 0 8px 24px rgba(23, 23, 23, 0.05);
+  --shadow-card-hover: 0 2px 4px rgba(23, 23, 23, 0.05), 0 12px 32px rgba(23, 23, 23, 0.08);
 }
 
 @theme inline {
@@ -21,6 +37,9 @@ html {
   --color-muted: var(--muted);
   --color-border: var(--border);
   --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -28,8 +47,11 @@ html {
     --background: #0a0a0a;
     --foreground: #ededed;
     --muted: #9ca3af;
-    --border: #262626;
+    --border: rgba(237, 237, 237, 0.1);
     --accent: #4ade80;
+    --accent-foreground: #062910;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px rgba(0, 0, 0, 0.35);
+    --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.25), 0 12px 32px rgba(0, 0, 0, 0.45);
   }
 }
 
@@ -37,7 +59,48 @@ body {
   background: var(--background);
   color: var(--foreground);
   line-height: 1.6;
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* `color-scheme` alone doesn't reliably theme the native <select> popup in
+   every embedded browser context (confirmed still unreadable — light gray
+   text on a white popup — inside this VS Code webview even with
+   color-scheme set). Explicit background/color on select + option is
+   respected by Chromium for the popup list itself, not just the closed
+   box, so this is the actual fix. */
+select,
+select option {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+/* A gentle "breathing" pulse on an employee's avatar while their AI task
+   is running — see ThinkingRow in generate-action.tsx. */
+@keyframes thinking-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(0.92);
+  }
+}
+.thinking-avatar {
+  animation: thinking-pulse 1.4s ease-in-out infinite;
+}
+
+/* Shared card treatment — generous rounding + a hairline border + a soft
+   shadow that lifts slightly on hover, applied wherever a section/panel/row
+   opts in via className="card". See docs/design-system.md. */
+.card {
+  border-radius: var(--radius-card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+a.card:hover,
+button.card:hover {
+  box-shadow: var(--shadow-card-hover);
 }

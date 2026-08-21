@@ -36,9 +36,9 @@ Defined in `src/lib/ai/providers/types.ts`:
 | `COMPLIANCE` | D 合规审核员 | structured output — live; re-checks generated content against its own Research Pack (`src/lib/ai/compliance-schemas.ts`), advisory only |
 | `PERFORMANCE_ANALYSIS` | E 数据分析员 | structured output + **vision** (reads a screenshot — hard requirement, see `supportsVision` in the registry) |
 
-## Providers (Phase 1: exactly four)
+## Providers
 
-`ANTHROPIC`, `GOOGLE`, `GROQ`, `OPENROUTER` — `src/lib/ai/providers/`:
+`ANTHROPIC`, `GOOGLE`, `GROQ`, `OPENROUTER`, `OPENAI` — `src/lib/ai/providers/`:
 
 - `anthropic-provider.ts` — a thin **adapter**, not a reimplementation.
   Delegates straight to the existing, untouched `research-agent.ts` /
@@ -55,6 +55,12 @@ Defined in `src/lib/ai/providers/types.ts`:
 - `openrouter-provider.ts` — real calls via raw HTTP (no dedicated
   OpenRouter SDK exists). Experimental / A-B testing surface. No
   registered OpenRouter model claims web-search capability.
+- `openai-provider.ts` — real calls via raw HTTP (Chat Completions, JSON
+  mode), same shape as `openrouter-provider.ts`. Uses the user's own
+  OpenAI account/billing — no free tier, so both registered models are
+  `PAID` and not `developmentRecommended`; an ADMIN must explicitly set
+  one as the default for a task. No web-search or vision path wired yet,
+  so it never satisfies RESEARCH or PERFORMANCE_ANALYSIS.
 
 The rest of the application **never** imports a provider SDK or calls
 these files directly — only `router.ts` does.

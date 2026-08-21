@@ -16,7 +16,13 @@ import type { SearchProviderId } from "../search/types";
 type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 
 export interface UsageLogInput {
-  workflow_type: "research" | "content" | "compliance" | "topic_discovery" | "performance_analysis";
+  workflow_type:
+    | "research"
+    | "content"
+    | "compliance"
+    | "topic_discovery"
+    | "performance_analysis"
+    | "image_generation";
   model_alias: string;
   /** Null for tasks not tied to one topic yet — e.g. topic discovery, which proposes candidates before any topic row exists. */
   topic_id: string | null;
@@ -54,7 +60,8 @@ export async function writeUsageLog(
 export interface SearchUsageLogInput {
   provider: SearchProviderId;
   digital_employee: EmployeeId;
-  task_type: TaskType;
+  /** "IMAGE_SEARCH" isn't a Model Router TaskType — it never calls an AI model, only the Search Router. */
+  task_type: TaskType | "IMAGE_SEARCH";
   topic_id: string;
   query_count: number;
   result_count: number;

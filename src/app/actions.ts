@@ -34,4 +34,5 @@ export async function advanceTopicStatus(topicId: string, fromStatus: TopicStatu
   revalidatePath("/research-completed");
   revalidatePath("/ready-to-shoot");
   revalidatePath("/published");
+  revalidatePath(`/topics/${topicId}`);
 }

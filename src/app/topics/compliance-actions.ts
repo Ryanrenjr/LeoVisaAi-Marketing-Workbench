@@ -11,6 +11,7 @@ import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
 import { CONTENT_PLATFORM_LABEL } from "@/lib/status";
 import type { ContentPlatform } from "@/lib/types";
+import type { ModelRef } from "@/lib/ai/providers/types";
 
 /**
  * Employee D re-checks one content_asset against the research pack it was
@@ -18,7 +19,7 @@ import type { ContentPlatform } from "@/lib/types";
  * Leo to read; never changes topics.status or content_assets.status on
  * its own. See docs/security-boundaries.md "AI usage".
  */
-export async function runComplianceReview(contentAssetId: string): Promise<void> {
+export async function runComplianceReview(contentAssetId: string, override?: ModelRef | null): Promise<void> {
   const user = await requireUser();
   if (!canRunCompliance(user.role)) throw new Error("Forbidden: ADMIN role required");
 
@@ -33,6 +34,7 @@ export async function runComplianceReview(contentAssetId: string): Promise<void>
   const result = await runComplianceTask(
     { platform: platformLabel, textForReview: asset.content },
     researchPack,
+    override,
   );
 
   const supabase = await createClient();

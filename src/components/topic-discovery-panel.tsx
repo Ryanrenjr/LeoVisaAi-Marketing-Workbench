@@ -3,7 +3,11 @@
 import { useState, useTransition } from "react";
 import { addDiscoveredTopic, discoverTopics } from "@/app/team/planner/actions";
 import { Button } from "./ui/button";
+import { GenerateAction, type OverridableModel } from "./ai/generate-action";
+import { ThinkingRow } from "./ai/thinking-row";
+import { getEmployee } from "@/lib/boss-language";
 import type { TopicCandidate } from "@/lib/ai/topic-discovery";
+import type { AIProviderId } from "@/lib/ai/providers/types";
 
 /**
  * A triage list, not a form: 通过 (✓) adds the candidate and it's gone;
@@ -55,35 +59,66 @@ function CandidateRow({
   );
 }
 
-export function TopicDiscoveryPanel() {
+export interface TopicDiscoveryModelOptions {
+  models: OverridableModel[];
+  defaultModel: OverridableModel | null;
+  resolutionError: string | null;
+}
+
+export function TopicDiscoveryPanel({
+  modelOptions,
+}: {
+  modelOptions: TopicDiscoveryModelOptions | null;
+}) {
   const [candidates, setCandidates] = useState<TopicCandidate[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [keyword, setKeyword] = useState("");
   const [isPending, startTransition] = useTransition();
 
   function dismiss(index: number) {
     setCandidates((prev) => (prev ? prev.filter((_, i) => i !== index) : prev));
   }
 
+  async function runDiscovery(override: { provider: AIProviderId; modelId: string } | null) {
+    setError(null);
+    const result = await discoverTopics(keyword.trim() || undefined, override);
+    if (result.error) setError(result.error);
+    setCandidates(result.candidates);
+  }
+
+  const buttonLabel = keyword.trim() ? `搜索「${keyword.trim()}」相关选题` : "搜索当日选题";
+
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="text-sm font-medium text-[var(--muted)]">今日选题搜索</h2>
+      <input
+        type="text"
+        value={keyword}
+        onChange={(e) => setKeyword(e.target.value)}
+        placeholder="可选：输入你想搜的方向，比如「学生签证续签」（留空则搜索当日新闻）"
+        className="w-full rounded-md border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm"
+      />
+
+      {modelOptions ? (
+        <GenerateAction
+          action={runDiscovery}
+          label={buttonLabel}
+          taskType="TOPIC_DISCOVERY"
+          className="w-full py-4 text-base"
+          models={modelOptions.models}
+          defaultModel={modelOptions.defaultModel}
+          resolutionError={modelOptions.resolutionError}
+        />
+      ) : isPending ? (
+        <ThinkingRow avatarId="planner" name={getEmployee("planner").name} />
+      ) : (
         <Button
           type="button"
-          variant="secondary"
-          disabled={isPending}
-          onClick={() => {
-            setError(null);
-            startTransition(async () => {
-              const result = await discoverTopics();
-              if (result.error) setError(result.error);
-              setCandidates(result.candidates);
-            });
-          }}
+          onClick={() => startTransition(() => runDiscovery(null))}
+          className="w-full py-4 text-base"
         >
-          {isPending ? "搜索中…" : "开始搜索选题"}
+          {buttonLabel}
         </Button>
-      </div>
+      )}
 
       {error && (
         <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-red-600">{error}</p>

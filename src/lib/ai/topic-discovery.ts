@@ -38,9 +38,26 @@ export const TopicDiscoveryResultSchema = z.object({
 });
 export type TopicDiscoveryResult = z.infer<typeof TopicDiscoveryResultSchema>;
 
-/** Fixed, deterministic — not LLM-generated — mirrors research-queries.ts buildResearchQueries. */
-export function buildDiscoveryQueries(now: Date = new Date()): string[] {
+/**
+ * Fixed, deterministic — not LLM-generated — mirrors research-queries.ts
+ * buildResearchQueries. `keyword` is Leo's own typed-in direction (e.g.
+ * "学生签证续签") — when given, queries center on it instead of the
+ * generic "whatever changed this month" sweep, so a search can be pointed
+ * at a specific topic on demand rather than only ever finding what's
+ * broadly trending.
+ */
+export function buildDiscoveryQueries(now: Date = new Date(), keyword?: string): string[] {
   const monthYear = now.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  const trimmedKeyword = keyword?.trim();
+
+  if (trimmedKeyword) {
+    return [
+      `${trimmedKeyword} UK immigration news ${monthYear}`,
+      `${trimmedKeyword} Home Office policy ${monthYear}`,
+      `${trimmedKeyword} UK visa rules update`,
+    ];
+  }
+
   return [
     `UK immigration rules changes news ${monthYear}`,
     `Home Office visa policy announcement ${monthYear}`,

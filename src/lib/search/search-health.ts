@@ -2,6 +2,7 @@ import "server-only";
 import { isSearchProviderConfigured } from "./registry";
 import { runBraveSearch } from "./providers/brave-provider";
 import { runTavilySearch } from "./providers/tavily-provider";
+import { runGoogleImageSearch } from "./providers/google-image-search-provider";
 import type { SearchProviderId } from "./types";
 
 /**
@@ -30,6 +31,10 @@ const HEALTH_CHECK_DISPATCH: Record<SearchProviderId, (query: string) => Promise
   },
   BRAVE: async (query) => {
     const result = await runBraveSearch(query, 1);
+    return { success: result.success, error: result.error, resultCount: result.results.length, latencyMs: result.latencyMs };
+  },
+  GOOGLE_IMAGES: async (query) => {
+    const result = await runGoogleImageSearch(query, 1);
     return { success: result.success, error: result.error, resultCount: result.results.length, latencyMs: result.latencyMs };
   },
 };

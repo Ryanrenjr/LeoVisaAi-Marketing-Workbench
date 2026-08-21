@@ -2,8 +2,15 @@ import { groupContentAssetsByLineage } from "./content-versions";
 import { canGenerateContent } from "./permissions";
 import { BOSS_CONFIDENCE_LABEL, resolveEmployeeDisplayName } from "./boss-language";
 import type { EmployeeId } from "./boss-language";
-import type { ComplianceReviewRow, ContentAsset, ResearchConfidence, Topic } from "./types";
+import type { ComplianceReviewRow, ContentAsset, ContentPlatform, ResearchConfidence, Topic } from "./types";
 import type { EvidenceNote } from "./ai/content-schemas";
+
+/** Which content-editor employee owns a review item generated from a given platform's draft. */
+const PLATFORM_EMPLOYEE: Record<ContentPlatform, "video-editor" | "xiaohongshu-editor" | "wechat-editor"> = {
+  VIDEO_CHANNEL: "video-editor",
+  XIAOHONGSHU: "xiaohongshu-editor",
+  WECHAT_OFFICIAL_ACCOUNT: "wechat-editor",
+};
 
 /**
  * Pure aggregation of existing Topic/ResearchPack/ContentAsset data into
@@ -44,17 +51,22 @@ export interface EditorSummary {
 /**
  * `contentEligibleTopics` = topics at RESEARCH_APPROVED or later
  * (canGenerateContent). `contentAssetsByTopicId` need only contain
- * entries for topics that actually have at least one asset.
+ * entries for topics that actually have at least one asset. `platform`
+ * scopes the count to one platform-specific editor — since the "编辑"
+ * employee split into video-editor/xiaohongshu-editor/wechat-editor, a
+ * topic can be "drafts complete" for one platform while still pending for
+ * another.
  */
 export function summarizeEditorTasks(
   contentEligibleTopics: Topic[],
   contentAssetsByTopicId: Map<string, ContentAsset[]>,
+  platform: ContentPlatform,
 ): EditorSummary {
   let pendingGeneration = 0;
   let draftsComplete = 0;
   for (const topic of contentEligibleTopics) {
     const assets = contentAssetsByTopicId.get(topic.id);
-    if (assets && assets.length > 0) draftsComplete++;
+    if (assets?.some((a) => a.platform === platform)) draftsComplete++;
     else pendingGeneration++;
   }
   return { pendingGeneration, draftsComplete };
@@ -73,7 +85,7 @@ function countExpertReviewNotes(asset: ContentAsset): number {
 export interface ReviewItem {
   topicId: string;
   topicTitle: string;
-  employeeId: "researcher" | "editor";
+  employeeId: "researcher" | "video-editor" | "xiaohongshu-editor" | "wechat-editor";
   employeeName: string;
   description: string;
   warning: string | null;
@@ -119,17 +131,29 @@ export function buildLeoReviewQueue(
     const assets = contentAssetsByTopicId.get(topic.id);
     if (!assets || assets.length === 0) continue;
     const lineages = groupContentAssetsByLineage(assets);
-    const noteCount = lineages.reduce((sum, l) => sum + countExpertReviewNotes(l.latest), 0);
-    if (noteCount === 0) continue;
-    items.push({
-      topicId: topic.id,
-      topicTitle: topic.title,
-      employeeId: "editor",
-      employeeName: resolveEmployeeDisplayName("editor", employeeNames),
-      description: `内容草稿有 ${noteCount} 项需要确认`,
-      warning: null,
-      href: `/topics/${topic.id}?tab=video`,
-    });
+
+    // One item per platform that actually has notes — each platform is now
+    // a separate employee, so a combined cross-platform count would
+    // misattribute work to the wrong one.
+    const notesByPlatform = new Map<ContentPlatform, number>();
+    for (const lineage of lineages) {
+      const count = countExpertReviewNotes(lineage.latest);
+      if (count === 0) continue;
+      notesByPlatform.set(lineage.platform, (notesByPlatform.get(lineage.platform) ?? 0) + count);
+    }
+
+    for (const [platform, noteCount] of notesByPlatform) {
+      const employeeId = PLATFORM_EMPLOYEE[platform];
+      items.push({
+        topicId: topic.id,
+        topicTitle: topic.title,
+        employeeId,
+        employeeName: resolveEmployeeDisplayName(employeeId, employeeNames),
+        description: `内容草稿有 ${noteCount} 项需要确认`,
+        warning: null,
+        href: `/topics/${topic.id}?tab=video`,
+      });
+    }
   }
 
   return items;

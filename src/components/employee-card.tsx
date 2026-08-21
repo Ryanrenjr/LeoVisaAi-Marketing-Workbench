@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 export interface EmployeeCardStat {
@@ -6,12 +7,14 @@ export interface EmployeeCardStat {
 }
 
 /**
- * Compact digital-employee card — letter marker, name, one-line
- * responsibility, up to a few status values, one primary action. No
- * illustrations, no colour beyond the existing accent. See
- * docs/digital-employee-ux.md.
+ * Compact digital-employee card — avatar illustration, name, one-line
+ * responsibility, up to a few status values, one primary action. Per-
+ * employee avatar illustrations (public/employees/<id>.png) live by
+ * explicit live user instruction, overriding this milestone's earlier
+ * "no illustrations, no colour" note — see docs/digital-employee-ux.md.
  */
 export function EmployeeCard({
+  avatarId,
   letter,
   name,
   status,
@@ -20,6 +23,7 @@ export function EmployeeCard({
   actionLabel,
   href,
 }: {
+  avatarId: string;
   letter: string;
   name: string;
   status: string;
@@ -29,16 +33,20 @@ export function EmployeeCard({
   href: string;
 }) {
   return (
-    <Link
-      href={href}
-      className="flex flex-col gap-2 rounded-md border border-[var(--border)] px-4 py-3 hover:border-[var(--accent)]"
-    >
+    <Link href={href} className="card flex flex-col gap-3 px-5 py-4 hover:border-[var(--accent)]/40">
       <div className="flex items-center gap-3">
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-sm font-semibold">
-          {letter}
-        </span>
+        <Image
+          src={`/employees/${avatarId}.png`}
+          alt=""
+          width={64}
+          height={64}
+          className="h-16 w-16 shrink-0 rounded-full object-cover"
+        />
         <div className="min-w-0">
-          <p className="font-medium">{name}</p>
+          <p className="font-semibold">
+            <span className="mr-1.5 text-xs text-[var(--muted)]">{letter}</span>
+            {name}
+          </p>
           <p className="text-xs text-[var(--muted)]">{status}</p>
         </div>
       </div>
@@ -50,13 +58,13 @@ export function EmployeeCard({
           {stats.map((s) => (
             <div key={s.label} className="flex items-center justify-between gap-4">
               <dt className="text-[var(--muted)]">{s.label}</dt>
-              <dd className="font-medium">{s.value}</dd>
+              <dd className="font-semibold">{s.value}</dd>
             </div>
           ))}
         </dl>
       )}
 
-      <span className="text-sm text-[var(--accent)]">{actionLabel} →</span>
+      <span className="text-sm font-semibold text-[var(--accent)]">{actionLabel} →</span>
     </Link>
   );
 }

@@ -7,9 +7,9 @@ import type { EmployeeId } from "../../boss-language";
  * See docs/model-router.md for the overall architecture.
  */
 
-export type AIProviderId = "ANTHROPIC" | "GOOGLE" | "GROQ" | "OPENROUTER";
+export type AIProviderId = "ANTHROPIC" | "GOOGLE" | "GROQ" | "OPENROUTER" | "OPENAI";
 
-export const AI_PROVIDER_IDS: readonly AIProviderId[] = ["ANTHROPIC", "GOOGLE", "GROQ", "OPENROUTER"];
+export const AI_PROVIDER_IDS: readonly AIProviderId[] = ["ANTHROPIC", "GOOGLE", "GROQ", "OPENROUTER", "OPENAI"];
 
 /**
  * A digital employee is never tied to one model. A task type is the unit
@@ -22,6 +22,7 @@ export type TaskType =
   | "RESEARCH"
   | "VIDEO_WRITING"
   | "XIAOHONGSHU_WRITING"
+  | "IMAGE_GENERATION"
   | "WECHAT_WRITING"
   | "WECHAT_FULL_ARTICLE"
   | "COMPLIANCE"
@@ -33,6 +34,7 @@ export const TASK_TYPES: readonly TaskType[] = [
   "RESEARCH",
   "VIDEO_WRITING",
   "XIAOHONGSHU_WRITING",
+  "IMAGE_GENERATION",
   "WECHAT_WRITING",
   "WECHAT_FULL_ARTICLE",
   "COMPLIANCE",
@@ -44,10 +46,11 @@ export const TASK_TYPE_EMPLOYEE: Record<TaskType, EmployeeId> = {
   TOPIC_PLANNING: "planner",
   TOPIC_DISCOVERY: "planner",
   RESEARCH: "researcher",
-  VIDEO_WRITING: "editor",
-  XIAOHONGSHU_WRITING: "editor",
-  WECHAT_WRITING: "editor",
-  WECHAT_FULL_ARTICLE: "editor",
+  VIDEO_WRITING: "video-editor",
+  XIAOHONGSHU_WRITING: "xiaohongshu-editor",
+  IMAGE_GENERATION: "image-designer",
+  WECHAT_WRITING: "wechat-editor",
+  WECHAT_FULL_ARTICLE: "wechat-editor",
   COMPLIANCE: "compliance",
   PERFORMANCE_ANALYSIS: "analyst",
 };
@@ -58,6 +61,7 @@ export const TASK_TYPE_LABEL: Record<TaskType, string> = {
   RESEARCH: "联网研究",
   VIDEO_WRITING: "视频号",
   XIAOHONGSHU_WRITING: "小红书",
+  IMAGE_GENERATION: "小红书配图",
   WECHAT_WRITING: "公众号大纲",
   WECHAT_FULL_ARTICLE: "公众号完整文章",
   COMPLIANCE: "合规审核",
@@ -93,6 +97,8 @@ export interface ModelRegistryEntry {
   supportsReasoning: boolean;
   /** Can read an image as input — required for PERFORMANCE_ANALYSIS (screenshot reading). */
   supportsVision: boolean;
+  /** Can generate an image as output — required for IMAGE_GENERATION. Unrelated to supportsVision (reading vs. producing an image). */
+  supportsImageGeneration: boolean;
   enabled: boolean;
   /** Preferred when AI_DEVELOPMENT_MODE is on and no explicit choice has been made. */
   developmentRecommended: boolean;

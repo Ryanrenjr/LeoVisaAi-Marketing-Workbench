@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { getLibraryTopics, isDemoMode } from "@/lib/topics";
+import { getCurrentUser } from "@/lib/auth";
 import { getEmployee, BOSS_STATUS_LABEL, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
+import { getTaskModelOptions } from "@/lib/ai/task-model-options";
 import { Button } from "@/components/ui/button";
+import { EmployeeHeader } from "@/components/employee-header";
 import { TopicDiscoveryPanel } from "@/components/topic-discovery-panel";
 import type { Topic } from "@/lib/types";
 
@@ -30,12 +33,16 @@ function TopicList({ topics, empty }: { topics: Topic[]; empty: string }) {
 
 export default async function PlannerPage() {
   const employee = getEmployee("planner");
-  const [libraryTopics, demo, employeeNames] = await Promise.all([
+  const [libraryTopics, demo, employeeNames, user] = await Promise.all([
     getLibraryTopics(),
     isDemoMode(),
     getEmployeeNames(),
+    getCurrentUser(),
   ]);
   const employeeName = resolveEmployeeDisplayName("planner", employeeNames);
+
+  const isAdmin = !demo && user?.role === "ADMIN";
+  const modelOptions = isAdmin ? await getTaskModelOptions("TOPIC_DISCOVERY") : null;
 
   const highPriority = libraryTopics.filter((t) => t.priority === "HIGH");
   const notStarted = libraryTopics.filter((t) => t.status === "IDEA");
@@ -45,15 +52,7 @@ export default async function PlannerPage() {
 
   return (
     <div className="flex flex-col gap-8">
-      <div>
-        <div className="flex items-center gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-sm font-semibold">
-            {employee.letter}
-          </span>
-          <h1 className="text-lg font-semibold">{employeeName}</h1>
-        </div>
-        <p className="mt-2 text-sm text-[var(--muted)]">今天值得做什么？</p>
-      </div>
+      <EmployeeHeader avatarId="planner" letter={employee.letter} name={employeeName} subtitle="今天值得做什么？" />
 
       {demo && (
         <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
@@ -61,16 +60,16 @@ export default async function PlannerPage() {
         </p>
       )}
 
+      {!demo && <TopicDiscoveryPanel modelOptions={modelOptions} />}
+
       <div className="flex flex-wrap gap-2">
         <Link href="/topics">
-          <Button>查看选题</Button>
+          <Button variant="secondary">查看选题</Button>
         </Link>
         <Link href="/topics/new">
           <Button variant="secondary">新建想法</Button>
         </Link>
       </div>
-
-      {!demo && <TopicDiscoveryPanel />}
 
       <section>
         <h2 className="mb-2 text-sm font-medium text-[var(--muted)]">高优先级选题</h2>

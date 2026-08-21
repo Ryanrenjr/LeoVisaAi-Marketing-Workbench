@@ -230,3 +230,19 @@ export interface PublishPerformanceRow {
   created_by: string | null;
   created_at: string;
 }
+
+export interface ContentImageRow {
+  id: string;
+  topic_id: string;
+  content_asset_id: string | null;
+  prompt: string;
+  image_path: string;
+  model_alias: string | null;
+  provider: string | null;
+  created_by: string | null;
+  created_at: string;
+  /** 'generated' = AI image-designer (Xiaohongshu); 'searched' = real Google image result (video/wechat). */
+  source: "generated" | "searched";
+  search_query: string | null;
+  external_source_url: string | null;
+}

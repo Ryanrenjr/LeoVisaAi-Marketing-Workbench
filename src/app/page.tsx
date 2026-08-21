@@ -13,6 +13,7 @@ import { PIPELINE_STAGES } from "@/lib/status";
 import { timeBasedGreeting, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
 import { getRecentPublishPerformanceCount } from "@/lib/analytics";
+import { getAllContentImages } from "@/lib/content-images";
 import {
   buildComplianceQueue,
   buildLeoReviewQueue,
@@ -21,14 +22,14 @@ import {
   summarizePlannerTasks,
   summarizeResearcherTasks,
 } from "@/lib/employee-tasks";
-import { groupContentAssetsByTopicId } from "@/lib/content-versions";
+import { groupContentAssetsByTopicId, getLatestForLineage } from "@/lib/content-versions";
 import { EmployeeCard } from "@/components/employee-card";
 import { Button } from "@/components/ui/button";
 import type { ComplianceReviewRow } from "@/lib/types";
 
 function DemoNotice() {
   return (
-    <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
+    <p className="card px-4 py-3 text-sm text-[var(--muted)]">
       当前为演示数据（未连接 Supabase）。配置 .env.local 后将显示真实数据。
     </p>
   );
@@ -49,27 +50,17 @@ async function OperationalLinks() {
     <details className="group">
       <summary className="cursor-pointer text-sm font-medium text-[var(--muted)]">运营列表</summary>
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
-        <Link
-          href="/topics"
-          className="rounded-md border border-[var(--border)] px-4 py-3 hover:bg-[var(--border)]/20"
-        >
+        <Link href="/topics" className="card px-4 py-3 hover:border-[var(--accent)]/40">
           <p className="text-sm text-[var(--muted)]">选题库</p>
           <p className="mt-1 text-2xl font-semibold">{libraryCount}</p>
         </Link>
         {PIPELINE_STAGES.map((stage) => (
-          <Link
-            key={stage.status}
-            href={stage.href}
-            className="rounded-md border border-[var(--border)] px-4 py-3 hover:bg-[var(--border)]/20"
-          >
+          <Link key={stage.status} href={stage.href} className="card px-4 py-3 hover:border-[var(--accent)]/40">
             <p className="text-sm text-[var(--muted)]">{stage.label}</p>
             <p className="mt-1 text-2xl font-semibold">{counts[stage.status]}</p>
           </Link>
         ))}
-        <Link
-          href="/content-assets"
-          className="rounded-md border border-[var(--border)] px-4 py-3 hover:bg-[var(--border)]/20"
-        >
+        <Link href="/content-assets" className="card px-4 py-3 hover:border-[var(--accent)]/40">
           <p className="text-sm text-[var(--muted)]">内容资产库</p>
           <p className="mt-1 text-sm text-[var(--muted)]">查看全部版本</p>
         </Link>
@@ -80,15 +71,23 @@ async function OperationalLinks() {
 
 async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) {
   const user = await getCurrentUser();
-  const [libraryTopics, allTopics, allContentAssets, complianceReviews, performanceCount, employeeNames] =
-    await Promise.all([
-      getLibraryTopics(),
-      getAllTopics(),
-      getAllContentAssets(),
-      getAllComplianceReviews(),
-      getRecentPublishPerformanceCount(),
-      getEmployeeNames(),
-    ]);
+  const [
+    libraryTopics,
+    allTopics,
+    allContentAssets,
+    complianceReviews,
+    performanceCount,
+    contentImages,
+    employeeNames,
+  ] = await Promise.all([
+    getLibraryTopics(),
+    getAllTopics(),
+    getAllContentAssets(),
+    getAllComplianceReviews(),
+    getRecentPublishPerformanceCount(),
+    getAllContentImages(),
+    getEmployeeNames(),
+  ]);
 
   const contentAssetsByTopicId = groupContentAssetsByTopicId(allContentAssets);
   const eligibleTopics = filterContentEligibleTopics(allTopics);
@@ -106,11 +105,19 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
 
   const plannerSummary = summarizePlannerTasks(libraryTopics);
   const researcherSummary = summarizeResearcherTasks(libraryTopics);
-  const editorSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId);
+  const videoSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "VIDEO_CHANNEL");
+  const xiaohongshuSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "XIAOHONGSHU");
+  const wechatSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "WECHAT_OFFICIAL_ACCOUNT");
   const reviewQueue = buildLeoReviewQueue(allTopics, contentAssetsByTopicId, new Map(), employeeNames);
   const researchReviewCount = reviewQueue.filter((i) => i.employeeId === "researcher").length;
-  const contentReviewCount = reviewQueue.filter((i) => i.employeeId === "editor").length;
+  const contentReviewCount = reviewQueue.filter((i) => i.employeeId !== "researcher").length;
   const totalPending = researchReviewCount + contentReviewCount;
+
+  const xiaohongshuDraftTopicIds = eligibleTopics
+    .filter((t) => getLatestForLineage(contentAssetsByTopicId.get(t.id) ?? [], "XIAOHONGSHU", "xiaohongshu_post"))
+    .map((t) => t.id);
+  const topicsWithImages = new Set(contentImages.map((img) => img.topic_id));
+  const imagePendingCount = xiaohongshuDraftTopicIds.filter((id) => !topicsWithImages.has(id)).length;
 
   const greeting = timeBasedGreeting(new Date().getHours());
   const name = user?.displayName ?? "老板";
@@ -120,13 +127,13 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
       {demo && <DemoNotice />}
 
       <section>
-        <h1 className="text-lg font-semibold">
+        <h1 className="text-2xl font-semibold tracking-tight">
           {greeting}，{name}。
         </h1>
         <p className="mt-1 text-sm text-[var(--muted)]">你的数字团队正在工作。</p>
 
         {totalPending > 0 ? (
-          <div className="mt-4 flex flex-col gap-3 rounded-md border border-[var(--border)] px-4 py-3">
+          <div className="card mt-4 flex flex-col gap-3 px-5 py-4">
             <div className="text-sm">
               <p>今天需要你处理：</p>
               {researchReviewCount > 0 && <p className="mt-1">{researchReviewCount} 项等待审核</p>}
@@ -147,6 +154,7 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
         <h2 className="text-sm font-medium text-[var(--muted)]">你的数字员工</h2>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <EmployeeCard
+            avatarId="planner"
             letter="A"
             name={resolveEmployeeDisplayName("planner", employeeNames)}
             status={plannerSummary.todayCandidates > 0 ? "工作中" : "空闲"}
@@ -159,6 +167,7 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
             href="/team/planner"
           />
           <EmployeeCard
+            avatarId="researcher"
             letter="B"
             name={resolveEmployeeDisplayName("researcher", employeeNames)}
             status={
@@ -177,25 +186,78 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
             href="/team/researcher"
           />
           <EmployeeCard
+            avatarId="video-editor"
             letter="C"
-            name={resolveEmployeeDisplayName("editor", employeeNames)}
+            name={resolveEmployeeDisplayName("video-editor", employeeNames)}
             status={
-              editorSummary.pendingGeneration > 0
+              videoSummary.pendingGeneration > 0
                 ? "工作中"
-                : editorSummary.draftsComplete > 0
+                : videoSummary.draftsComplete > 0
                   ? "已完成"
                   : "空闲"
             }
-            responsibility="把研究变成视频号、小红书和公众号。"
+            responsibility="把研究变成视频号口播文案。"
             stats={[
-              { label: "待生成", value: editorSummary.pendingGeneration },
-              { label: "草稿完成", value: editorSummary.draftsComplete },
+              { label: "待生成", value: videoSummary.pendingGeneration },
+              { label: "草稿完成", value: videoSummary.draftsComplete },
             ]}
             actionLabel="查看内容"
-            href="/team/editor"
+            href="/team/video-editor"
           />
           <EmployeeCard
+            avatarId="xiaohongshu-editor"
             letter="D"
+            name={resolveEmployeeDisplayName("xiaohongshu-editor", employeeNames)}
+            status={
+              xiaohongshuSummary.pendingGeneration > 0
+                ? "工作中"
+                : xiaohongshuSummary.draftsComplete > 0
+                  ? "已完成"
+                  : "空闲"
+            }
+            responsibility="把研究变成小红书攻略文字。"
+            stats={[
+              { label: "待生成", value: xiaohongshuSummary.pendingGeneration },
+              { label: "草稿完成", value: xiaohongshuSummary.draftsComplete },
+            ]}
+            actionLabel="查看内容"
+            href="/team/xiaohongshu-editor"
+          />
+          <EmployeeCard
+            avatarId="image-designer"
+            letter="E"
+            name={resolveEmployeeDisplayName("image-designer", employeeNames)}
+            status={imagePendingCount > 0 ? "工作中" : contentImages.length > 0 ? "已完成" : "空闲"}
+            responsibility="根据小红书文案生成配图。"
+            stats={[
+              { label: "待生成", value: imagePendingCount },
+              { label: "已生成", value: contentImages.length },
+            ]}
+            actionLabel="查看配图"
+            href="/team/image-designer"
+          />
+          <EmployeeCard
+            avatarId="wechat-editor"
+            letter="F"
+            name={resolveEmployeeDisplayName("wechat-editor", employeeNames)}
+            status={
+              wechatSummary.pendingGeneration > 0
+                ? "工作中"
+                : wechatSummary.draftsComplete > 0
+                  ? "已完成"
+                  : "空闲"
+            }
+            responsibility="把研究变成公众号大纲和完整文章。"
+            stats={[
+              { label: "待生成", value: wechatSummary.pendingGeneration },
+              { label: "草稿完成", value: wechatSummary.draftsComplete },
+            ]}
+            actionLabel="查看内容"
+            href="/team/wechat-editor"
+          />
+          <EmployeeCard
+            avatarId="compliance"
+            letter="G"
             name={resolveEmployeeDisplayName("compliance", employeeNames)}
             status={complianceNeedsAttention > 0 ? "有内容需要确认" : "空闲"}
             responsibility="重新核对内容有没有超出研究依据、有没有风险用语。"
@@ -204,7 +266,8 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
             href="/team/compliance"
           />
           <EmployeeCard
-            letter="E"
+            avatarId="analyst"
+            letter="H"
             name={resolveEmployeeDisplayName("analyst", employeeNames)}
             status={performanceCount > 0 ? "已有数据" : "等待数据"}
             responsibility="看发布后的数据表现，帮你判断下次该往哪个方向选题。"
@@ -215,7 +278,7 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
         </div>
       </section>
 
-      <section className="flex flex-col gap-3 rounded-md border border-[var(--border)] px-4 py-3">
+      <section className="card flex flex-col gap-3 px-5 py-4">
         <h2 className="text-sm font-medium">Leo 待处理</h2>
         <dl className="flex flex-col gap-1 text-sm">
           <div className="flex items-center justify-between">

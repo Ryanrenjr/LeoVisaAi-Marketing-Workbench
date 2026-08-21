@@ -51,12 +51,12 @@ describe("BOSS_CONFIDENCE_LABEL", () => {
 });
 
 describe("DIGITAL_EMPLOYEES", () => {
-  it("defines exactly five employees, lettered A-E in order", () => {
-    expect(DIGITAL_EMPLOYEES).toHaveLength(5);
-    expect(DIGITAL_EMPLOYEES.map((e) => e.letter)).toEqual(["A", "B", "C", "D", "E"]);
+  it("defines exactly eight employees, lettered A-H in order", () => {
+    expect(DIGITAL_EMPLOYEES).toHaveLength(8);
+    expect(DIGITAL_EMPLOYEES.map((e) => e.letter)).toEqual(["A", "B", "C", "D", "E", "F", "G", "H"]);
   });
 
-  it("all five are enabled — Compliance and Analyst went live by explicit user instruction", () => {
+  it("all eight are enabled", () => {
     expect(DIGITAL_EMPLOYEES.every((e) => e.enabled)).toBe(true);
   });
 

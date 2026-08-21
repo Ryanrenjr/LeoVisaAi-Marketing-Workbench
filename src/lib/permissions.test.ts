@@ -32,8 +32,8 @@ describe("canApproveResearch", () => {
     expect(canApproveResearch("EXPERT")).toBe(true);
   });
 
-  it("does not allow ADMIN to approve its own research — two-person control", () => {
-    expect(canApproveResearch("ADMIN")).toBe(false);
+  it("allows ADMIN to approve research too — single-operator reality overrides the original two-person control", () => {
+    expect(canApproveResearch("ADMIN")).toBe(true);
   });
 });
 

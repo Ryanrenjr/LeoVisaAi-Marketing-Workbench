@@ -27,11 +27,32 @@ export const BOSS_CONFIDENCE_LABEL: Record<ResearchConfidence, string> = {
   HIGH: "证据较充分",
 };
 
-export type EmployeeId = "planner" | "researcher" | "editor" | "compliance" | "analyst";
+/**
+ * Plain-language framing for `topics.topic_score` (0-100, see
+ * src/lib/scoring.ts computeTopicScore) — distinct from
+ * BOSS_CONFIDENCE_LABEL, which is about the RESEARCH result's evidentiary
+ * strength, not the topic itself. Thresholds are deliberately coarse —
+ * this is a plain-language nudge, not a precise cutoff.
+ */
+export function bossScoreLabel(score: number): string {
+  if (score >= 80) return "优质选题，建议优先推进";
+  if (score >= 50) return "选题可用，问题不大";
+  return "选题信息不完整，建议先完善后再研究";
+}
+
+export type EmployeeId =
+  | "planner"
+  | "researcher"
+  | "video-editor"
+  | "xiaohongshu-editor"
+  | "image-designer"
+  | "wechat-editor"
+  | "compliance"
+  | "analyst";
 
 export interface DigitalEmployee {
   id: EmployeeId;
-  letter: "A" | "B" | "C" | "D" | "E";
+  letter: "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H";
   name: string;
   responsibility: string;
   href: string;
@@ -39,12 +60,15 @@ export interface DigitalEmployee {
 }
 
 /**
- * Five digital employees — Compliance (D) and Analyst (E) went live by
- * explicit live user instruction, overriding this list's earlier
- * "exactly four, no fifth without instruction" note. `name` here is the
- * default; a signed-in ADMIN can override it per employee via
- * employee_names (see src/lib/employee-names.ts) — always resolve display
- * names through resolveEmployeeDisplayName, not this array directly.
+ * Eight digital employees. Originally five (planner/researcher/editor/
+ * compliance/analyst) — "编辑" (content editor) was split into three
+ * platform-specific employees (video-editor/xiaohongshu-editor/
+ * wechat-editor) plus a new image-designer, by explicit live user
+ * instruction: different platforms need visibly different working styles,
+ * not one generic "editor" doing all three. `name` here is the default; a
+ * signed-in ADMIN can override it per employee via employee_names (see
+ * src/lib/employee-names.ts) — always resolve display names through
+ * resolveEmployeeDisplayName, not this array directly.
  */
 export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
   {
@@ -64,16 +88,40 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
     enabled: true,
   },
   {
-    id: "editor",
+    id: "video-editor",
     letter: "C",
-    name: "内容编辑",
-    responsibility: "把审核过的研究变成视频号、小红书和公众号内容。",
-    href: "/team/editor",
+    name: "视频口播文案编辑员",
+    responsibility: "把审核过的研究写成视频号口播文案。",
+    href: "/team/video-editor",
+    enabled: true,
+  },
+  {
+    id: "xiaohongshu-editor",
+    letter: "D",
+    name: "小红书文字编辑员",
+    responsibility: "把审核过的研究写成小红书攻略文字。",
+    href: "/team/xiaohongshu-editor",
+    enabled: true,
+  },
+  {
+    id: "image-designer",
+    letter: "E",
+    name: "小红书图片设计员",
+    responsibility: "根据小红书文案生成配图。",
+    href: "/team/image-designer",
+    enabled: true,
+  },
+  {
+    id: "wechat-editor",
+    letter: "F",
+    name: "公众号长文编辑员",
+    responsibility: "把审核过的研究写成公众号大纲和完整文章。",
+    href: "/team/wechat-editor",
     enabled: true,
   },
   {
     id: "compliance",
-    letter: "D",
+    letter: "G",
     name: "合规审核员",
     responsibility: "专门挑错，重新核对内容有没有超出研究依据、有没有风险用语。",
     href: "/team/compliance",
@@ -81,7 +129,7 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
   },
   {
     id: "analyst",
-    letter: "E",
+    letter: "H",
     name: "数据分析员",
     responsibility: "看发布后的数据表现，帮你判断下次该往哪个方向选题。",
     href: "/team/analyst",
