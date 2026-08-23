@@ -113,3 +113,33 @@ export async function updateEmployeeName(formData: FormData) {
   revalidatePath("/team/compliance");
   revalidatePath("/team/analyst");
 }
+
+/**
+ * ADMIN edits one digital employee's "手册" addendum — appended after the
+ * fixed, code-only safety core every time that employee's AI call runs
+ * (see src/lib/ai/prompt-addendum.ts). Never replaces the core rules, so
+ * this can't accidentally strip out the evidence-boundary / no-fabricated-
+ * source / no-individualized-advice guarantees.
+ */
+export async function updateEmployeeInstructions(formData: FormData) {
+  const user = await requireAdmin();
+
+  const employeeId = String(formData.get("employeeId") ?? "") as EmployeeId;
+  if (!DIGITAL_EMPLOYEES.some((e) => e.id === employeeId)) return;
+
+  const admin = createAdminClient();
+  const customInstructions = String(formData.get("customInstructions") ?? "").trim();
+
+  if (!customInstructions) {
+    await admin.from("employee_instructions").delete().eq("employee_id", employeeId);
+  } else {
+    await admin.from("employee_instructions").upsert({
+      employee_id: employeeId,
+      custom_instructions: customInstructions,
+      updated_by: user.id,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  revalidatePath("/team/handbook");
+}

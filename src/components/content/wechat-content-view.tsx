@@ -44,7 +44,7 @@ function WechatOutlineFields({ content, sources }: { content: WechatOutline; sou
       <Field label="来源">
         <ContentSources sourceIds={content.source_references} sources={sources} />
       </Field>
-      <Field label="需要Leo确认">
+      <Field label="需要你确认">
         <ExpertReviewNotes notes={content.expert_review_notes} />
       </Field>
     </div>
@@ -65,7 +65,7 @@ function WechatFullArticleFields({
       <Field label="来源">
         <ContentSources sourceIds={content.source_references} sources={sources} />
       </Field>
-      <Field label="需要Leo确认">
+      <Field label="需要你确认">
         <ExpertReviewNotes notes={content.expert_review_notes} />
       </Field>
     </div>

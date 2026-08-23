@@ -1,47 +1,68 @@
 import Link from "next/link";
 import { getAllContentAssets, getAllTopics, isDemoMode } from "@/lib/topics";
+import { getCurrentUser } from "@/lib/auth";
 import { getAllContentImages } from "@/lib/content-images";
+import { canManageContentAssets } from "@/lib/permissions";
 import { groupContentAssetsByTopicId, getLatestForLineage } from "@/lib/content-versions";
 import { platformStatusLabel } from "@/lib/content-editor-status";
 import { filterContentEligibleTopics } from "@/lib/employee-tasks";
 import { getEmployee, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
+import { getTaskModelOptions } from "@/lib/ai/task-model-options";
 import { EmployeeHeader } from "@/components/employee-header";
+import { GenerateAction } from "@/components/ai/generate-action";
+import { regeneratePlatformContent } from "@/app/topics/content-actions";
 import type { ContentAsset, ContentImageRow, Topic } from "@/lib/types";
 
 function TopicRow({
   topic,
   assets,
   imagesByAssetId,
+  canRun,
+  modelOptions,
 }: {
   topic: Topic;
   assets: ContentAsset[];
   imagesByAssetId: Map<string, ContentImageRow[]>;
+  canRun: boolean;
+  modelOptions: Awaited<ReturnType<typeof getTaskModelOptions>> | null;
 }) {
   const post = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_post");
   const hasImages = post ? (imagesByAssetId.get(post.id)?.length ?? 0) > 0 : false;
   return (
-    <li className="border-b border-[var(--border)] py-3 last:border-b-0">
+    <li className="card flex flex-col gap-2 px-5 py-4">
       <Link href={`/topics/${topic.id}?tab=xiaohongshu`} className="font-medium hover:underline">
         {topic.title}
       </Link>
-      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted)]">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--muted)]">
         <span>研究：已确认</span>
         <span>{platformStatusLabel(assets, "XIAOHONGSHU")}</span>
         <span>图片：{hasImages ? "已配图" : "待配图"}</span>
       </div>
+      {canRun && modelOptions && (
+        <GenerateAction
+          action={regeneratePlatformContent.bind(null, topic.id, "XIAOHONGSHU")}
+          label={post ? "重新生成攻略文字" : "生成攻略文字"}
+          variant={post ? "secondary" : "primary"}
+          taskType="XIAOHONGSHU_WRITING"
+          models={modelOptions.models}
+          defaultModel={modelOptions.defaultModel}
+          resolutionError={modelOptions.resolutionError}
+        />
+      )}
     </li>
   );
 }
 
 export default async function XiaohongshuEditorPage() {
   const employee = getEmployee("xiaohongshu-editor");
-  const [allTopics, allContentAssets, allContentImages, demo, employeeNames] = await Promise.all([
+  const [allTopics, allContentAssets, allContentImages, demo, employeeNames, user] = await Promise.all([
     getAllTopics(),
     getAllContentAssets(),
     getAllContentImages(),
     isDemoMode(),
     getEmployeeNames(),
+    getCurrentUser(),
   ]);
   const employeeName = resolveEmployeeDisplayName("xiaohongshu-editor", employeeNames);
 
@@ -56,6 +77,8 @@ export default async function XiaohongshuEditorPage() {
     if (list) list.push(image);
     else imagesByAssetId.set(image.content_asset_id, [image]);
   }
+  const canRun = !demo && user && canManageContentAssets(user.role);
+  const modelOptions = canRun ? await getTaskModelOptions("XIAOHONGSHU_WRITING") : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -73,13 +96,15 @@ export default async function XiaohongshuEditorPage() {
       {eligibleTopics.length === 0 ? (
         <p className="text-sm text-[var(--muted)]">暂无已确认研究、可以生成内容的选题。</p>
       ) : (
-        <ul>
+        <ul className="flex flex-col gap-3">
           {eligibleTopics.map((topic) => (
             <TopicRow
               key={topic.id}
               topic={topic}
               assets={assetsByTopicId.get(topic.id) ?? []}
               imagesByAssetId={imagesByAssetId}
+              canRun={Boolean(canRun)}
+              modelOptions={modelOptions}
             />
           ))}
         </ul>

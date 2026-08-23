@@ -108,7 +108,7 @@ describe("runResearchTask", () => {
       latencyMs: 100,
     });
     const { result } = await runResearchTask(TOPIC);
-    expect(runGoogleResearchMock).toHaveBeenCalledWith(TOPIC, "gemini-3.6-flash");
+    expect(runGoogleResearchMock).toHaveBeenCalledWith(TOPIC, "gemini-3.6-flash", null);
     expect(runAnthropicResearchMock).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.provider).toBe("GOOGLE");
@@ -126,7 +126,7 @@ describe("runResearchTask", () => {
       latencyMs: 100,
     });
     const { result } = await runResearchTask(TOPIC, { provider: "ANTHROPIC", modelId: "claude-opus-5" });
-    expect(runAnthropicResearchMock).toHaveBeenCalledWith(TOPIC);
+    expect(runAnthropicResearchMock).toHaveBeenCalledWith(TOPIC, null);
     expect(runGoogleResearchMock).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
   });
@@ -373,7 +373,7 @@ describe("runContentTask", () => {
       latencyMs: 1,
     });
     await runContentTask("VIDEO_WRITING", EVIDENCE_INPUT, { provider: "ANTHROPIC", modelId: "claude-opus-5" });
-    expect(runAnthropicContentTaskMock).toHaveBeenCalledWith("VIDEO_WRITING", EVIDENCE_INPUT);
+    expect(runAnthropicContentTaskMock).toHaveBeenCalledWith("VIDEO_WRITING", EVIDENCE_INPUT, null);
     expect(generateGoogleStructuredMock).not.toHaveBeenCalled();
     expect(generateGroqStructuredMock).not.toHaveBeenCalled();
   });
@@ -426,7 +426,7 @@ describe("runWechatFullArticleTask", () => {
       { ...EVIDENCE_INPUT, outline },
       { provider: "ANTHROPIC", modelId: "claude-opus-5" },
     );
-    expect(runAnthropicWechatFullArticleMock).toHaveBeenCalledWith({ ...EVIDENCE_INPUT, outline });
+    expect(runAnthropicWechatFullArticleMock).toHaveBeenCalledWith({ ...EVIDENCE_INPUT, outline }, null);
   });
 
   it("dispatches to a non-Anthropic provider and applies grounding", async () => {

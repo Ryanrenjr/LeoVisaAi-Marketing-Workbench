@@ -32,7 +32,7 @@ export default async function ReviewQueuePage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-lg font-semibold">Leo 待处理</h1>
+        <h1 className="text-lg font-semibold">待办事项</h1>
         <p className="mt-1 text-sm text-[var(--muted)]">
           数字员工已经先做完了力所能及的工作，这里是需要你亲自决定的事项。
         </p>

@@ -55,30 +55,36 @@ function adaptContent<T>(result: ContentAgentResult<T>): AIExecutionResult<T> {
   };
 }
 
-export async function runAnthropicResearch(topic: {
-  title: string;
-  question: string;
-  business: string;
-  audience: string;
-}): Promise<AIExecutionResult<GroundedResearchPack>> {
-  return adaptResearch(await runResearchAgent(topic));
+export async function runAnthropicResearch(
+  topic: {
+    title: string;
+    question: string;
+    business: string;
+    audience: string;
+  },
+  customInstructions?: string | null,
+): Promise<AIExecutionResult<GroundedResearchPack>> {
+  return adaptResearch(await runResearchAgent(topic, customInstructions));
 }
 
 export async function runAnthropicContentTask(
   taskType: GenericContentTaskType,
   input: EvidenceInput,
+  customInstructions?: string | null,
 ): Promise<AIExecutionResult<VideoChannelContent | XiaohongshuContent | WechatOutline>> {
-  if (taskType === "VIDEO_WRITING") return adaptContent(await generateVideoChannelContent(input));
-  if (taskType === "XIAOHONGSHU_WRITING") return adaptContent(await generateXiaohongshuContent(input));
-  return adaptContent(await generateWechatOutline(input));
+  if (taskType === "VIDEO_WRITING") return adaptContent(await generateVideoChannelContent(input, customInstructions));
+  if (taskType === "XIAOHONGSHU_WRITING")
+    return adaptContent(await generateXiaohongshuContent(input, customInstructions));
+  return adaptContent(await generateWechatOutline(input, customInstructions));
 }
 
 export async function runAnthropicWechatFullArticle(
   input: EvidenceInput & {
     outline: Pick<WechatOutline, "title_options" | "summary" | "detailed_outline" | "key_claims">;
   },
+  customInstructions?: string | null,
 ): Promise<AIExecutionResult<WechatFullArticle>> {
-  return adaptContent(await generateWechatFullArticle(input));
+  return adaptContent(await generateWechatFullArticle(input, customInstructions));
 }
 
 function isConfigured(): boolean {

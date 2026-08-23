@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildHomeSpotlight,
   buildLeoReviewQueue,
   filterContentEligibleTopics,
   summarizeEditorTasks,
   summarizePlannerTasks,
   summarizeResearcherTasks,
 } from "./employee-tasks";
+import type { ComplianceQueueItem, ReviewItem } from "./employee-tasks";
 import type { ContentAsset, Topic } from "./types";
 
 function makeTopic(overrides: Partial<Topic>): Topic {
@@ -185,5 +187,63 @@ describe("buildLeoReviewQueue — Leo review queue aggregation", () => {
   it("returns an empty queue when nothing needs Leo", () => {
     const topics = [makeTopic({ id: "1", status: "IDEA" }), makeTopic({ id: "2", status: "PUBLISHED" })];
     expect(buildLeoReviewQueue(topics, new Map())).toEqual([]);
+  });
+});
+
+describe("buildHomeSpotlight", () => {
+  const researchItem: ReviewItem = {
+    topicId: "1",
+    topicTitle: "研究选题",
+    employeeId: "researcher",
+    employeeName: "政策研究员",
+    description: "研究已完成，请确认是否可以使用",
+    warning: null,
+    href: "/topics/1/research/review",
+  };
+  const contentItem: ReviewItem = {
+    topicId: "2",
+    topicTitle: "内容选题",
+    employeeId: "video-editor",
+    employeeName: "视频口播文案编辑员",
+    description: "内容草稿有 1 项需要确认",
+    warning: null,
+    href: "/topics/2?tab=video",
+  };
+  const complianceItem: ComplianceQueueItem = {
+    topicId: "3",
+    topicTitle: "合规选题",
+    contentAssetId: "asset-3",
+    platformLabel: "VIDEO_CHANNEL",
+    latestReview: null,
+  };
+
+  it("prioritizes a research item awaiting confirmation above everything else", () => {
+    const result = buildHomeSpotlight([researchItem, contentItem], [complianceItem], { todayCandidates: 0, highPriority: 0 });
+    expect(result?.employeeId).toBe("researcher");
+    expect(result?.title).toBe("研究选题");
+    expect(result?.href).toBe("/topics/1/research/review");
+  });
+
+  it("falls back to a compliance item when no research item is pending", () => {
+    const result = buildHomeSpotlight([contentItem], [complianceItem], { todayCandidates: 0, highPriority: 0 });
+    expect(result?.employeeId).toBe("compliance");
+    expect(result?.title).toBe("合规选题");
+  });
+
+  it("falls back to a content-editor item when no research or compliance item is pending", () => {
+    const result = buildHomeSpotlight([contentItem], [], { todayCandidates: 0, highPriority: 0 });
+    expect(result?.employeeId).toBe("video-editor");
+    expect(result?.title).toBe("内容选题");
+  });
+
+  it("prompts to search for topics when the queue is empty and nothing was searched today", () => {
+    const result = buildHomeSpotlight([], [], { todayCandidates: 0, highPriority: 0 });
+    expect(result?.employeeId).toBe("planner");
+    expect(result?.href).toBe("/team/planner");
+  });
+
+  it("returns null — never fabricates a spotlight — when there's genuinely nothing to do", () => {
+    const result = buildHomeSpotlight([], [], { todayCandidates: 3, highPriority: 1 });
+    expect(result).toBeNull();
   });
 });

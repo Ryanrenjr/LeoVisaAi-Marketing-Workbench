@@ -1,6 +1,6 @@
 import { groupContentAssetsByLineage } from "./content-versions";
 import { canGenerateContent } from "./permissions";
-import { BOSS_CONFIDENCE_LABEL, resolveEmployeeDisplayName } from "./boss-language";
+import { BOSS_CONFIDENCE_LABEL, getEmployee, resolveEmployeeDisplayName } from "./boss-language";
 import type { EmployeeId } from "./boss-language";
 import type { ComplianceReviewRow, ContentAsset, ContentPlatform, ResearchConfidence, Topic } from "./types";
 import type { EvidenceNote } from "./ai/content-schemas";
@@ -198,4 +198,79 @@ export function buildComplianceQueue(
   }
 
   return items;
+}
+
+export interface HomeSpotlight {
+  employeeId: EmployeeId;
+  letter: string;
+  title: string;
+  subtitle: string;
+  actionLabel: string;
+  href: string;
+}
+
+/**
+ * The ONE thing the home page tells Leo to do right now — picked by fixed
+ * priority, never fabricated (every field traces to a real queue item).
+ * Priority: research awaiting confirmation (blocks everything downstream)
+ * > compliance needing attention > a content draft with expert review
+ * notes > "you haven't searched for topics today" > null (nothing to do).
+ */
+export function buildHomeSpotlight(
+  reviewQueue: ReviewItem[],
+  complianceNeedsAttention: ComplianceQueueItem[],
+  plannerSummary: PlannerSummary,
+  employeeNames: Partial<Record<EmployeeId, string>> = {},
+): HomeSpotlight | null {
+  const researchItem = reviewQueue.find((i) => i.employeeId === "researcher");
+  if (researchItem) {
+    return {
+      employeeId: "researcher",
+      letter: getEmployee("researcher").letter,
+      title: researchItem.topicTitle,
+      subtitle: `${researchItem.employeeName}在等你确认${researchItem.warning ? " · " + researchItem.warning : ""}`,
+      actionLabel: "去确认",
+      href: researchItem.href,
+    };
+  }
+
+  const complianceItem = complianceNeedsAttention[0];
+  if (complianceItem) {
+    const employeeName = resolveEmployeeDisplayName("compliance", employeeNames);
+    return {
+      employeeId: "compliance",
+      letter: getEmployee("compliance").letter,
+      title: complianceItem.topicTitle,
+      subtitle: complianceItem.latestReview
+        ? `${employeeName}发现了需要确认的地方`
+        : `${employeeName}还没审核过这条内容`,
+      actionLabel: "去查看",
+      href: "/team/compliance",
+    };
+  }
+
+  const contentItem = reviewQueue.find((i) => i.employeeId !== "researcher");
+  if (contentItem) {
+    return {
+      employeeId: contentItem.employeeId,
+      letter: getEmployee(contentItem.employeeId).letter,
+      title: contentItem.topicTitle,
+      subtitle: `${contentItem.employeeName}：${contentItem.description}`,
+      actionLabel: "去查看",
+      href: contentItem.href,
+    };
+  }
+
+  if (plannerSummary.todayCandidates === 0) {
+    return {
+      employeeId: "planner",
+      letter: getEmployee("planner").letter,
+      title: "今天还没搜过新选题",
+      subtitle: `${resolveEmployeeDisplayName("planner", employeeNames)}可以帮你搜今天的新闻`,
+      actionLabel: "去搜索",
+      href: "/team/planner",
+    };
+  }
+
+  return null;
 }

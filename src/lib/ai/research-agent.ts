@@ -8,6 +8,7 @@ import {
   type GroundedResearchPack,
   type RealSearchResult,
 } from "./research-pack";
+import { appendCustomInstructions } from "./prompt-addendum";
 
 const MODEL_ALIAS = process.env.RESEARCH_MODEL || "claude-opus-5";
 const MAX_SEARCH_USES = 6;
@@ -51,12 +52,15 @@ export function researchAgentModelAlias(): string {
  * filtered) research pack. See src/lib/ai/research-pack.ts for the
  * parsing/grounding logic this wraps.
  */
-export async function runResearchAgent(topic: {
-  title: string;
-  question: string;
-  business: string;
-  audience: string;
-}): Promise<ResearchAgentResult> {
+export async function runResearchAgent(
+  topic: {
+    title: string;
+    question: string;
+    business: string;
+    audience: string;
+  },
+  customInstructions?: string | null,
+): Promise<ResearchAgentResult> {
   const started = Date.now();
 
   if (!isConfigured()) {
@@ -82,7 +86,7 @@ export async function runResearchAgent(topic: {
       const stream = client.messages.stream({
         model: MODEL_ALIAS,
         max_tokens: 16000,
-        system: RESEARCH_SYSTEM_PROMPT,
+        system: appendCustomInstructions(RESEARCH_SYSTEM_PROMPT, customInstructions),
         tools: [{ type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCH_USES }],
         messages,
       });

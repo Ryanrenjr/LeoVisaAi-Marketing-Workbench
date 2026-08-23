@@ -11,6 +11,8 @@ import { runImageGenerationTask, isRouterResolutionFailure } from "@/lib/ai/rout
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
+import { getEmployeeInstruction } from "@/lib/employee-instructions";
+import { appendCustomInstructions } from "@/lib/ai/prompt-addendum";
 import type { ModelRef } from "@/lib/ai/providers/types";
 
 /**
@@ -32,7 +34,11 @@ export async function generateCoverImage(
   const post = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_post");
   if (!post) return { ok: false, error: "请先生成小红书文字草稿，再生成配图。" };
 
-  const prompt = buildImagePrompt(topic, { title: post.title, content: post.content });
+  const customInstructions = await getEmployeeInstruction("image-designer");
+  const prompt = appendCustomInstructions(
+    buildImagePrompt(topic, { title: post.title, content: post.content }),
+    customInstructions,
+  );
   const result = await runImageGenerationTask(prompt, override);
 
   const supabase = await createClient();

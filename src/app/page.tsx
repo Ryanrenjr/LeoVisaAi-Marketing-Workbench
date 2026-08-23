@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import {
   getAllComplianceReviews,
@@ -16,6 +17,7 @@ import { getRecentPublishPerformanceCount } from "@/lib/analytics";
 import { getAllContentImages } from "@/lib/content-images";
 import {
   buildComplianceQueue,
+  buildHomeSpotlight,
   buildLeoReviewQueue,
   filterContentEligibleTopics,
   summarizeEditorTasks,
@@ -23,8 +25,8 @@ import {
   summarizeResearcherTasks,
 } from "@/lib/employee-tasks";
 import { groupContentAssetsByTopicId, getLatestForLineage } from "@/lib/content-versions";
-import { EmployeeCard } from "@/components/employee-card";
 import { Button } from "@/components/ui/button";
+import { GateNote, LaneCard, LaneGroup, LoopBackNote, ManualNote, StageRow } from "@/components/pipeline-flow";
 import type { ComplianceReviewRow } from "@/lib/types";
 
 function DemoNotice() {
@@ -99,9 +101,6 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
     }
   }
   const complianceQueue = buildComplianceQueue(allTopics, contentAssetsByTopicId, reviewsByContentAssetId);
-  const complianceNeedsAttention = complianceQueue.filter(
-    (item) => !item.latestReview || item.latestReview.overall_risk !== "LOW",
-  ).length;
 
   const plannerSummary = summarizePlannerTasks(libraryTopics);
   const researcherSummary = summarizeResearcherTasks(libraryTopics);
@@ -111,13 +110,18 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
   const reviewQueue = buildLeoReviewQueue(allTopics, contentAssetsByTopicId, new Map(), employeeNames);
   const researchReviewCount = reviewQueue.filter((i) => i.employeeId === "researcher").length;
   const contentReviewCount = reviewQueue.filter((i) => i.employeeId !== "researcher").length;
-  const totalPending = researchReviewCount + contentReviewCount;
+  const complianceAttentionItems = complianceQueue.filter(
+    (item) => !item.latestReview || item.latestReview.overall_risk !== "LOW",
+  );
+  const totalPending = researchReviewCount + contentReviewCount + complianceAttentionItems.length;
 
   const xiaohongshuDraftTopicIds = eligibleTopics
     .filter((t) => getLatestForLineage(contentAssetsByTopicId.get(t.id) ?? [], "XIAOHONGSHU", "xiaohongshu_post"))
     .map((t) => t.id);
   const topicsWithImages = new Set(contentImages.map((img) => img.topic_id));
   const imagePendingCount = xiaohongshuDraftTopicIds.filter((id) => !topicsWithImages.has(id)).length;
+
+  const spotlight = buildHomeSpotlight(reviewQueue, complianceAttentionItems, plannerSummary, employeeNames);
 
   const greeting = timeBasedGreeting(new Date().getHours());
   const name = user?.displayName ?? "老板";
@@ -126,175 +130,143 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
     <div className="flex flex-col gap-10">
       {demo && <DemoNotice />}
 
-      <section>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          {greeting}，{name}。
-        </h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">你的数字团队正在工作。</p>
+      <section className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {greeting}，{name}。
+          </h1>
+          <p className="mt-1 text-sm text-[var(--muted)]">你的数字团队正在工作。</p>
+        </div>
+        <Link
+          href="/team/handbook"
+          className="shrink-0 rounded-full border border-[var(--border)] px-3.5 py-1.5 text-xs font-medium text-[var(--muted)] hover:border-[var(--accent)]/40 hover:text-[var(--foreground)]"
+        >
+          📖 数字员工手册
+        </Link>
+      </section>
 
-        {totalPending > 0 ? (
-          <div className="card mt-4 flex flex-col gap-3 px-5 py-4">
-            <div className="text-sm">
-              <p>今天需要你处理：</p>
-              {researchReviewCount > 0 && <p className="mt-1">{researchReviewCount} 项等待审核</p>}
-              {contentReviewCount > 0 && <p className="mt-1">{contentReviewCount} 项需要专业判断</p>}
+      <section className="flex flex-col gap-2">
+        <p className="text-xs font-semibold text-[var(--muted)]">现在该做什么</p>
+        {spotlight ? (
+          <Link href={spotlight.href} className="card flex items-center gap-4 px-5 py-4 hover:border-[var(--accent)]/40">
+            <Image
+              src={`/employees/${spotlight.employeeId}.png`}
+              alt=""
+              width={52}
+              height={52}
+              className="h-[52px] w-[52px] shrink-0 rounded-full object-cover"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-semibold">{spotlight.title}</p>
+              <p className="truncate text-sm text-[var(--muted)]">{spotlight.subtitle}</p>
             </div>
-            <div>
-              <Link href="/review">
-                <Button>开始处理</Button>
-              </Link>
-            </div>
-          </div>
+            <Button className="shrink-0">{spotlight.actionLabel} →</Button>
+          </Link>
         ) : (
-          <p className="mt-4 text-sm text-[var(--muted)]">暂时没有需要你处理的事项。</p>
+          <p className="card px-5 py-4 text-sm text-[var(--muted)]">暂时没有需要你处理的事项。</p>
+        )}
+        {totalPending > 1 && (
+          <Link href="/review" className="self-start text-xs text-[var(--muted)] hover:text-[var(--foreground)]">
+            还有 {totalPending - 1} 项待处理 →
+          </Link>
         )}
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-medium text-[var(--muted)]">你的数字员工</h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <EmployeeCard
-            avatarId="planner"
-            letter="A"
-            name={resolveEmployeeDisplayName("planner", employeeNames)}
-            status={plannerSummary.todayCandidates > 0 ? "工作中" : "空闲"}
-            responsibility="帮你决定今天最值得做什么内容，还能主动搜今天的新闻找选题。"
-            stats={[
-              { label: "今日候选", value: plannerSummary.todayCandidates },
-              { label: "高优先级", value: plannerSummary.highPriority },
-            ]}
-            actionLabel="查看选题"
-            href="/team/planner"
-          />
-          <EmployeeCard
-            avatarId="researcher"
-            letter="B"
-            name={resolveEmployeeDisplayName("researcher", employeeNames)}
-            status={
-              researcherSummary.awaitingReview > 0
-                ? "等你确认"
-                : researcherSummary.inProgress > 0
-                  ? "工作中"
-                  : "空闲"
-            }
-            responsibility="帮你查官方规则、找依据、整理结论。"
-            stats={[
-              { label: "研究中", value: researcherSummary.inProgress },
-              { label: "等待你审核", value: researcherSummary.awaitingReview },
-            ]}
-            actionLabel="查看研究"
-            href="/team/researcher"
-          />
-          <EmployeeCard
+      <section className="flex flex-col gap-1">
+        <h2 className="text-sm font-medium text-[var(--muted)]">工作流程 · 共 7 步</h2>
+        <p className="mb-3 text-xs text-[var(--muted)]">
+          绿色&ldquo;AI 一键产出&rdquo;点一下就出结果；灰色&ldquo;⏸ 需要你看一眼&rdquo;是必须你决定的地方。
+        </p>
+
+        <StageRow
+          avatarId="planner"
+          step={1}
+          name={resolveEmployeeDisplayName("planner", employeeNames)}
+          status={plannerSummary.todayCandidates > 0 ? `今日候选 ${plannerSummary.todayCandidates} 个` : "空闲"}
+          actionLabel="查看选题"
+          href="/team/planner"
+          kind="auto"
+        />
+        <StageRow
+          avatarId="researcher"
+          step={2}
+          name={resolveEmployeeDisplayName("researcher", employeeNames)}
+          status={
+            researcherSummary.awaitingReview > 0
+              ? `等你确认 ${researcherSummary.awaitingReview} 篇`
+              : researcherSummary.inProgress > 0
+                ? `研究中 ${researcherSummary.inProgress} 篇`
+                : "空闲"
+          }
+          actionLabel="查看研究"
+          href="/team/researcher"
+          kind="auto"
+        />
+        <GateNote text="等你确认研究结论——这一步必须是人点头，App 里写死的规则" />
+
+        <LaneGroup step={3} label="研究确认后，三路一起写文案">
+          <LaneCard
             avatarId="video-editor"
-            letter="C"
             name={resolveEmployeeDisplayName("video-editor", employeeNames)}
-            status={
-              videoSummary.pendingGeneration > 0
-                ? "工作中"
-                : videoSummary.draftsComplete > 0
-                  ? "已完成"
-                  : "空闲"
-            }
-            responsibility="把研究变成视频号口播文案。"
-            stats={[
-              { label: "待生成", value: videoSummary.pendingGeneration },
-              { label: "草稿完成", value: videoSummary.draftsComplete },
-            ]}
-            actionLabel="查看内容"
+            status={videoSummary.pendingGeneration > 0 ? `待生成 ${videoSummary.pendingGeneration}` : "已完成"}
             href="/team/video-editor"
           />
-          <EmployeeCard
+          <LaneCard
             avatarId="xiaohongshu-editor"
-            letter="D"
             name={resolveEmployeeDisplayName("xiaohongshu-editor", employeeNames)}
             status={
-              xiaohongshuSummary.pendingGeneration > 0
-                ? "工作中"
-                : xiaohongshuSummary.draftsComplete > 0
-                  ? "已完成"
-                  : "空闲"
+              xiaohongshuSummary.pendingGeneration > 0 ? `待生成 ${xiaohongshuSummary.pendingGeneration}` : "已完成"
             }
-            responsibility="把研究变成小红书攻略文字。"
-            stats={[
-              { label: "待生成", value: xiaohongshuSummary.pendingGeneration },
-              { label: "草稿完成", value: xiaohongshuSummary.draftsComplete },
-            ]}
-            actionLabel="查看内容"
             href="/team/xiaohongshu-editor"
           />
-          <EmployeeCard
-            avatarId="image-designer"
-            letter="E"
-            name={resolveEmployeeDisplayName("image-designer", employeeNames)}
-            status={imagePendingCount > 0 ? "工作中" : contentImages.length > 0 ? "已完成" : "空闲"}
-            responsibility="根据小红书文案生成配图。"
-            stats={[
-              { label: "待生成", value: imagePendingCount },
-              { label: "已生成", value: contentImages.length },
-            ]}
-            actionLabel="查看配图"
-            href="/team/image-designer"
-          />
-          <EmployeeCard
+          <LaneCard
             avatarId="wechat-editor"
-            letter="F"
             name={resolveEmployeeDisplayName("wechat-editor", employeeNames)}
-            status={
-              wechatSummary.pendingGeneration > 0
-                ? "工作中"
-                : wechatSummary.draftsComplete > 0
-                  ? "已完成"
-                  : "空闲"
-            }
-            responsibility="把研究变成公众号大纲和完整文章。"
-            stats={[
-              { label: "待生成", value: wechatSummary.pendingGeneration },
-              { label: "草稿完成", value: wechatSummary.draftsComplete },
-            ]}
-            actionLabel="查看内容"
+            status={wechatSummary.pendingGeneration > 0 ? `待生成 ${wechatSummary.pendingGeneration}` : "已完成"}
             href="/team/wechat-editor"
           />
-          <EmployeeCard
-            avatarId="compliance"
-            letter="G"
-            name={resolveEmployeeDisplayName("compliance", employeeNames)}
-            status={complianceNeedsAttention > 0 ? "有内容需要确认" : "空闲"}
-            responsibility="重新核对内容有没有超出研究依据、有没有风险用语。"
-            stats={[{ label: "需要确认", value: complianceNeedsAttention }]}
-            actionLabel="查看合规"
-            href="/team/compliance"
-          />
-          <EmployeeCard
-            avatarId="analyst"
-            letter="H"
-            name={resolveEmployeeDisplayName("analyst", employeeNames)}
-            status={performanceCount > 0 ? "已有数据" : "等待数据"}
-            responsibility="看发布后的数据表现，帮你判断下次该往哪个方向选题。"
-            stats={[{ label: "已上传数据", value: performanceCount }]}
-            actionLabel="查看数据"
-            href="/team/analyst"
-          />
-        </div>
-      </section>
+        </LaneGroup>
 
-      <section className="card flex flex-col gap-3 px-5 py-4">
-        <h2 className="text-sm font-medium">Leo 待处理</h2>
-        <dl className="flex flex-col gap-1 text-sm">
-          <div className="flex items-center justify-between">
-            <dt className="text-[var(--muted)]">等待研究确认</dt>
-            <dd className="font-medium">{researchReviewCount}</dd>
-          </div>
-          <div className="flex items-center justify-between">
-            <dt className="text-[var(--muted)]">等待内容决定</dt>
-            <dd className="font-medium">{contentReviewCount}</dd>
-          </div>
-        </dl>
-        <div>
-          <Link href="/review">
-            <Button variant="secondary">开始审核</Button>
-          </Link>
-        </div>
+        <StageRow
+          avatarId="image-designer"
+          step={4}
+          name={resolveEmployeeDisplayName("image-designer", employeeNames)}
+          status={
+            imagePendingCount > 0
+              ? `待生成 ${imagePendingCount}`
+              : contentImages.length > 0
+                ? "已完成"
+                : "空闲"
+          }
+          actionLabel="查看配图"
+          href="/team/image-designer"
+          kind="auto"
+        />
+        <StageRow
+          avatarId="compliance"
+          step={5}
+          name={resolveEmployeeDisplayName("compliance", employeeNames)}
+          status={complianceAttentionItems.length > 0 ? `有 ${complianceAttentionItems.length} 项需要确认` : "空闲"}
+          actionLabel="查看合规"
+          href="/team/compliance"
+          kind="auto"
+        />
+        <GateNote text="等你看一眼合规结果——发不发、要不要改，你来定" />
+
+        <ManualNote step={6} text="拍摄 + 发布 —— 这两步一直是你自己手动做的，AI 不插手，故意的" />
+
+        <StageRow
+          avatarId="analyst"
+          step={7}
+          name={resolveEmployeeDisplayName("analyst", employeeNames)}
+          status={performanceCount > 0 ? `已有 ${performanceCount} 条数据` : "等待你上传数据"}
+          actionLabel="查看数据"
+          href="/team/analyst"
+          kind="input"
+          last
+        />
+
+        <LoopBackNote text="表现好的选题方向，下次会出现在选题策划员的参考里" />
       </section>
 
       {isAdmin && <OperationalLinks />}

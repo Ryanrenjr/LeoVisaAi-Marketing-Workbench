@@ -5,7 +5,7 @@ const REASON_LABEL: Record<EvidenceNote["reason"], string> = {
   research_gap: "研究未覆盖",
 };
 
-/** "需要Leo确认" — every platform's evidence-boundary flags, in one place. */
+/** "需要你确认" — every platform's evidence-boundary flags, in one place. */
 export function ExpertReviewNotes({ notes }: { notes: EvidenceNote[] }) {
   if (notes.length === 0) {
     return <p className="text-sm text-[var(--muted)]">无需额外确认的事项。</p>;

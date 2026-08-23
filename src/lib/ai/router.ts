@@ -56,7 +56,10 @@ import {
   buildPerformanceExtractionUserPrompt,
 } from "./performance-schemas";
 import type { PerformanceMetrics } from "./performance-schemas";
+import { getEmployeeInstruction } from "../employee-instructions";
+import { appendCustomInstructions } from "./prompt-addendum";
 import type { SearchProviderId } from "../search/types";
+import { TASK_TYPE_EMPLOYEE } from "./providers/types";
 import type { AIExecutionResult, ModelRef, TaskType } from "./providers/types";
 import type { ResearchConfidence } from "../types";
 
@@ -149,8 +152,9 @@ async function runNativeResearchTask(
   if (!resolution.ok) return resolutionFailure(resolution.error, started);
 
   const { model } = resolution;
-  if (model.provider === "ANTHROPIC") return runAnthropicResearch(topic);
-  if (model.provider === "GOOGLE") return runGoogleResearch(topic, model.modelId);
+  const customInstructions = await getEmployeeInstruction("researcher");
+  if (model.provider === "ANTHROPIC") return runAnthropicResearch(topic, customInstructions);
+  if (model.provider === "GOOGLE") return runGoogleResearch(topic, model.modelId, customInstructions);
 
   // Registry-level capability filtering should make this unreachable —
   // defensive guard, not a silent fallback.
@@ -223,9 +227,10 @@ export async function runResearchTask(
   const { labelToResult, manifestText } = buildSearchResultManifest(allResults);
   const userMessage = buildExternalResearchUserPrompt(topic, queries, manifestText);
   const { model } = modelResolution;
+  const customInstructions = await getEmployeeInstruction("researcher");
 
   const genResult = await dispatchStructuredAnyProvider(model.provider, model.modelId, {
-    systemPrompt: EXTERNAL_RESEARCH_SYSTEM_PROMPT,
+    systemPrompt: appendCustomInstructions(EXTERNAL_RESEARCH_SYSTEM_PROMPT, customInstructions),
     userMessage,
     schema: ExternalResearchClaimSchema,
     maxTokens: 8000,
@@ -264,13 +269,14 @@ async function runGenericContentTask<T extends Groundable>(
     maxTokens: number;
     textFieldsForScan: (parsed: T) => string[];
   },
+  customInstructions?: string | null,
 ): Promise<AIExecutionResult<T>> {
   const { labelToId, manifestText } = buildSourceManifest(input.sources);
   const context = buildEvidenceContextBlock(input.topic, input.researchPack, manifestText);
   const userMessage = `${context}\n\n${config.taskInstruction}`;
 
   const result = await dispatchStructured(provider, modelId, {
-    systemPrompt: config.systemPrompt,
+    systemPrompt: appendCustomInstructions(config.systemPrompt, customInstructions),
     userMessage,
     schema: config.schema,
     maxTokens: config.maxTokens,
@@ -290,16 +296,17 @@ export async function runContentTask(
   if (!resolution.ok) return resolutionFailure(resolution.error, started);
 
   const { model } = resolution;
-  if (model.provider === "ANTHROPIC") return runAnthropicContentTask(taskType, input);
+  const customInstructions = await getEmployeeInstruction(TASK_TYPE_EMPLOYEE[taskType]);
+  if (model.provider === "ANTHROPIC") return runAnthropicContentTask(taskType, input, customInstructions);
   const provider = model.provider;
 
   if (taskType === "VIDEO_WRITING") {
-    return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.VIDEO_WRITING);
+    return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.VIDEO_WRITING, customInstructions);
   }
   if (taskType === "XIAOHONGSHU_WRITING") {
-    return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.XIAOHONGSHU_WRITING);
+    return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.XIAOHONGSHU_WRITING, customInstructions);
   }
-  return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.WECHAT_WRITING);
+  return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.WECHAT_WRITING, customInstructions);
 }
 
 export async function runWechatFullArticleTask(
@@ -313,7 +320,8 @@ export async function runWechatFullArticleTask(
   if (!resolution.ok) return resolutionFailure(resolution.error, started);
 
   const { model } = resolution;
-  if (model.provider === "ANTHROPIC") return runAnthropicWechatFullArticle(input);
+  const customInstructions = await getEmployeeInstruction("wechat-editor");
+  if (model.provider === "ANTHROPIC") return runAnthropicWechatFullArticle(input, customInstructions);
 
   const { labelToId, manifestText } = buildSourceManifest(input.sources);
   const context = buildEvidenceContextBlock(input.topic, input.researchPack, manifestText);
@@ -321,7 +329,7 @@ export async function runWechatFullArticleTask(
   const userMessage = `${context}\n\n${outlineContext}\n\nWrite the full WeChat Official Account article now, following the outline and rules above.`;
 
   const result = await dispatchStructured(model.provider, model.modelId, {
-    systemPrompt: WECHAT_FULL_ARTICLE_SYSTEM_PROMPT,
+    systemPrompt: appendCustomInstructions(WECHAT_FULL_ARTICLE_SYSTEM_PROMPT, customInstructions),
     userMessage,
     schema: WechatFullArticleSchema,
     maxTokens: 16000,
@@ -352,9 +360,10 @@ export async function runComplianceTask(
 
   const { model } = resolution;
   const userMessage = buildComplianceContextBlock(content, researchPack);
+  const customInstructions = await getEmployeeInstruction("compliance");
 
   const result = await dispatchStructuredAnyProvider(model.provider, model.modelId, {
-    systemPrompt: COMPLIANCE_SYSTEM_PROMPT,
+    systemPrompt: appendCustomInstructions(COMPLIANCE_SYSTEM_PROMPT, customInstructions),
     userMessage,
     schema: ComplianceReviewSchema,
     maxTokens: 4000,
@@ -403,8 +412,9 @@ export async function runTopicDiscoveryTask(
   if (!modelResolution.ok) return resolutionFailure(modelResolution.error, started);
 
   const { model } = modelResolution;
+  const customInstructions = await getEmployeeInstruction("planner");
   return dispatchStructuredAnyProvider(model.provider, model.modelId, {
-    systemPrompt: TOPIC_DISCOVERY_SYSTEM_PROMPT,
+    systemPrompt: appendCustomInstructions(TOPIC_DISCOVERY_SYSTEM_PROMPT, customInstructions),
     userMessage: buildTopicDiscoveryUserPrompt(manifestText),
     schema: TopicDiscoveryResultSchema,
     maxTokens: 4000,
@@ -428,8 +438,9 @@ export async function runPerformanceAnalysisTask(
   if (!resolution.ok) return resolutionFailure(resolution.error, started);
 
   const { model } = resolution;
+  const customInstructions = await getEmployeeInstruction("analyst");
   const params = {
-    systemPrompt: PERFORMANCE_EXTRACTION_SYSTEM_PROMPT,
+    systemPrompt: appendCustomInstructions(PERFORMANCE_EXTRACTION_SYSTEM_PROMPT, customInstructions),
     userMessage: buildPerformanceExtractionUserPrompt(platform),
     schema: PerformanceMetricsSchema,
     maxTokens: 1000,

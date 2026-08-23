@@ -8,9 +8,12 @@ import { platformStatusLabel } from "@/lib/content-editor-status";
 import { filterContentEligibleTopics } from "@/lib/employee-tasks";
 import { getEmployee, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
+import { getTaskModelOptions } from "@/lib/ai/task-model-options";
 import { EmployeeHeader } from "@/components/employee-header";
+import { GenerateAction } from "@/components/ai/generate-action";
 import { ContentImageGrid } from "@/components/content/content-image-grid";
 import { SearchImagesButton } from "@/components/ai/search-images-button";
+import { regeneratePlatformContent } from "@/app/topics/content-actions";
 import { searchAndAttachImages } from "./actions";
 import type { ContentAsset, ContentImageRow, Topic } from "@/lib/types";
 
@@ -20,12 +23,14 @@ function TopicRow({
   imagesByAssetId,
   canRun,
   employeeName,
+  modelOptions,
 }: {
   topic: Topic;
   assets: ContentAsset[];
   imagesByAssetId: Map<string, ContentImageRow[]>;
   canRun: boolean;
   employeeName: string;
+  modelOptions: Awaited<ReturnType<typeof getTaskModelOptions>> | null;
 }) {
   const outline = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_outline");
   const images = outline ? (imagesByAssetId.get(outline.id) ?? []) : [];
@@ -40,6 +45,17 @@ function TopicRow({
         <span>图片：{images.length > 0 ? "已配图" : "待配图"}</span>
       </div>
       <ContentImageGrid images={images} />
+      {canRun && modelOptions && (
+        <GenerateAction
+          action={regeneratePlatformContent.bind(null, topic.id, "WECHAT_OFFICIAL_ACCOUNT")}
+          label={outline ? "重新生成大纲" : "生成大纲"}
+          variant={outline ? "secondary" : "primary"}
+          taskType="WECHAT_WRITING"
+          models={modelOptions.models}
+          defaultModel={modelOptions.defaultModel}
+          resolutionError={modelOptions.resolutionError}
+        />
+      )}
       {canRun && outline && (
         <SearchImagesButton
           action={searchAndAttachImages.bind(null, topic.id)}
@@ -76,6 +92,7 @@ export default async function WechatEditorPage() {
     else imagesByAssetId.set(image.content_asset_id, [image]);
   }
   const canRun = !demo && user && canManageContentAssets(user.role);
+  const modelOptions = canRun ? await getTaskModelOptions("WECHAT_WRITING") : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -102,6 +119,7 @@ export default async function WechatEditorPage() {
               imagesByAssetId={imagesByAssetId}
               canRun={Boolean(canRun)}
               employeeName={employeeName}
+              modelOptions={modelOptions}
             />
           ))}
         </ul>

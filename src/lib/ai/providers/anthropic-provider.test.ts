@@ -84,7 +84,7 @@ describe("runAnthropicContentTask", () => {
       latencyMs: 1,
     });
     const result = await runAnthropicContentTask("VIDEO_WRITING", EVIDENCE_INPUT);
-    expect(generateVideoMock).toHaveBeenCalledWith(EVIDENCE_INPUT);
+    expect(generateVideoMock).toHaveBeenCalledWith(EVIDENCE_INPUT, undefined);
     expect(generateXhsMock).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.data).toEqual({ title: "标题" });
@@ -100,7 +100,7 @@ describe("runAnthropicContentTask", () => {
       latencyMs: 1,
     });
     await runAnthropicContentTask("XIAOHONGSHU_WRITING", EVIDENCE_INPUT);
-    expect(generateXhsMock).toHaveBeenCalledWith(EVIDENCE_INPUT);
+    expect(generateXhsMock).toHaveBeenCalledWith(EVIDENCE_INPUT, undefined);
   });
 
   it("dispatches WECHAT_WRITING to generateWechatOutline", async () => {
@@ -113,7 +113,7 @@ describe("runAnthropicContentTask", () => {
       latencyMs: 1,
     });
     await runAnthropicContentTask("WECHAT_WRITING", EVIDENCE_INPUT);
-    expect(generateWechatOutlineMock).toHaveBeenCalledWith(EVIDENCE_INPUT);
+    expect(generateWechatOutlineMock).toHaveBeenCalledWith(EVIDENCE_INPUT, undefined);
   });
 });
 
@@ -132,7 +132,7 @@ describe("runAnthropicWechatFullArticle", () => {
       outline: { title_options: ["a", "b", "c"], summary: "s", detailed_outline: [], key_claims: [] },
     };
     const result = await runAnthropicWechatFullArticle(input);
-    expect(generateWechatFullMock).toHaveBeenCalledWith(input);
+    expect(generateWechatFullMock).toHaveBeenCalledWith(input, undefined);
     expect(result.data).toEqual({ title: "完整文章" });
   });
 });

@@ -1,4 +1,5 @@
 import "server-only";
+import { z } from "zod";
 import type { ZodType } from "zod";
 import type { AIExecutionResult } from "./types";
 
@@ -53,6 +54,17 @@ export async function generateOpenAIStructured<T>(params: {
   }
 
   try {
+    // json_object mode only guarantees "valid JSON," not any particular
+    // shape — it was silently letting the model return whatever fields it
+    // felt like, which Zod then rejected wholesale (every field
+    // "expected X, received undefined"). json_schema (Structured Outputs)
+    // actually constrains generation to the real schema. Zod v4's
+    // z.toJSONSchema() already emits additionalProperties:false and lists
+    // every key in required for these schemas (none use .optional()), so
+    // it satisfies OpenAI's strict-mode requirement without extra
+    // patching — verified against a real request before shipping.
+    const jsonSchema = z.toJSONSchema(params.schema);
+
     const response = await fetch(OPENAI_URL, {
       method: "POST",
       headers: {
@@ -62,13 +74,13 @@ export async function generateOpenAIStructured<T>(params: {
       body: JSON.stringify({
         model: params.modelId,
         messages: [
-          {
-            role: "system",
-            content: `${params.systemPrompt}\n\nRespond with ONLY a single valid JSON object matching the required shape — no markdown fences, no commentary.`,
-          },
+          { role: "system", content: params.systemPrompt },
           { role: "user", content: params.userMessage },
         ],
-        response_format: { type: "json_object" },
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "response", schema: jsonSchema, strict: true },
+        },
       }),
     });
 

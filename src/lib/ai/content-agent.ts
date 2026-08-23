@@ -22,6 +22,7 @@ import {
   type WechatFullArticle,
   type EvidenceNote,
 } from "./content-schemas";
+import { appendCustomInstructions } from "./prompt-addendum";
 import type { ResearchPack, ResearchSource, Topic } from "../types";
 
 const MODEL_ALIAS = process.env.CONTENT_MODEL || "claude-opus-5";
@@ -181,9 +182,10 @@ async function runContentGeneration<T extends Groundable>(
 
 export async function generateVideoChannelContent(
   input: EvidenceInput,
+  customInstructions?: string | null,
 ): Promise<ContentAgentResult<VideoChannelContent>> {
   return runContentGeneration(input, {
-    systemPrompt: VIDEO_SYSTEM_PROMPT,
+    systemPrompt: appendCustomInstructions(VIDEO_SYSTEM_PROMPT, customInstructions),
     taskInstruction: "Write the VIDEO_CHANNEL script now, following the structure and rules above.",
     schema: VideoChannelContentSchema,
     maxTokens: 8000,
@@ -193,9 +195,10 @@ export async function generateVideoChannelContent(
 
 export async function generateXiaohongshuContent(
   input: EvidenceInput,
+  customInstructions?: string | null,
 ): Promise<ContentAgentResult<XiaohongshuContent>> {
   return runContentGeneration(input, {
-    systemPrompt: XHS_SYSTEM_PROMPT,
+    systemPrompt: appendCustomInstructions(XHS_SYSTEM_PROMPT, customInstructions),
     taskInstruction: "Write the Xiaohongshu content now, following the structure and rules above.",
     schema: XiaohongshuContentSchema,
     maxTokens: 8000,
@@ -205,9 +208,10 @@ export async function generateXiaohongshuContent(
 
 export async function generateWechatOutline(
   input: EvidenceInput,
+  customInstructions?: string | null,
 ): Promise<ContentAgentResult<WechatOutline>> {
   return runContentGeneration(input, {
-    systemPrompt: WECHAT_OUTLINE_SYSTEM_PROMPT,
+    systemPrompt: appendCustomInstructions(WECHAT_OUTLINE_SYSTEM_PROMPT, customInstructions),
     taskInstruction:
       "Write the WeChat Official Account OUTLINE now (not the full article), following the rules above.",
     schema: WechatOutlineSchema,
@@ -220,6 +224,7 @@ export async function generateWechatFullArticle(
   input: EvidenceInput & {
     outline: Pick<WechatOutline, "title_options" | "summary" | "detailed_outline" | "key_claims">;
   },
+  customInstructions?: string | null,
 ): Promise<ContentAgentResult<WechatFullArticle>> {
   const started = Date.now();
 
@@ -241,7 +246,7 @@ export async function generateWechatFullArticle(
     const userMessage = `${context}\n\n${outlineContext}\n\nWrite the full WeChat Official Account article now, following the outline and rules above.`;
 
     const { parsed, usage } = await callStructured({
-      systemPrompt: WECHAT_FULL_ARTICLE_SYSTEM_PROMPT,
+      systemPrompt: appendCustomInstructions(WECHAT_FULL_ARTICLE_SYSTEM_PROMPT, customInstructions),
       userMessage,
       schema: WechatFullArticleSchema,
       maxTokens: 16000,

@@ -202,7 +202,13 @@ export async function generateContent(topicId: string) {
   revalidatePath("/research-completed");
 }
 
-/** Retry/regenerate a single platform — used both for retrying a failed platform and deliberate regeneration. `override` is the section-9 one-off model choice for this single execution; it never changes the persisted default. */
+const PLATFORM_TEAM_PAGE: Record<ContentPlatform, string> = {
+  VIDEO_CHANNEL: "/team/video-editor",
+  XIAOHONGSHU: "/team/xiaohongshu-editor",
+  WECHAT_OFFICIAL_ACCOUNT: "/team/wechat-editor",
+};
+
+/** Retry/regenerate a single platform — used both for retrying a failed platform and deliberate regeneration, and now also called directly from that platform's own team page (see e.g. team/video-editor/page.tsx) so generation is genuinely one click from there, not just from the Topic Detail page. `override` is the section-9 one-off model choice for this single execution; it never changes the persisted default. */
 export async function regeneratePlatformContent(
   topicId: string,
   platform: ContentPlatform,
@@ -215,6 +221,7 @@ export async function regeneratePlatformContent(
   await maybeAdvanceToContentDraft(supabase, topicId, user);
 
   revalidatePath(`/topics/${topicId}`);
+  revalidatePath(PLATFORM_TEAM_PAGE[platform]);
 }
 
 /** The separate, deliberate "生成完整文章" action — never runs automatically. */

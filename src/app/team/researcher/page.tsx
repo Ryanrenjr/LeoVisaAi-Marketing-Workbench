@@ -113,7 +113,7 @@ export default async function ResearcherPage() {
       </section>
 
       <section>
-        <h2 className="mb-2 text-sm font-medium text-[var(--muted)]">研究完成，等Leo确认</h2>
+        <h2 className="mb-2 text-sm font-medium text-[var(--muted)]">研究完成，等你确认</h2>
         <TopicList topics={awaitingReview} infoByTopicId={infoByTopicId} empty="暂无待确认的研究。" />
       </section>
 

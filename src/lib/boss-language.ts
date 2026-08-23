@@ -14,7 +14,7 @@ export const BOSS_STATUS_LABEL: Record<TopicStatus, string> = {
   RESEARCH_APPROVED: "研究已确认",
   CONTENT_DRAFT: "内容草稿已完成",
   COMPLIANCE_REVIEW: "合规审核中",
-  LEO_REVIEW: "等待Leo审核",
+  LEO_REVIEW: "等待你确认",
   APPROVED: "已批准",
   READY_TO_SHOOT: "可以拍摄",
   PUBLISHED: "已发布",

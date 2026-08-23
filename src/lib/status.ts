@@ -28,7 +28,7 @@ export const STATUS_LABEL: Record<TopicStatus, string> = {
   RESEARCH_APPROVED: "研究已完成",
   CONTENT_DRAFT: "内容草稿",
   COMPLIANCE_REVIEW: "合规审核",
-  LEO_REVIEW: "Leo审核",
+  LEO_REVIEW: "最终确认",
   APPROVED: "已批准",
   READY_TO_SHOOT: "可进入拍摄",
   PUBLISHED: "已发布",

@@ -9,6 +9,7 @@ import {
   type GroundedResearchPack,
   type RealSearchResult,
 } from "../research-pack";
+import { appendCustomInstructions } from "../prompt-addendum";
 import type { AIExecutionResult } from "./types";
 
 /**
@@ -49,6 +50,7 @@ interface GroundingChunk {
 export async function runGoogleResearch(
   topic: { title: string; question: string; business: string; audience: string },
   modelId: string,
+  customInstructions?: string | null,
 ): Promise<AIExecutionResult<GroundedResearchPack>> {
   const started = Date.now();
 
@@ -70,7 +72,7 @@ export async function runGoogleResearch(
       model: modelId,
       contents: buildResearchUserPrompt(topic),
       config: {
-        systemInstruction: RESEARCH_SYSTEM_PROMPT,
+        systemInstruction: appendCustomInstructions(RESEARCH_SYSTEM_PROMPT, customInstructions),
         tools: [{ googleSearch: {} }],
       },
     });
