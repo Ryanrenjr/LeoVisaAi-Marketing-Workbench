@@ -9,6 +9,7 @@ import {
   type RealSearchResult,
 } from "./research-pack";
 import { appendCustomInstructions } from "./prompt-addendum";
+import { buildSkillPrompt } from "./skills";
 
 const MODEL_ALIAS = process.env.RESEARCH_MODEL || "claude-opus-5";
 const MAX_SEARCH_USES = 6;
@@ -86,7 +87,7 @@ export async function runResearchAgent(
       const stream = client.messages.stream({
         model: MODEL_ALIAS,
         max_tokens: 16000,
-        system: appendCustomInstructions(RESEARCH_SYSTEM_PROMPT, customInstructions),
+        system: appendCustomInstructions(buildSkillPrompt("researcher", RESEARCH_SYSTEM_PROMPT), customInstructions),
         tools: [{ type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCH_USES }],
         messages,
       });

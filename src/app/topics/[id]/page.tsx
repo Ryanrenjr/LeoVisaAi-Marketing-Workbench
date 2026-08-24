@@ -12,6 +12,7 @@ import {
   isDemoMode,
 } from "@/lib/topics";
 import { getContentImagesForTopic } from "@/lib/content-images";
+import { getBrandConfig } from "@/lib/brand-config";
 import { getCurrentUser } from "@/lib/auth";
 import {
   canApproveResearch,
@@ -84,14 +85,16 @@ export default async function TopicDetailPage({
 
   if (!topic) notFound();
 
-  const [activity, profiles, researchPack, contentAssets, complianceReviews, contentImages] = await Promise.all([
-    getTopicActivity(topic.id),
-    getAllProfiles(),
-    getLatestResearchPack(topic.id),
-    getContentAssets(topic.id),
-    getComplianceReviews(topic.id),
-    getContentImagesForTopic(topic.id),
-  ]);
+  const [activity, profiles, researchPack, contentAssets, complianceReviews, contentImages, brandConfig] =
+    await Promise.all([
+      getTopicActivity(topic.id),
+      getAllProfiles(),
+      getLatestResearchPack(topic.id),
+      getContentAssets(topic.id),
+      getComplianceReviews(topic.id),
+      getContentImagesForTopic(topic.id),
+      getBrandConfig(),
+    ]);
   const imagesByAssetId = new Map<string, typeof contentImages>();
   for (const image of contentImages) {
     if (!image.content_asset_id) continue;
@@ -351,6 +354,7 @@ export default async function TopicDetailPage({
             history={videoLineage.history}
             sourcesByPackId={contentSourcesByPackId}
             images={imagesByAssetId.get(videoLineage.latest.id) ?? []}
+            brand={brandConfig}
           />
         ),
       ),
@@ -366,6 +370,7 @@ export default async function TopicDetailPage({
             history={xhsLineage.history}
             sourcesByPackId={contentSourcesByPackId}
             images={imagesByAssetId.get(xhsLineage.latest.id) ?? []}
+            brand={brandConfig}
           />
         ),
       ),
@@ -393,6 +398,7 @@ export default async function TopicDetailPage({
                 <WechatFullArticleView
                   history={wechatFullArticleLineage.history}
                   sourcesByPackId={contentSourcesByPackId}
+                  brand={brandConfig}
                 />
               ) : (
                 <p className="text-sm text-[var(--muted)]">尚未生成完整文章。</p>

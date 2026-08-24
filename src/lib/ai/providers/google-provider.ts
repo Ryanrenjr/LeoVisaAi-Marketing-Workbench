@@ -10,6 +10,7 @@ import {
   type RealSearchResult,
 } from "../research-pack";
 import { appendCustomInstructions } from "../prompt-addendum";
+import { buildSkillPrompt } from "../skills";
 import type { AIExecutionResult } from "./types";
 
 /**
@@ -72,7 +73,7 @@ export async function runGoogleResearch(
       model: modelId,
       contents: buildResearchUserPrompt(topic),
       config: {
-        systemInstruction: appendCustomInstructions(RESEARCH_SYSTEM_PROMPT, customInstructions),
+        systemInstruction: appendCustomInstructions(buildSkillPrompt("researcher", RESEARCH_SYSTEM_PROMPT), customInstructions),
         tools: [{ googleSearch: {} }],
       },
     });

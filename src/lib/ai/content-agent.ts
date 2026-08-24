@@ -23,6 +23,7 @@ import {
   type EvidenceNote,
 } from "./content-schemas";
 import { appendCustomInstructions } from "./prompt-addendum";
+import { buildSkillPrompt } from "./skills";
 import type { ResearchPack, ResearchSource, Topic } from "../types";
 
 const MODEL_ALIAS = process.env.CONTENT_MODEL || "claude-opus-5";
@@ -185,7 +186,7 @@ export async function generateVideoChannelContent(
   customInstructions?: string | null,
 ): Promise<ContentAgentResult<VideoChannelContent>> {
   return runContentGeneration(input, {
-    systemPrompt: appendCustomInstructions(VIDEO_SYSTEM_PROMPT, customInstructions),
+    systemPrompt: appendCustomInstructions(buildSkillPrompt("video-editor", VIDEO_SYSTEM_PROMPT), customInstructions),
     taskInstruction: "Write the VIDEO_CHANNEL script now, following the structure and rules above.",
     schema: VideoChannelContentSchema,
     maxTokens: 8000,
@@ -198,7 +199,7 @@ export async function generateXiaohongshuContent(
   customInstructions?: string | null,
 ): Promise<ContentAgentResult<XiaohongshuContent>> {
   return runContentGeneration(input, {
-    systemPrompt: appendCustomInstructions(XHS_SYSTEM_PROMPT, customInstructions),
+    systemPrompt: appendCustomInstructions(buildSkillPrompt("xiaohongshu-editor", XHS_SYSTEM_PROMPT), customInstructions),
     taskInstruction: "Write the Xiaohongshu content now, following the structure and rules above.",
     schema: XiaohongshuContentSchema,
     maxTokens: 8000,
@@ -211,7 +212,7 @@ export async function generateWechatOutline(
   customInstructions?: string | null,
 ): Promise<ContentAgentResult<WechatOutline>> {
   return runContentGeneration(input, {
-    systemPrompt: appendCustomInstructions(WECHAT_OUTLINE_SYSTEM_PROMPT, customInstructions),
+    systemPrompt: appendCustomInstructions(buildSkillPrompt("wechat-editor", WECHAT_OUTLINE_SYSTEM_PROMPT), customInstructions),
     taskInstruction:
       "Write the WeChat Official Account OUTLINE now (not the full article), following the rules above.",
     schema: WechatOutlineSchema,
@@ -246,7 +247,7 @@ export async function generateWechatFullArticle(
     const userMessage = `${context}\n\n${outlineContext}\n\nWrite the full WeChat Official Account article now, following the outline and rules above.`;
 
     const { parsed, usage } = await callStructured({
-      systemPrompt: appendCustomInstructions(WECHAT_FULL_ARTICLE_SYSTEM_PROMPT, customInstructions),
+      systemPrompt: appendCustomInstructions(buildSkillPrompt("wechat-editor", WECHAT_FULL_ARTICLE_SYSTEM_PROMPT), customInstructions),
       userMessage,
       schema: WechatFullArticleSchema,
       maxTokens: 16000,

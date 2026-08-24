@@ -1,10 +1,13 @@
 import { sourcesForAsset } from "@/lib/content-versions";
 import type { VideoChannelContent } from "@/lib/ai/content-schemas";
 import type { ContentAsset, ContentImageRow, ResearchSource } from "@/lib/types";
+import type { BrandConfig } from "@/lib/brand-defaults";
+import { validateVideoScript } from "@/lib/brand-validation";
 import { Field } from "./field";
 import { ContentSources } from "./content-sources";
 import { ExpertReviewNotes } from "./expert-review-notes";
 import { ContentImageGrid } from "./content-image-grid";
+import { BrandCheckNotice } from "@/components/brand-check-notice";
 
 function VideoFields({ content, sources }: { content: VideoChannelContent; sources: ResearchSource[] }) {
   return (
@@ -36,19 +39,20 @@ export function VideoContentView({
   history,
   sourcesByPackId,
   images = [],
+  brand,
 }: {
   history: ContentAsset[];
   sourcesByPackId: Map<string, ResearchSource[]>;
   images?: ContentImageRow[];
+  brand: BrandConfig;
 }) {
   const [latest, ...older] = history;
+  const latestContent = latest.structured_content as unknown as VideoChannelContent;
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-[var(--muted)]">当前版本 v{latest.version}</p>
-      <VideoFields
-        content={latest.structured_content as unknown as VideoChannelContent}
-        sources={sourcesForAsset(latest, sourcesByPackId)}
-      />
+      <VideoFields content={latestContent} sources={sourcesForAsset(latest, sourcesByPackId)} />
+      <BrandCheckNotice issues={validateVideoScript(latestContent, brand)} />
       <ContentImageGrid images={images} />
       {older.map((asset) => (
         <details key={asset.id} className="rounded-md border border-[var(--border)] px-3 py-2">

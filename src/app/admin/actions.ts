@@ -9,6 +9,16 @@ import type { AIProviderId, TaskType } from "@/lib/ai/providers/types";
 import type { UserRole } from "@/lib/types";
 import { DIGITAL_EMPLOYEES } from "@/lib/boss-language";
 import type { EmployeeId } from "@/lib/boss-language";
+import { nextInstructionVersion } from "@/lib/employee-instruction-versions";
+
+const BRAND_CONFIG_FIELDS = [
+  ["companyNameEn", "company_name_en"],
+  ["companyNameZh", "company_name_zh"],
+  ["contentBrand", "content_brand"],
+  ["expertName", "expert_name"],
+  ["videoOutro", "video_outro"],
+  ["wechatFooter", "wechat_footer"],
+] as const;
 
 async function requireAdmin() {
   const user = await requireUser();
@@ -116,10 +126,13 @@ export async function updateEmployeeName(formData: FormData) {
 
 /**
  * ADMIN edits one digital employee's "手册" addendum — appended after the
- * fixed, code-only safety core every time that employee's AI call runs
- * (see src/lib/ai/prompt-addendum.ts). Never replaces the core rules, so
- * this can't accidentally strip out the evidence-boundary / no-fabricated-
- * source / no-individualized-advice guarantees.
+ * fixed, code-only Skill (src/lib/ai/skills.ts GLOBAL_SKILL +
+ * EMPLOYEE_DEFAULT_SKILL) every time that employee's AI call runs. Never
+ * replaces those permanent rules — appendCustomInstructions always puts
+ * this text strictly after them. `employee_instructions` is insert-only
+ * (migration 0013): this never overwrites a row, it inserts the next
+ * version, so every past addendum stays recoverable via
+ * restoreEmployeeInstructionVersion below.
  */
 export async function updateEmployeeInstructions(formData: FormData) {
   const user = await requireAdmin();
@@ -129,16 +142,83 @@ export async function updateEmployeeInstructions(formData: FormData) {
 
   const admin = createAdminClient();
   const customInstructions = String(formData.get("customInstructions") ?? "").trim();
+  const changeNote = String(formData.get("changeNote") ?? "").trim();
 
-  if (!customInstructions) {
-    await admin.from("employee_instructions").delete().eq("employee_id", employeeId);
-  } else {
-    await admin.from("employee_instructions").upsert({
-      employee_id: employeeId,
-      custom_instructions: customInstructions,
-      updated_by: user.id,
-      updated_at: new Date().toISOString(),
-    });
+  const { data: existing } = await admin
+    .from("employee_instructions")
+    .select("version")
+    .eq("employee_id", employeeId);
+  const version = nextInstructionVersion((existing ?? []).map((row) => row.version as number));
+
+  await admin.from("employee_instructions").insert({
+    employee_id: employeeId,
+    version,
+    custom_instructions: customInstructions,
+    change_note: changeNote || null,
+    updated_by: user.id,
+    updated_at: new Date().toISOString(),
+  });
+
+  revalidatePath("/team/handbook");
+}
+
+/**
+ * ADMIN restores an older Skill addendum version — inserts a NEW version
+ * whose text matches the chosen old one, auto-noted "恢复自 v{N}". Never
+ * mutates or deletes the old row; history stays intact either way.
+ */
+export async function restoreEmployeeInstructionVersion(formData: FormData) {
+  const user = await requireAdmin();
+
+  const employeeId = String(formData.get("employeeId") ?? "") as EmployeeId;
+  const restoreVersion = Number(formData.get("version") ?? "");
+  if (!DIGITAL_EMPLOYEES.some((e) => e.id === employeeId) || !Number.isFinite(restoreVersion)) return;
+
+  const admin = createAdminClient();
+
+  const { data: allVersions } = await admin
+    .from("employee_instructions")
+    .select("version, custom_instructions")
+    .eq("employee_id", employeeId);
+  if (!allVersions) return;
+
+  const target = allVersions.find((row) => row.version === restoreVersion);
+  if (!target) return;
+
+  const nextVersion = nextInstructionVersion(allVersions.map((row) => row.version as number));
+
+  await admin.from("employee_instructions").insert({
+    employee_id: employeeId,
+    version: nextVersion,
+    custom_instructions: target.custom_instructions,
+    change_note: `恢复自 v${restoreVersion}`,
+    updated_by: user.id,
+    updated_at: new Date().toISOString(),
+  });
+
+  revalidatePath("/team/handbook");
+}
+
+/**
+ * ADMIN edits the company brand configuration (brand_config table — see
+ * supabase/migrations/0013_skill_versioning_and_brand_config.sql). Not
+ * versioned like employee_instructions — each field is a plain upsert, the
+ * DB row is simply "the current value." src/lib/brand-config.ts falls back
+ * to DEFAULT_BRAND_CONFIG for any field left blank.
+ */
+export async function updateBrandConfig(formData: FormData) {
+  const user = await requireAdmin();
+
+  const admin = createAdminClient();
+  const rows = BRAND_CONFIG_FIELDS.map(([formKey, dbKey]) => ({
+    key: dbKey,
+    value: String(formData.get(formKey) ?? "").trim(),
+    updated_by: user.id,
+    updated_at: new Date().toISOString(),
+  })).filter((row) => row.value.length > 0);
+
+  if (rows.length > 0) {
+    await admin.from("brand_config").upsert(rows);
   }
 
   revalidatePath("/team/handbook");

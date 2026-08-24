@@ -1,10 +1,13 @@
 import { sourcesForAsset } from "@/lib/content-versions";
 import type { WechatFullArticle, WechatOutline } from "@/lib/ai/content-schemas";
 import type { ContentAsset, ContentImageRow, ResearchSource } from "@/lib/types";
+import type { BrandConfig } from "@/lib/brand-defaults";
+import { validateWechatArticle } from "@/lib/brand-validation";
 import { Field } from "./field";
 import { ContentSources } from "./content-sources";
 import { ExpertReviewNotes } from "./expert-review-notes";
 import { ContentImageGrid } from "./content-image-grid";
+import { BrandCheckNotice } from "@/components/brand-check-notice";
 
 function WechatOutlineFields({ content, sources }: { content: WechatOutline; sources: ResearchSource[] }) {
   return (
@@ -110,18 +113,19 @@ export function WechatOutlineView({
 export function WechatFullArticleView({
   history,
   sourcesByPackId,
+  brand,
 }: {
   history: ContentAsset[];
   sourcesByPackId: Map<string, ResearchSource[]>;
+  brand: BrandConfig;
 }) {
   const [latest, ...older] = history;
+  const latestContent = latest.structured_content as unknown as WechatFullArticle;
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-[var(--muted)]">完整文章 · 当前版本 v{latest.version}</p>
-      <WechatFullArticleFields
-        content={latest.structured_content as unknown as WechatFullArticle}
-        sources={sourcesForAsset(latest, sourcesByPackId)}
-      />
+      <WechatFullArticleFields content={latestContent} sources={sourcesForAsset(latest, sourcesByPackId)} />
+      <BrandCheckNotice issues={validateWechatArticle(latestContent, brand)} />
       {older.map((asset) => (
         <details key={asset.id} className="rounded-md border border-[var(--border)] px-3 py-2">
           <summary className="cursor-pointer text-sm text-[var(--muted)]">

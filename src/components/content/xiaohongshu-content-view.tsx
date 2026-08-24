@@ -1,10 +1,13 @@
 import { sourcesForAsset } from "@/lib/content-versions";
 import type { XiaohongshuContent } from "@/lib/ai/content-schemas";
 import type { ContentAsset, ContentImageRow, ResearchSource } from "@/lib/types";
+import type { BrandConfig } from "@/lib/brand-defaults";
+import { validateXiaohongshuPost } from "@/lib/brand-validation";
 import { Field } from "./field";
 import { ContentSources } from "./content-sources";
 import { ExpertReviewNotes } from "./expert-review-notes";
 import { ContentImageGrid } from "./content-image-grid";
+import { BrandCheckNotice } from "@/components/brand-check-notice";
 
 function XiaohongshuFields({ content, sources }: { content: XiaohongshuContent; sources: ResearchSource[] }) {
   return (
@@ -43,19 +46,20 @@ export function XiaohongshuContentView({
   history,
   sourcesByPackId,
   images = [],
+  brand,
 }: {
   history: ContentAsset[];
   sourcesByPackId: Map<string, ResearchSource[]>;
   images?: ContentImageRow[];
+  brand: BrandConfig;
 }) {
   const [latest, ...older] = history;
+  const latestContent = latest.structured_content as unknown as XiaohongshuContent;
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-[var(--muted)]">当前版本 v{latest.version}</p>
-      <XiaohongshuFields
-        content={latest.structured_content as unknown as XiaohongshuContent}
-        sources={sourcesForAsset(latest, sourcesByPackId)}
-      />
+      <XiaohongshuFields content={latestContent} sources={sourcesForAsset(latest, sourcesByPackId)} />
+      <BrandCheckNotice issues={validateXiaohongshuPost(latestContent, brand)} />
       <ContentImageGrid images={images} />
       {older.map((asset) => (
         <details key={asset.id} className="rounded-md border border-[var(--border)] px-3 py-2">

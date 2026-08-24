@@ -89,6 +89,12 @@ This is a **presentation-layer distinction only**:
   underlying system; Boss Mode is an abstraction over the same data, not
   a separate product.
 
+Leo Visa uses formal versioned Digital Employee Skills. A Skill is a
+production system instruction, not decorative profile copy. Each employee
+has a narrow job boundary. Brand requirements are deterministic wherever
+possible. See [docs/digital-employee-skills.md](docs/digital-employee-skills.md)
+and [src/lib/ai/skills.ts](src/lib/ai/skills.ts).
+
 ## Digital employee ≠ AI model (Model Router)
 
 No digital employee, and no task, is permanently tied to one AI provider

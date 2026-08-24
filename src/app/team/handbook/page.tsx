@@ -2,23 +2,18 @@ import Image from "next/image";
 import { getCurrentUser } from "@/lib/auth";
 import { isDemoMode } from "@/lib/topics";
 import { DIGITAL_EMPLOYEES, resolveEmployeeDisplayName } from "@/lib/boss-language";
-import { getEmployeeInstructions } from "@/lib/employee-instructions";
-import { updateEmployeeInstructions } from "@/app/admin/actions";
+import { getEmployeeInstructions, getEmployeeInstructionVersions } from "@/lib/employee-instructions";
+import type { EmployeeInstructionVersion } from "@/lib/employee-instructions";
+import { getBrandConfig } from "@/lib/brand-config";
+import { GLOBAL_SKILL, EMPLOYEE_DEFAULT_SKILL } from "@/lib/ai/skills";
+import { updateEmployeeInstructions, restoreEmployeeInstructionVersion, updateBrandConfig } from "@/app/admin/actions";
 import { Button } from "@/components/ui/button";
-import { TOPIC_DISCOVERY_SYSTEM_PROMPT } from "@/lib/ai/topic-discovery";
-import { EXTERNAL_RESEARCH_SYSTEM_PROMPT } from "@/lib/ai/research-external";
-import {
-  VIDEO_SYSTEM_PROMPT,
-  XHS_SYSTEM_PROMPT,
-  WECHAT_OUTLINE_SYSTEM_PROMPT,
-} from "@/lib/ai/content-schemas";
-import { COMPLIANCE_SYSTEM_PROMPT } from "@/lib/ai/compliance-schemas";
-import { PERFORMANCE_EXTRACTION_SYSTEM_PROMPT } from "@/lib/ai/performance-schemas";
 import type { EmployeeId } from "@/lib/boss-language";
 
 /**
  * 数字员工手册 — one page, every employee's job spelled out: a fixed
- * safety core (code-only, never editable here) plus an ADMIN-editable
+ * safety core (code-only, never editable here — GLOBAL_SKILL +
+ * EMPLOYEE_DEFAULT_SKILL, see src/lib/ai/skills.ts) plus an ADMIN-editable
  * addendum (tone/style/extra guidance), appended after the core every
  * time that employee actually runs — see src/lib/ai/prompt-addendum.ts.
  * Live user instruction: "我可以随时更改".
@@ -34,23 +29,30 @@ const CORE_SUMMARY: Record<EmployeeId, string> = {
   analyst: "只能读取截图里真实可见的数字，看不清就留空，不能靠猜；不读取截图里的人名或评论内容。",
 };
 
-const RAW_PROMPT: Partial<Record<EmployeeId, string>> = {
-  planner: TOPIC_DISCOVERY_SYSTEM_PROMPT,
-  researcher: EXTERNAL_RESEARCH_SYSTEM_PROMPT,
-  "video-editor": VIDEO_SYSTEM_PROMPT,
-  "xiaohongshu-editor": XHS_SYSTEM_PROMPT,
-  "wechat-editor": WECHAT_OUTLINE_SYSTEM_PROMPT,
-  compliance: COMPLIANCE_SYSTEM_PROMPT,
-  analyst: PERFORMANCE_EXTRACTION_SYSTEM_PROMPT,
-};
+const BRAND_CONFIG_FORM_FIELDS: Array<{ name: string; label: string; multiline?: boolean }> = [
+  { name: "companyNameEn", label: "公司名（英文）" },
+  { name: "companyNameZh", label: "公司名（中文）" },
+  { name: "contentBrand", label: "内容品牌" },
+  { name: "expertName", label: "专家 IP 名" },
+  { name: "videoOutro", label: "视频号固定 Outro", multiline: true },
+  { name: "wechatFooter", label: "公众号底部 Footer", multiline: true },
+];
 
 export default async function HandbookPage() {
-  const [demo, user, employeeInstructions] = await Promise.all([
+  const [demo, user, employeeInstructions, brandConfig] = await Promise.all([
     isDemoMode(),
     getCurrentUser(),
     getEmployeeInstructions(),
+    getBrandConfig(),
   ]);
   const canEdit = !demo && user?.role === "ADMIN";
+  const versionsByEmployee: Partial<Record<EmployeeId, EmployeeInstructionVersion[]>> = canEdit
+    ? Object.fromEntries(
+        await Promise.all(
+          DIGITAL_EMPLOYEES.map(async (e) => [e.id, await getEmployeeInstructionVersions(e.id)] as const),
+        ),
+      )
+    : {};
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8">
@@ -66,63 +68,146 @@ export default async function HandbookPage() {
         <p className="card px-4 py-3 text-sm text-[var(--muted)]">当前为演示数据（未连接 Supabase），编辑已禁用。</p>
       )}
 
-      <div className="flex flex-col gap-6">
-        {DIGITAL_EMPLOYEES.map((employee) => (
-          <section key={employee.id} className="card flex flex-col gap-3 px-5 py-4">
-            <div className="flex items-center gap-3">
-              <Image
-                src={`/employees/${employee.id}.png`}
-                alt=""
-                width={48}
-                height={48}
-                className="h-12 w-12 shrink-0 rounded-full object-cover"
-              />
-              <div>
-                <p className="font-semibold">{resolveEmployeeDisplayName(employee.id, {})}</p>
-                <p className="text-xs text-[var(--muted)]">{employee.responsibility}</p>
+      <details className="card px-5 py-4 text-sm">
+        <summary className="cursor-pointer font-semibold">公司共同工作守则（Global Skill，全体员工共用，固定不可修改）</summary>
+        <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap text-xs text-[var(--muted)]">{GLOBAL_SKILL}</pre>
+      </details>
+
+      {canEdit && (
+        <section className="card flex flex-col gap-3 px-5 py-4">
+          <div>
+            <p className="font-semibold">公司品牌配置</p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              视频号/小红书/公众号生成后的品牌校验（见每篇内容下方的黄色提示）依据这里的值。留空的字段保持不变。
+            </p>
+          </div>
+          <form action={updateBrandConfig} className="flex flex-col gap-3">
+            {BRAND_CONFIG_FORM_FIELDS.map((field) => (
+              <div key={field.name} className="flex flex-col gap-1">
+                <label className="text-xs font-semibold text-[var(--muted)]">{field.label}</label>
+                {field.multiline ? (
+                  <textarea
+                    name={field.name}
+                    defaultValue={brandConfig[field.name as keyof typeof brandConfig]}
+                    rows={2}
+                    className="rounded-[var(--radius-control)] border border-[var(--border)] bg-transparent px-3 py-2 text-sm"
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    name={field.name}
+                    defaultValue={brandConfig[field.name as keyof typeof brandConfig]}
+                    className="rounded-[var(--radius-control)] border border-[var(--border)] bg-transparent px-3 py-2 text-sm"
+                  />
+                )}
               </div>
+            ))}
+            <div>
+              <Button type="submit" variant="secondary" className="text-sm">
+                保存品牌配置
+              </Button>
             </div>
+          </form>
+        </section>
+      )}
 
-            <div className="rounded-[var(--radius-control)] bg-[var(--muted)]/8 px-3.5 py-3 text-sm">
-              <p className="mb-1 text-xs font-semibold text-[var(--muted)]">安全底线（固定，不可修改）</p>
-              {CORE_SUMMARY[employee.id]}
-              {RAW_PROMPT[employee.id] && (
-                <details className="mt-2">
-                  <summary className="cursor-pointer text-xs text-[var(--muted)]">查看完整系统规则原文（英文）</summary>
-                  <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-[var(--muted)]">
-                    {RAW_PROMPT[employee.id]}
-                  </pre>
-                </details>
-              )}
-            </div>
-
-            {canEdit ? (
-              <form action={updateEmployeeInstructions} className="flex flex-col gap-2">
-                <input type="hidden" name="employeeId" value={employee.id} />
-                <label className="text-xs font-semibold text-[var(--muted)]">补充说明（语气、风格、额外注意事项）</label>
-                <textarea
-                  name="customInstructions"
-                  defaultValue={employeeInstructions[employee.id] ?? ""}
-                  rows={3}
-                  placeholder="留空则不追加任何内容"
-                  className="rounded-[var(--radius-control)] border border-[var(--border)] bg-transparent px-3 py-2 text-sm"
+      <div className="flex flex-col gap-6">
+        {DIGITAL_EMPLOYEES.map((employee) => {
+          const versions = versionsByEmployee[employee.id] ?? [];
+          return (
+            <section key={employee.id} className="card flex flex-col gap-3 px-5 py-4">
+              <div className="flex items-center gap-3">
+                <Image
+                  src={`/employees/${employee.id}.png`}
+                  alt=""
+                  width={48}
+                  height={48}
+                  className="h-12 w-12 shrink-0 rounded-full object-cover"
                 />
                 <div>
-                  <Button type="submit" variant="secondary" className="text-sm">
-                    保存
-                  </Button>
+                  <p className="font-semibold">{resolveEmployeeDisplayName(employee.id, {})}</p>
+                  <p className="text-xs text-[var(--muted)]">{employee.responsibility}</p>
                 </div>
-              </form>
-            ) : (
-              employeeInstructions[employee.id] && (
-                <div className="rounded-[var(--radius-control)] border border-[var(--border)] px-3.5 py-3 text-sm">
-                  <p className="mb-1 text-xs font-semibold text-[var(--muted)]">补充说明</p>
-                  {employeeInstructions[employee.id]}
-                </div>
-              )
-            )}
-          </section>
-        ))}
+              </div>
+
+              <div className="rounded-[var(--radius-control)] bg-[var(--muted)]/8 px-3.5 py-3 text-sm">
+                <p className="mb-1 text-xs font-semibold text-[var(--muted)]">安全底线（固定，不可修改）</p>
+                {CORE_SUMMARY[employee.id]}
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs text-[var(--muted)]">查看完整 Skill 原文</summary>
+                  <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-xs text-[var(--muted)]">
+                    {EMPLOYEE_DEFAULT_SKILL[employee.id]}
+                  </pre>
+                </details>
+              </div>
+
+              {canEdit ? (
+                <form action={updateEmployeeInstructions} className="flex flex-col gap-2">
+                  <input type="hidden" name="employeeId" value={employee.id} />
+                  <label className="text-xs font-semibold text-[var(--muted)]">补充说明（语气、风格、额外注意事项）</label>
+                  <textarea
+                    name="customInstructions"
+                    defaultValue={employeeInstructions[employee.id] ?? ""}
+                    rows={3}
+                    placeholder="留空则不追加任何内容"
+                    className="rounded-[var(--radius-control)] border border-[var(--border)] bg-transparent px-3 py-2 text-sm"
+                  />
+                  <label className="text-xs font-semibold text-[var(--muted)]">修改说明（可选，方便日后回顾这次改了什么）</label>
+                  <input
+                    type="text"
+                    name="changeNote"
+                    placeholder="例如：语气更简洁一些"
+                    className="rounded-[var(--radius-control)] border border-[var(--border)] bg-transparent px-3 py-2 text-sm"
+                  />
+                  <div>
+                    <Button type="submit" variant="secondary" className="text-sm">
+                      保存
+                    </Button>
+                  </div>
+                </form>
+              ) : (
+                employeeInstructions[employee.id] && (
+                  <div className="rounded-[var(--radius-control)] border border-[var(--border)] px-3.5 py-3 text-sm">
+                    <p className="mb-1 text-xs font-semibold text-[var(--muted)]">补充说明</p>
+                    {employeeInstructions[employee.id]}
+                  </div>
+                )
+              )}
+
+              {canEdit && versions.length > 0 && (
+                <details className="rounded-[var(--radius-control)] border border-[var(--border)] px-3.5 py-3 text-sm">
+                  <summary className="cursor-pointer text-xs font-semibold text-[var(--muted)]">
+                    历史版本（{versions.length}）
+                  </summary>
+                  <ul className="mt-2 flex flex-col gap-2">
+                    {versions.map((v) => (
+                      <li key={v.id} className="rounded-[var(--radius-control)] border border-[var(--border)] px-3 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-xs text-[var(--muted)]">
+                            v{v.version} · {new Date(v.updated_at).toLocaleString("zh-CN")}
+                            {v.change_note ? ` · ${v.change_note}` : ""}
+                          </p>
+                          {v.id !== versions[0].id && (
+                            <form action={restoreEmployeeInstructionVersion}>
+                              <input type="hidden" name="employeeId" value={employee.id} />
+                              <input type="hidden" name="version" value={v.version} />
+                              <Button type="submit" variant="secondary" className="text-xs">
+                                恢复这个版本
+                              </Button>
+                            </form>
+                          )}
+                        </div>
+                        {v.custom_instructions && (
+                          <p className="mt-1 whitespace-pre-wrap text-xs">{v.custom_instructions}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </section>
+          );
+        })}
       </div>
     </div>
   );
