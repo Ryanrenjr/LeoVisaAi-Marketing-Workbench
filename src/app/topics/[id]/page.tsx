@@ -41,16 +41,14 @@ import { ResearchPackView } from "@/components/research-pack-view";
 import { TopicTabs, type TabDef } from "@/components/content/topic-tabs";
 import { VideoContentView } from "@/components/content/video-content-view";
 import { XiaohongshuContentView } from "@/components/content/xiaohongshu-content-view";
-import { WechatFullArticleView, WechatOutlineView } from "@/components/content/wechat-content-view";
+import { WechatArticleView, WechatFullArticleView, WechatOutlineView } from "@/components/content/wechat-content-view";
 import { ComplianceReviewResult } from "@/components/compliance-review-result";
 import { archiveTopic, rescoreTopic, startResearch } from "../actions";
 import { approveResearch, requestResearchChanges, runResearch } from "../research-actions";
-import {
-  generateContent,
-  generateFullArticle,
-  regeneratePlatformContent,
-} from "../content-actions";
+import { generateContent, regeneratePlatformContent } from "../content-actions";
 import { runComplianceReview } from "../compliance-actions";
+import { reviseContentAsset } from "../revision-actions";
+import { CONTENT_TYPE_REVISION } from "@/lib/content-mapping";
 import type { ContentPlatform, TopicActivity } from "@/lib/types";
 
 function latestPlatformActivity(
@@ -143,16 +141,36 @@ export default async function TopicDetailPage({
   // these tasks. Each option set is independent (per task type), computed
   // without executing anything. See docs/model-router.md.
   const isAdmin = canShowActions && user.role === "ADMIN";
-  const [researchOptions, videoOptions, xhsOptions, wechatOptions, wechatFullOptions, complianceOptions] = isAdmin
+  const [
+    researchOptions,
+    videoOptions,
+    xhsOptions,
+    wechatOptions,
+    complianceOptions,
+    videoRevisionOptions,
+    xhsRevisionOptions,
+    xhsPagesRevisionOptions,
+    wechatRevisionOptions,
+  ] = isAdmin
     ? await Promise.all([
         getTaskModelOptions("RESEARCH"),
         getTaskModelOptions("VIDEO_WRITING"),
         getTaskModelOptions("XIAOHONGSHU_WRITING"),
-        getTaskModelOptions("WECHAT_WRITING"),
-        getTaskModelOptions("WECHAT_FULL_ARTICLE"),
+        getTaskModelOptions("WECHAT_ARTICLE_WRITING"),
         getTaskModelOptions("COMPLIANCE"),
+        getTaskModelOptions("VIDEO_REVISION"),
+        getTaskModelOptions("XIAOHONGSHU_REVISION"),
+        getTaskModelOptions("XIAOHONGSHU_PAGES_REVISION"),
+        getTaskModelOptions("WECHAT_ARTICLE_REVISION"),
       ])
-    : [null, null, null, null, null, null];
+    : [null, null, null, null, null, null, null, null, null];
+  const revisionOptionsByTaskType = {
+    VIDEO_REVISION: videoRevisionOptions,
+    XIAOHONGSHU_REVISION: xhsRevisionOptions,
+    XIAOHONGSHU_PAGES_REVISION: xhsPagesRevisionOptions,
+    WECHAT_ARTICLE_REVISION: wechatRevisionOptions,
+  } as const;
+  const canReviseHere = canShowActions && canManageContentAssets(user.role);
 
   const aiConfigured = Boolean(researchOptions?.models.some((m) => m.configured));
   const contentReady = Boolean(videoOptions?.models.some((m) => m.configured));
@@ -169,11 +187,26 @@ export default async function TopicDetailPage({
   const xhsLineage = lineages.find(
     (l) => l.platform === "XIAOHONGSHU" && l.contentType === "xiaohongshu_post",
   );
+  // 图文规划 (per-page image-text plan) — generated on its own dedicated
+  // page (/team/xiaohongshu-image-planner), not from this tab's generate
+  // button, but still shown/reviewable/revisable here like any other
+  // lineage. See content-schemas.ts XiaohongshuPagesPlanSchema.
+  const xhsPagesLineage = lineages.find(
+    (l) => l.platform === "XIAOHONGSHU" && l.contentType === "xiaohongshu_pages",
+  );
+  // Legacy two-step lineages — the outline → full-article flow was
+  // replaced by direct wechat_article generation (live user instruction:
+  // "不要大纲直接给文字"). Kept read-only here so any topic that already
+  // has one from before this change stays visible; no new topic can
+  // create these any more (removed from the generate button below).
   const wechatOutlineLineage = lineages.find(
     (l) => l.platform === "WECHAT_OFFICIAL_ACCOUNT" && l.contentType === "wechat_outline",
   );
   const wechatFullArticleLineage = lineages.find(
     (l) => l.platform === "WECHAT_OFFICIAL_ACCOUNT" && l.contentType === "wechat_full_article",
+  );
+  const wechatArticleLineage = lineages.find(
+    (l) => l.platform === "WECHAT_OFFICIAL_ACCOUNT" && l.contentType === "wechat_article",
   );
 
   function generateGateNotice() {
@@ -195,10 +228,10 @@ export default async function TopicDetailPage({
     return null;
   }
 
-  const PLATFORM_TASK_TYPE: Record<ContentPlatform, "VIDEO_WRITING" | "XIAOHONGSHU_WRITING" | "WECHAT_WRITING"> = {
+  const PLATFORM_TASK_TYPE: Record<ContentPlatform, "VIDEO_WRITING" | "XIAOHONGSHU_WRITING" | "WECHAT_ARTICLE_WRITING"> = {
     VIDEO_CHANNEL: "VIDEO_WRITING",
     XIAOHONGSHU: "XIAOHONGSHU_WRITING",
-    WECHAT_OFFICIAL_ACCOUNT: "WECHAT_WRITING",
+    WECHAT_OFFICIAL_ACCOUNT: "WECHAT_ARTICLE_WRITING",
   };
 
   const platformTab = (
@@ -251,6 +284,10 @@ export default async function TopicDetailPage({
   const complianceSection = (platformLabel: string, asset: (typeof contentAssets)[number] | undefined) => {
     if (!asset) return null;
     const review = latestComplianceReviewByAssetId.get(asset.id);
+    const needsRevision = Boolean(review && review.overall_risk !== "LOW");
+    const revisionTaskType = CONTENT_TYPE_REVISION[asset.content_type];
+    const canReviseThis = needsRevision && Boolean(revisionTaskType);
+    const revisionOptions = revisionTaskType ? revisionOptionsByTaskType[revisionTaskType] : null;
     return (
       <div key={asset.id} className="border-b border-[var(--border)] pb-4 last:border-b-0">
         <p className="text-sm font-medium">{platformLabel}</p>
@@ -265,6 +302,22 @@ export default async function TopicDetailPage({
               models={complianceOptions.models}
               defaultModel={complianceOptions.defaultModel}
               resolutionError={complianceOptions.resolutionError}
+            />
+          </div>
+        )}
+        {canReviseHere && canReviseThis && revisionTaskType && revisionOptions && (
+          <div className="mt-2">
+            <GenerateAction
+              action={async (override) => {
+                "use server";
+                await reviseContentAsset(asset.id, override);
+              }}
+              label="生成修改版（终审修改员）"
+              taskType={revisionTaskType}
+              className="w-full py-3"
+              models={revisionOptions.models}
+              defaultModel={revisionOptions.defaultModel}
+              resolutionError={revisionOptions.resolutionError}
             />
           </div>
         )}
@@ -382,46 +435,38 @@ export default async function TopicDetailPage({
         <div className="flex flex-col gap-6">
           {platformTab(
             "WECHAT_OFFICIAL_ACCOUNT",
-            wechatOutlineLineage,
-            wechatOutlineLineage && (
-              <WechatOutlineView
-                history={wechatOutlineLineage.history}
+            wechatArticleLineage,
+            wechatArticleLineage && (
+              <WechatArticleView
+                history={wechatArticleLineage.history}
                 sourcesByPackId={contentSourcesByPackId}
-                images={imagesByAssetId.get(wechatOutlineLineage.latest.id) ?? []}
+                images={imagesByAssetId.get(wechatArticleLineage.latest.id) ?? []}
+                brand={brandConfig}
               />
             ),
           )}
-          {wechatOutlineLineage && (
-            <div className="flex flex-col gap-4 border-t border-[var(--border)] pt-6">
-              <h3 className="text-sm font-medium text-[var(--muted)]">完整文章</h3>
-              {wechatFullArticleLineage ? (
-                <WechatFullArticleView
-                  history={wechatFullArticleLineage.history}
-                  sourcesByPackId={contentSourcesByPackId}
-                  brand={brandConfig}
-                />
-              ) : (
-                <p className="text-sm text-[var(--muted)]">尚未生成完整文章。</p>
-              )}
-              {canManageContent && contentGateOpen && contentReady && wechatFullOptions && (
-                <div className="flex flex-wrap items-start gap-2">
-                  <GenerateAction
-                    action={generateFullArticle.bind(null, topic.id)}
-                    label="生成完整文章"
-                    variant={wechatFullArticleLineage ? "secondary" : "primary"}
-                    taskType="WECHAT_FULL_ARTICLE"
-                    models={wechatFullOptions.models}
-                    defaultModel={wechatFullOptions.defaultModel}
-                    resolutionError={wechatFullOptions.resolutionError}
+          {(wechatOutlineLineage || wechatFullArticleLineage) && (
+            <details className="border-t border-[var(--border)] pt-4">
+              <summary className="cursor-pointer text-xs text-[var(--muted)]">
+                旧版大纲/完整文章流程的历史记录（已停用，仅供查看）
+              </summary>
+              <div className="mt-4 flex flex-col gap-6">
+                {wechatOutlineLineage && (
+                  <WechatOutlineView
+                    history={wechatOutlineLineage.history}
+                    sourcesByPackId={contentSourcesByPackId}
+                    images={imagesByAssetId.get(wechatOutlineLineage.latest.id) ?? []}
                   />
-                  {wechatFullArticleLineage && (
-                    <Link href={`/topics/${topic.id}/content/${wechatFullArticleLineage.latest.id}/edit`}>
-                      <Button variant="secondary">编辑</Button>
-                    </Link>
-                  )}
-                </div>
-              )}
-            </div>
+                )}
+                {wechatFullArticleLineage && (
+                  <WechatFullArticleView
+                    history={wechatFullArticleLineage.history}
+                    sourcesByPackId={contentSourcesByPackId}
+                    brand={brandConfig}
+                  />
+                )}
+              </div>
+            </details>
           )}
         </div>
       ),
@@ -430,15 +475,22 @@ export default async function TopicDetailPage({
       key: "compliance",
       label: "合规",
       content:
-        !videoLineage && !xhsLineage && !wechatOutlineLineage && !wechatFullArticleLineage ? (
+        !videoLineage &&
+        !xhsLineage &&
+        !xhsPagesLineage &&
+        !wechatArticleLineage &&
+        !wechatOutlineLineage &&
+        !wechatFullArticleLineage ? (
           <p className="text-sm text-[var(--muted)]">尚未生成任何内容草稿，暂无可审核的内容。</p>
         ) : (
           <div className="flex flex-col gap-4">
             {complianceSection(CONTENT_PLATFORM_LABEL.VIDEO_CHANNEL, videoLineage?.latest)}
-            {complianceSection(CONTENT_PLATFORM_LABEL.XIAOHONGSHU, xhsLineage?.latest)}
-            {complianceSection(`${CONTENT_PLATFORM_LABEL.WECHAT_OFFICIAL_ACCOUNT}大纲`, wechatOutlineLineage?.latest)}
+            {complianceSection(`${CONTENT_PLATFORM_LABEL.XIAOHONGSHU}标题文案`, xhsLineage?.latest)}
+            {complianceSection(`${CONTENT_PLATFORM_LABEL.XIAOHONGSHU}图文规划`, xhsPagesLineage?.latest)}
+            {complianceSection(CONTENT_PLATFORM_LABEL.WECHAT_OFFICIAL_ACCOUNT, wechatArticleLineage?.latest)}
+            {complianceSection(`${CONTENT_PLATFORM_LABEL.WECHAT_OFFICIAL_ACCOUNT}大纲（旧版）`, wechatOutlineLineage?.latest)}
             {complianceSection(
-              `${CONTENT_PLATFORM_LABEL.WECHAT_OFFICIAL_ACCOUNT}完整文章`,
+              `${CONTENT_PLATFORM_LABEL.WECHAT_OFFICIAL_ACCOUNT}完整文章（旧版）`,
               wechatFullArticleLineage?.latest,
             )}
           </div>
@@ -601,7 +653,7 @@ export default async function TopicDetailPage({
         </section>
       )}
 
-      {videoLineage && xhsLineage && wechatOutlineLineage && (
+      {videoLineage && xhsLineage && wechatArticleLineage && (
         <p className="card px-4 py-3 text-sm">
           三个平台的内容草稿都已就绪 →{" "}
           <Link href={`/topics/${topic.id}?tab=compliance`} className="font-medium text-[var(--accent)] hover:underline">

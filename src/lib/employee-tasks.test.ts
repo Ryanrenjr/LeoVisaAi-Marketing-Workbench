@@ -214,6 +214,7 @@ describe("buildHomeSpotlight", () => {
     topicTitle: "合规选题",
     contentAssetId: "asset-3",
     platformLabel: "VIDEO_CHANNEL",
+    contentType: "video_script",
     latestReview: null,
   };
 

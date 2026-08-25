@@ -5,12 +5,16 @@ import type { ZodType } from "zod";
 import {
   VIDEO_SYSTEM_PROMPT,
   XHS_SYSTEM_PROMPT,
+  XHS_PAGES_SYSTEM_PROMPT,
   WECHAT_OUTLINE_SYSTEM_PROMPT,
   WECHAT_FULL_ARTICLE_SYSTEM_PROMPT,
+  WECHAT_ARTICLE_SYSTEM_PROMPT,
   VideoChannelContentSchema,
   XiaohongshuContentSchema,
+  XiaohongshuPagesPlanSchema,
   WechatOutlineSchema,
   WechatFullArticleSchema,
+  WechatArticleSchema,
   buildEvidenceContextBlock,
   buildOutlineContextBlock,
   buildSourceManifest,
@@ -18,8 +22,10 @@ import {
   buildForbiddenPhraseNotes,
   type VideoChannelContent,
   type XiaohongshuContent,
+  type XiaohongshuPagesPlan,
   type WechatOutline,
   type WechatFullArticle,
+  type WechatArticle,
   type EvidenceNote,
 } from "./content-schemas";
 import { appendCustomInstructions } from "./prompt-addendum";
@@ -190,7 +196,7 @@ export async function generateVideoChannelContent(
     taskInstruction: "Write the VIDEO_CHANNEL script now, following the structure and rules above.",
     schema: VideoChannelContentSchema,
     maxTokens: 8000,
-    textFieldsForScan: (c) => [c.title, c.hook, c.cover_text, c.full_script, c.cta],
+    textFieldsForScan: (c) => [c.title, c.hook, c.cover_text, c.full_script, c.cta, c.publish_title, c.publish_caption],
   });
 }
 
@@ -200,10 +206,26 @@ export async function generateXiaohongshuContent(
 ): Promise<ContentAgentResult<XiaohongshuContent>> {
   return runContentGeneration(input, {
     systemPrompt: appendCustomInstructions(buildSkillPrompt("xiaohongshu-editor", XHS_SYSTEM_PROMPT), customInstructions),
-    taskInstruction: "Write the Xiaohongshu content now, following the structure and rules above.",
+    taskInstruction: "Write the Xiaohongshu title and caption now, following the rules above.",
     schema: XiaohongshuContentSchema,
+    maxTokens: 4000,
+    textFieldsForScan: (c) => [...c.title_options, c.cover_title, c.caption],
+  });
+}
+
+export async function generateXiaohongshuPagesPlan(
+  input: EvidenceInput,
+  customInstructions?: string | null,
+): Promise<ContentAgentResult<XiaohongshuPagesPlan>> {
+  return runContentGeneration(input, {
+    systemPrompt: appendCustomInstructions(
+      buildSkillPrompt("xiaohongshu-image-planner", XHS_PAGES_SYSTEM_PROMPT),
+      customInstructions,
+    ),
+    taskInstruction: "Plan the Xiaohongshu 图文 page-by-page image-text content now, following the rules above.",
+    schema: XiaohongshuPagesPlanSchema,
     maxTokens: 8000,
-    textFieldsForScan: (c) => [...c.title_options, c.cover_title, ...c.pages, c.caption],
+    textFieldsForScan: (c) => [...c.pages],
   });
 }
 
@@ -218,6 +240,30 @@ export async function generateWechatOutline(
     schema: WechatOutlineSchema,
     maxTokens: 8000,
     textFieldsForScan: (c) => [...c.title_options, c.summary, ...c.detailed_outline, ...c.key_claims],
+  });
+}
+
+export async function generateWechatArticle(
+  input: EvidenceInput,
+  customInstructions?: string | null,
+): Promise<ContentAgentResult<WechatArticle>> {
+  return runContentGeneration(input, {
+    systemPrompt: appendCustomInstructions(buildSkillPrompt("wechat-editor", WECHAT_ARTICLE_SYSTEM_PROMPT), customInstructions),
+    taskInstruction:
+      "Write the complete, publish-ready WeChat Official Account ARTICLE now (no outline step), following the rules above.",
+    schema: WechatArticleSchema,
+    maxTokens: 16000,
+    textFieldsForScan: (c) => [
+      c.title,
+      ...c.title_options,
+      c.summary,
+      c.full_article,
+      c.closing_note,
+      ...c.golden_quotes,
+      c.cover_title,
+      c.cover_subtitle,
+      c.share_caption,
+    ],
   });
 }
 

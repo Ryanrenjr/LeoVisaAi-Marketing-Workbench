@@ -65,13 +65,23 @@ LeoVisaAi 营销工作台 uses a **"digital employee" mental model** for its
 default (Boss Mode) presentation: the backend is workflow/agent-based
 (Topic → Research Agent → Content Agent → Compliance Agent, gated by
 human approval), but the user-facing Boss Mode presents that same backend
-as **five digital employees** (A 选题策划员 / B 政策研究员 / C 内容编辑 / D
-合规审核员 / E 数据分析员) doing the repetitive work, with **Leo** — the
-human — reviewing only the decisions AI cannot responsibly make. D and E
-went live by explicit live user instruction, overriding this file's
-earlier "exactly four, do not add a fifth without instruction" note — any
-further employee beyond these five still requires an explicit instruction.
-An ADMIN can give any employee a custom display name
+as **digital employees** (A 选题策划员 / B 政策研究员 / C-E three
+platform-specific content editors + 图片设计员 / G 合规审核员 / H 终审修改员 /
+I 内容整合员 / J 数据分析员 / K 小红书图文规划员 — see `src/lib/boss-language.ts`
+`DIGITAL_EMPLOYEES` for the exact current roster and letters) doing the
+repetitive work, with **Leo** — the human — reviewing only the decisions
+AI cannot responsibly make. Originally exactly four; every employee added
+since went live by explicit live user instruction — H 终审修改员 takes what
+G 合规审核员 flags and produces a revised draft (see
+`src/app/topics/revision-actions.ts`); I 内容整合员 is purely a read-only
+view assembling each platform's latest text + images together for Leo's
+final look (no generation, no mutation — see
+`src/app/team/integrator/page.tsx`); K 小红书图文规划员 splits off the
+per-page 图文 planning + image generation that used to live inside D 小红书
+标题文案员, so D now only writes the title/caption (see
+`src/app/team/xiaohongshu-image-planner/page.tsx`). Any further employee
+still requires an explicit instruction. An ADMIN can give any employee a
+custom display name
 (`employee_names` table); this never changes which employee owns which
 task. See [docs/digital-employee-ux.md](docs/digital-employee-ux.md) for
 the full mapping between employee UI and backend modules.
@@ -85,9 +95,18 @@ This is a **presentation-layer distinction only**:
 - The interface must remain extremely minimal — no robot avatars, no
   cartoon illustrations, no gamified virtual office, no colourful AI
   aesthetic. Professional, restrained, typography-first.
-- Admin Mode (for `ADMIN`) keeps full operational access to the
-  underlying system; Boss Mode is an abstraction over the same data, not
-  a separate product.
+- There is no separate "Admin Mode" to switch into any more — live user
+  instruction removed the Boss/Admin view toggle (single-operator
+  reality made switching between two presentations of the same data
+  pointless). Every signed-in user sees the same home page; ADMIN simply
+  also sees a "管理" nav link, gated on the real role directly, never a
+  cookie-backed mode. The home page's collapsed "运营列表" section (quick
+  counts + links to the pipeline-stage pages) was removed by live user
+  instruction along with the explanatory subtitle/gate-note/loop-back
+  text on the pipeline — home page is now just the numbered employee
+  rail with no supporting prose (see src/app/page.tsx). Those
+  pipeline-stage pages (选题库/可进入拍摄/本周已发布/内容资产库) still exist
+  as routes but currently have no UI entry point from the home page.
 
 Leo Visa uses formal versioned Digital Employee Skills. A Skill is a
 production system instruction, not decorative profile copy. Each employee
@@ -165,7 +184,7 @@ in this application.
 - [docs/phase-3-plan.md](docs/phase-3-plan.md) — Research Agent milestone: AI architecture, anti-hallucination design, approval workflow
 - [docs/phase-3-5-plan.md](docs/phase-3-5-plan.md) — Research Agent hardening: RESEARCH_READY, confidence handling, full Phase 1 status model, expanded test coverage
 - [docs/phase-4-plan.md](docs/phase-4-plan.md) — Content Agent: one research → three platform drafts, evidence boundary, source traceability, versioning
-- [docs/digital-employee-ux.md](docs/digital-employee-ux.md) — Boss Mode / Admin Mode: the digital-employee presentation layer and its mapping to backend modules
+- [docs/digital-employee-ux.md](docs/digital-employee-ux.md) — the digital-employee presentation layer and its mapping to backend modules
 - [docs/model-router.md](docs/model-router.md) — the multi-provider AI Model Router: task routing, the Model Registry, free-first Development Mode, paid-model warnings, provider/model override
 - [docs/search-router.md](docs/search-router.md) — the Search Router: Search Provider ≠ AI Model, Tavily Search → analysis-model handoff, source-manifest grounding, free-first/no-fallback rule
 - [docs/ai-workflows.md](docs/ai-workflows.md) — Research + Content generation walked through end to end, from an ADMIN's perspective

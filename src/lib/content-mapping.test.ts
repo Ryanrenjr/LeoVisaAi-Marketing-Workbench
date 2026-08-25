@@ -7,25 +7,31 @@ describe("deriveTitleAndContent", () => {
     expect(result).toEqual({ title: "标题", content: "口播稿" });
   });
 
-  it("uses the first title option and joins pages for XIAOHONGSHU", () => {
+  it("uses the first title option and the caption for a XIAOHONGSHU title/caption asset (xiaohongshu_post)", () => {
     const result = deriveTitleAndContent("XIAOHONGSHU", {
       title_options: ["选项一", "选项二"],
-      pages: ["第一页", "第二页"],
+      cover_title: "封面标题",
+      caption: "发布文案",
     });
-    expect(result).toEqual({ title: "选项一", content: "第一页\n\n第二页" });
+    expect(result).toEqual({ title: "选项一", content: "发布文案" });
   });
 
   it("falls back to cover_title when XIAOHONGSHU has no title_options", () => {
-    const result = deriveTitleAndContent("XIAOHONGSHU", { title_options: [], cover_title: "封面标题", pages: [] });
+    const result = deriveTitleAndContent("XIAOHONGSHU", { title_options: [], cover_title: "封面标题", caption: "" });
     expect(result.title).toBe("封面标题");
   });
 
-  it("uses the first title option and summary for a WeChat outline", () => {
+  it("joins pages for a XIAOHONGSHU image-text plan (xiaohongshu_pages), distinguished by shape", () => {
+    const result = deriveTitleAndContent("XIAOHONGSHU", { pages: ["第一页", "第二页"] });
+    expect(result).toEqual({ title: "图文规划（共 2 页）", content: "第一页\n\n第二页" });
+  });
+
+  it("uses title/full_article for a direct-generation WeChat article", () => {
     const result = deriveTitleAndContent("WECHAT_OFFICIAL_ACCOUNT", {
-      title_options: ["候选一"],
-      summary: "摘要内容",
+      title: "标题",
+      full_article: "正文内容",
     });
-    expect(result).toEqual({ title: "候选一", content: "摘要内容" });
+    expect(result).toEqual({ title: "标题", content: "正文内容" });
   });
 });
 
@@ -43,25 +49,25 @@ describe("mergeEditIntoStructuredContent", () => {
     expect(merged.source_references).toEqual(["src-1"]);
   });
 
-  it("re-splits the edited body into pages for XIAOHONGSHU and updates cover_title/title_options[0]", () => {
+  it("updates title_options[0]/cover_title/caption for a XIAOHONGSHU title/caption asset (xiaohongshu_post)", () => {
     const merged = mergeEditIntoStructuredContent(
       "XIAOHONGSHU",
-      { title_options: ["旧标题", "备用标题"], cover_title: "旧封面", pages: ["旧P1"] },
+      { title_options: ["旧标题", "备用标题"], cover_title: "旧封面", caption: "旧文案" },
       "新标题",
-      "新P1\n\n新P2\n\n新P3",
+      "新文案",
     );
     expect(merged.title_options).toEqual(["新标题", "备用标题"]);
     expect(merged.cover_title).toBe("新标题");
+    expect(merged.caption).toBe("新文案");
+  });
+
+  it("re-splits the edited body into pages for a XIAOHONGSHU image-text plan, distinguished by shape", () => {
+    const merged = mergeEditIntoStructuredContent("XIAOHONGSHU", { pages: ["旧P1"] }, "ignored", "新P1\n\n新P2\n\n新P3");
     expect(merged.pages).toEqual(["新P1", "新P2", "新P3"]);
   });
 
-  it("drops empty page chunks after re-splitting XIAOHONGSHU content", () => {
-    const merged = mergeEditIntoStructuredContent(
-      "XIAOHONGSHU",
-      { title_options: ["t"], pages: [] },
-      "t",
-      "P1\n\n\n\nP2",
-    );
+  it("drops empty page chunks after re-splitting a XIAOHONGSHU image-text plan", () => {
+    const merged = mergeEditIntoStructuredContent("XIAOHONGSHU", { pages: [] }, "ignored", "P1\n\n\n\nP2");
     expect(merged.pages).toEqual(["P1", "P2"]);
   });
 

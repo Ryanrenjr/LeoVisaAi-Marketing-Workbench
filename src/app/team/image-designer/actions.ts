@@ -6,21 +6,48 @@ import { requireUser } from "@/lib/auth";
 import { canManageContentAssets } from "@/lib/permissions";
 import { getContentAssets, getTopicById } from "@/lib/topics";
 import { getLatestForLineage } from "@/lib/content-versions";
-import { buildImagePrompt } from "@/lib/ai/image-generation";
+import { buildCoverImagePrompt, buildCarouselImagePrompt } from "@/lib/ai/image-generation";
+import { getLatestLeoPortrait } from "@/lib/leo-portraits";
 import { runImageGenerationTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
 import { getEmployeeInstruction } from "@/lib/employee-instructions";
 import { appendCustomInstructions } from "@/lib/ai/prompt-addendum";
+import { saveGeneratedContentImage } from "@/lib/content-images";
 import type { ModelRef } from "@/lib/ai/providers/types";
+import type { ContentAsset } from "@/lib/types";
 
 /**
- * Generates one cover image for a topic's already-reviewed 小红书 post
- * draft. ADMIN-only, same gate as every other content-generation action
- * (canManageContentAssets) — this produces a real, billable OpenAI image.
+ * 小红书/视频封面 — one cover image, built from whichever draft exists
+ * (小红书 preferred when both exist, since that was this feature's
+ * original scope; falls back to 视频号 otherwise). ADMIN-only, same gate
+ * as every other content-generation action — produces a real, billable
+ * image.
  */
-export async function generateCoverImage(
+export async function generateCrossPlatformCover(
+  topicId: string,
+  includePortrait: boolean,
+  override?: ModelRef | null,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await requireUser();
+  if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
+
+  const topic = await getTopicById(topicId);
+  if (!topic) return { ok: false, error: "未找到选题。" };
+
+  const assets = await getContentAssets(topicId);
+  const xhsPost = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_post");
+  const videoScript = getLatestForLineage(assets, "VIDEO_CHANNEL", "video_script");
+  const source = xhsPost ?? videoScript;
+  if (!source) return { ok: false, error: "请先生成小红书文字或视频口播稿，再生成封面。" };
+
+  const platformLabel = source === xhsPost ? "小红书" : "视频号";
+  return runCoverGeneration(topic, source, platformLabel, user.id, override, includePortrait);
+}
+
+/** 公众号封面 — same cover-generation logic, scoped to the WeChat draft (article preferred, falling back to legacy outline/full-article lineages). */
+export async function generateWechatCover(
   topicId: string,
   override?: ModelRef | null,
 ): Promise<{ ok: boolean; error?: string }> {
@@ -31,28 +58,52 @@ export async function generateCoverImage(
   if (!topic) return { ok: false, error: "未找到选题。" };
 
   const assets = await getContentAssets(topicId);
-  const post = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_post");
-  if (!post) return { ok: false, error: "请先生成小红书文字草稿，再生成配图。" };
+  const article = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_article");
+  const outline = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_outline");
+  const fullArticle = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_full_article");
+  const source = article ?? fullArticle ?? outline;
+  if (!source) return { ok: false, error: "请先生成公众号文章，再生成封面。" };
+
+  return runCoverGeneration(topic, source, "公众号", user.id, override);
+}
+
+async function runCoverGeneration(
+  topic: { id: string; title: string; business: string },
+  source: ContentAsset,
+  platformLabel: string,
+  userId: string,
+  override?: ModelRef | null,
+  includePortrait = false,
+): Promise<{ ok: boolean; error?: string }> {
+  const supabase = await createClient();
+
+  let referenceImages: { bytes: Buffer; mimeType: string; filename: string }[] | undefined;
+  if (includePortrait) {
+    const portrait = await getLatestLeoPortrait();
+    if (!portrait) return { ok: false, error: "还没有上传过李尔王特写照片，请先在下方上传一张。" };
+    const { data: downloaded, error: downloadError } = await supabase.storage
+      .from("leo-portraits")
+      .download(portrait.image_path);
+    if (downloadError || !downloaded) return { ok: false, error: "读取特写照片失败，请重试。" };
+    const bytes = Buffer.from(await downloaded.arrayBuffer());
+    referenceImages = [{ bytes, mimeType: downloaded.type || "image/png", filename: portrait.image_path }];
+  }
 
   const customInstructions = await getEmployeeInstruction("image-designer");
   const prompt = appendCustomInstructions(
-    buildImagePrompt(topic, { title: post.title, content: post.content }),
+    buildCoverImagePrompt(topic, { title: source.title, text: source.content }, platformLabel, includePortrait),
     customInstructions,
   );
-  const result = await runImageGenerationTask(prompt, override);
+  const result = await runImageGenerationTask(prompt, override, referenceImages);
 
-  const supabase = await createClient();
-
-  if (isRouterResolutionFailure(result)) {
-    return { ok: false, error: result.error };
-  }
+  if (isRouterResolutionFailure(result)) return { ok: false, error: result.error };
 
   const model = getModel(result.provider, result.modelId);
   await writeUsageLog(supabase, {
     workflow_type: "image_generation",
     model_alias: `${result.provider}/${result.modelId}`,
-    topic_id: topicId,
-    platform: "XIAOHONGSHU",
+    topic_id: topic.id,
+    platform: source.platform,
     input_tokens: result.inputTokens,
     output_tokens: result.outputTokens,
     latency_ms: result.latencyMs,
@@ -64,30 +115,169 @@ export async function generateCoverImage(
     pricing_type_at_execution: model?.pricingType ?? null,
   });
 
-  if (!result.ok || !result.data) {
-    return { ok: false, error: result.error ?? "生成失败。" };
-  }
+  if (!result.ok || !result.data) return { ok: false, error: result.error ?? "生成失败。" };
 
   const [imageBase64] = result.data.images;
-  const bytes = Buffer.from(imageBase64, "base64");
-  const path = `${topicId}/${Date.now()}-${crypto.randomUUID()}.png`;
-
-  const { error: uploadError } = await supabase.storage
-    .from("content-images")
-    .upload(path, bytes, { contentType: "image/png" });
-  if (uploadError) return { ok: false, error: "图片已生成，但保存失败，请重试。" };
-
-  const { error: insertError } = await supabase.from("content_images").insert({
-    topic_id: topicId,
-    content_asset_id: post.id,
+  const saved = await saveGeneratedContentImage(supabase, {
+    topicId: topic.id,
+    contentAssetId: source.id,
     prompt,
-    image_path: path,
-    model_alias: `${result.provider}/${result.modelId}`,
+    imageBase64,
     provider: result.provider,
-    created_by: user.id,
+    modelId: result.modelId,
+    userId,
+    imageKind: "cover",
+    pageIndex: null,
   });
-  if (insertError) return { ok: false, error: "图片已生成，但记录保存失败，请重试。" };
+  if (!saved.ok) return saved;
 
   revalidatePath("/team/image-designer");
   return { ok: true };
+}
+
+/**
+ * 小红书图文 — one image per page of K（小红书图文规划员）'s latest 图文规划
+ * (xiaohongshu_pages: P1–Pn text plan), not the post's own title/caption
+ * draft. Live user instruction: K only writes the plan (P1 是什么、P2 怎么
+ * 设计……); 图片设计员 is the one with the "生成小红书图文" button that turns
+ * that plan into P1–P6 images. Runs sequentially, not in parallel, so one
+ * failure doesn't leave a half-finished, out-of-order set, and usage
+ * logging stays one row per real call.
+ */
+export async function generateXiaohongshuCarousel(
+  topicId: string,
+  override?: ModelRef | null,
+): Promise<{ ok: boolean; error?: string; generated?: number }> {
+  const user = await requireUser();
+  if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
+
+  const topic = await getTopicById(topicId);
+  if (!topic) return { ok: false, error: "未找到选题。" };
+
+  const assets = await getContentAssets(topicId);
+  const plan = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_pages");
+  if (!plan) return { ok: false, error: "请先请小红书图文规划员生成图文规划，再生成配图。" };
+
+  const pages = (plan.structured_content?.pages as string[] | undefined) ?? [];
+  if (pages.length === 0) return { ok: false, error: "这份图文规划没有分页内容。" };
+
+  const customInstructions = await getEmployeeInstruction("image-designer");
+  const supabase = await createClient();
+  let generated = 0;
+
+  for (let i = 0; i < pages.length; i++) {
+    const prompt = appendCustomInstructions(
+      buildCarouselImagePrompt(
+        topic,
+        { title: plan.title },
+        { text: pages[i], pageNumber: i + 1, totalPages: pages.length },
+      ),
+      customInstructions,
+    );
+    const result = await runImageGenerationTask(prompt, override);
+
+    if (isRouterResolutionFailure(result)) {
+      return { ok: generated > 0, error: result.error, generated };
+    }
+
+    const model = getModel(result.provider, result.modelId);
+    await writeUsageLog(supabase, {
+      workflow_type: "image_generation",
+      model_alias: `${result.provider}/${result.modelId}`,
+      topic_id: topic.id,
+      platform: "XIAOHONGSHU",
+      input_tokens: result.inputTokens,
+      output_tokens: result.outputTokens,
+      latency_ms: result.latencyMs,
+      success: result.ok,
+      error: result.ok ? null : result.error,
+      provider: result.provider,
+      task_type: "IMAGE_GENERATION",
+      digital_employee: TASK_TYPE_EMPLOYEE.IMAGE_GENERATION,
+      pricing_type_at_execution: model?.pricingType ?? null,
+    });
+
+    if (!result.ok || !result.data) {
+      return { ok: generated > 0, error: result.error ?? "生成失败。", generated };
+    }
+
+    const [imageBase64] = result.data.images;
+    const saved = await saveGeneratedContentImage(supabase, {
+      topicId: topic.id,
+      contentAssetId: plan.id,
+      prompt,
+      imageBase64,
+      provider: result.provider,
+      modelId: result.modelId,
+      userId: user.id,
+      imageKind: "carousel",
+      pageIndex: i + 1,
+    });
+    if (!saved.ok) return { ok: generated > 0, error: saved.error, generated };
+    generated++;
+  }
+
+  revalidatePath("/team/image-designer");
+  revalidatePath(`/topics/${topicId}`);
+  return { ok: true, generated };
+}
+
+const ALLOWED_PORTRAIT_MIME: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+};
+const MAX_PORTRAIT_BYTES = 8 * 1024 * 1024;
+
+/**
+ * ADMIN uploads a real photo of Leo — never AI-generated; it's later sent
+ * as a reference image to the Images EDIT endpoint (see
+ * generateOpenAIImageEdit in providers/openai-provider.ts). The second
+ * narrow upload exception in this app (the first is Employee E's
+ * performance screenshot) — see docs/security-boundaries.md.
+ */
+export async function uploadLeoPortrait(
+  _prevState: { error: string | null },
+  formData: FormData,
+): Promise<{ error: string | null }> {
+  const user = await requireUser();
+  if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
+
+  const file = formData.get("photo");
+  const label = String(formData.get("label") ?? "").trim() || null;
+  if (!(file instanceof File) || file.size === 0) return { error: "请选择一张照片。" };
+
+  const ext = ALLOWED_PORTRAIT_MIME[file.type];
+  if (!ext) return { error: "只支持 PNG / JPEG / WEBP 格式的照片。" };
+  if (file.size > MAX_PORTRAIT_BYTES) return { error: "照片文件过大（上限 8MB）。" };
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const supabase = await createClient();
+  const path = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("leo-portraits")
+    .upload(path, bytes, { contentType: file.type });
+  if (uploadError) return { error: "上传失败，请重试。" };
+
+  const { error: insertError } = await supabase.from("leo_portraits").insert({
+    image_path: path,
+    label,
+    created_by: user.id,
+  });
+  if (insertError) return { error: "照片已上传，但记录保存失败，请重试。" };
+
+  revalidatePath("/team/image-designer");
+  return { error: null };
+}
+
+export async function deleteLeoPortrait(id: string, imagePath: string): Promise<void> {
+  const user = await requireUser();
+  if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
+
+  const supabase = await createClient();
+  await supabase.storage.from("leo-portraits").remove([imagePath]);
+  await supabase.from("leo_portraits").delete().eq("id", id);
+
+  revalidatePath("/team/image-designer");
 }

@@ -27,7 +27,7 @@ If a future instruction asks for something that would require storing any
 of the above, treat that as a conflict with this document and flag it
 before implementing.
 
-### Post-publish performance data — the one narrow upload exception
+### Post-publish performance data — the first narrow upload exception
 
 **"No document upload feature anywhere in this app" had exactly one
 exception carved out, by explicit live user instruction** (Digital
@@ -66,6 +66,38 @@ Employee Expansion milestone — see CLAUDE.md history): Employee E (数据分�
   `src/lib/performance-analytics.ts`) — not another LLM call summarizing
   the data, so it can never fabricate a trend that isn't in the real
   numbers.
+
+### Leo's reference photos — the second narrow upload exception
+
+Also by explicit live user instruction: `/team/image-designer` accepts a
+photo upload of Leo himself, and ONLY this:
+
+- **What it's for:** an image-generation model can't reliably render a
+  specific real person's likeness from a text prompt alone, and shouldn't
+  be asked to guess at one from a description — so instead ADMIN uploads
+  a real photo of Leo, which is passed as a reference image to the
+  Images EDIT endpoint (`generateOpenAIImageEdit()` in
+  `src/lib/ai/providers/openai-provider.ts`) alongside the cover prompt,
+  so the model works his actual likeness into the generated 小红书/视频号
+  cover when "带李尔王特写" is checked. The model is grounded in the real
+  photo, never conjuring his face from a text description alone.
+- **What it must never become:** a general document/photo upload. This
+  surface exists for one specific real person (Leo, the company's own
+  public-facing figure) whose photo is brand material he has already
+  chosen to appear in publicly, never a client's photo, a case-related
+  image, or anyone else's likeness. If a future request asks to upload a
+  photo of anyone else, or anything beyond a portrait/headshot photo,
+  through this or any other surface, treat that as a conflict with this
+  document and flag it before implementing.
+- **Storage:** a private Supabase Storage bucket (`leo-portraits`,
+  `public: false`) plus a `leo_portraits` metadata table, both ADMIN-write
+  / staff-read via RLS — see
+  `supabase/migrations/0017_leo_portraits.sql`. Read access always goes
+  through a short-lived signed URL (`getLeoPortraitSignedUrl()` in
+  `src/lib/leo-portraits.ts`), never a public link.
+- **Validation:** `uploadLeoPortrait()`
+  (`src/app/team/image-designer/actions.ts`) rejects anything that isn't
+  `image/png`, `image/jpeg`, or `image/webp`, and anything over 8MB.
 
 ## Things this application must NOT become
 

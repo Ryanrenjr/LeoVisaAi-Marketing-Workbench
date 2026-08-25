@@ -24,21 +24,38 @@ export const VideoChannelContentSchema = z.object({
   full_script: z.string(),
   evidence_visuals: z.array(z.string()),
   cta: z.string(),
+  publish_title: z.string(),
+  publish_caption: z.string(),
   source_references: z.array(z.string()),
   expert_review_notes: z.array(EvidenceNoteSchema),
 });
 export type VideoChannelContent = z.infer<typeof VideoChannelContentSchema>;
 
+/**
+ * Title/caption only — NOT the per-page image-text plan. Split from a
+ * single combined schema (live user instruction): 小红书标题文案员 writes
+ * this; 小红书图文规划员 writes XiaohongshuPagesPlanSchema below and
+ * generates the actual carousel images from it. The two are independent,
+ * both grounded directly in the same Research Pack — neither sees the
+ * other's draft, same as video/wechat's independence from each other.
+ */
 export const XiaohongshuContentSchema = z.object({
   title_options: z.array(z.string()).length(3),
   cover_title: z.string(),
-  pages: z.array(z.string()).min(6).max(10),
   caption: z.string(),
   keywords: z.array(z.string()),
   source_references: z.array(z.string()),
   expert_review_notes: z.array(EvidenceNoteSchema),
 });
 export type XiaohongshuContent = z.infer<typeof XiaohongshuContentSchema>;
+
+/** The per-page image-text plan — one entry per carousel image, written and then illustrated by 小红书图文规划员. */
+export const XiaohongshuPagesPlanSchema = z.object({
+  pages: z.array(z.string()).min(5).max(7),
+  source_references: z.array(z.string()),
+  expert_review_notes: z.array(EvidenceNoteSchema),
+});
+export type XiaohongshuPagesPlan = z.infer<typeof XiaohongshuPagesPlanSchema>;
 
 export const WechatOutlineSchema = z.object({
   title_options: z.array(z.string()).length(3),
@@ -58,6 +75,30 @@ export const WechatFullArticleSchema = z.object({
   expert_review_notes: z.array(EvidenceNoteSchema),
 });
 export type WechatFullArticle = z.infer<typeof WechatFullArticleSchema>;
+
+/**
+ * Replaces the outline → full-article two-step flow (live user
+ * instruction: "不要大纲直接给文字") — one call, straight from the
+ * Research Pack to a publish-ready article. WechatOutlineSchema /
+ * WechatFullArticleSchema stay defined above so any existing content_type
+ * = 'wechat_outline' / 'wechat_full_article' rows still render; every new
+ * generation uses this shape instead (content_type = 'wechat_article').
+ */
+export const WechatArticleSchema = z.object({
+  title: z.string(),
+  title_options: z.array(z.string()).length(5),
+  summary: z.string(),
+  full_article: z.string(),
+  closing_note: z.string(),
+  golden_quotes: z.array(z.string()).length(3),
+  cover_title: z.string(),
+  cover_subtitle: z.string(),
+  cover_visual_direction: z.string(),
+  share_caption: z.string(),
+  source_references: z.array(z.string()),
+  expert_review_notes: z.array(EvidenceNoteSchema),
+});
+export type WechatArticle = z.infer<typeof WechatArticleSchema>;
 
 // ---------------------------------------------------------------------
 // Source manifest — the model only ever sees short labels ("S1", "S2"),
@@ -186,9 +227,9 @@ export const CONTENT_AGENT_SHARED_RULES = `You are writing marketing content for
 Evidence boundary — this is the most important rule. The approved Research Pack given to you below is your ONLY evidence base for immigration rules, policy details, deadlines, or numbers. Distinguish three kinds of content as you write:
 A. Claims directly supported by the Research Pack — state these as grounded conclusions.
 B. Editorial framing, explanation, or transitions — fine to write freely; this is not a factual claim about immigration rules.
-C. Something that would make the content more useful but is NOT covered by the Research Pack — do NOT invent or assert it. Instead add an entry to expert_review_notes: reason "research_gap" if the research simply doesn't cover it, or "expert_review_required" if a human immigration expert should confirm it before publishing.
+C. Something that would make the content more useful but is NOT covered by the Research Pack — do NOT invent or assert it, and do NOT flag it either. Simply leave it out and write the rest of the content normally using only what the Research Pack supports.
 
-Never state a new immigration rule, policy detail, deadline, or number that isn't traceable to the Research Pack above.
+Never state a new immigration rule, policy detail, deadline, or number that isn't traceable to the Research Pack above. Never write a caveat, a "需要确认" / "需要人工确认" marker, or any other meta-commentary about your own uncertainty inside the actual content fields (full_script, pages, detailed_outline, full_article, etc.) — those fields are the finished, publishable text itself, and a reader or presenter should never see your internal notes. Deciding whether something needs a second look is a human's job, not something the content itself should announce.
 
 When you rely on a specific source, reference it by its exact label from the manifest below (e.g. "S1") in source_references. Never invent a source, a URL, or reference a label that isn't in the manifest.
 
@@ -198,18 +239,27 @@ Output only the structured content requested — no extra commentary outside the
 
 export const VIDEO_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
 
-You are writing a script for a VIDEO_CHANNEL (视频号) short video, target 60–120 seconds, following this structure:
-- 0–5 seconds: the actual user problem / conflict
-- 5–25 seconds: give the conclusion first
-- 25–60 seconds: explain the rule or framework (grounded in the Research Pack)
-- 60–90 seconds: exception / real-world nuance / practitioner judgment
-- ending: note who may need further professional assessment
+You are writing a script for a VIDEO_CHANNEL (视频号) short video, target 60–120 seconds. Shape the narration around this arc, but do NOT print any of these labels, timestamps, or section headers in the output — they are for your own planning only:
+- open with the actual user problem / conflict
+- give the conclusion first
+- explain the rule or framework (grounded in the Research Pack)
+- cover exceptions / real-world nuance / practitioner judgment
+- close by noting who may need further professional assessment
 
-full_script is the complete spoken narration following this structure. evidence_visuals are short practical suggestions for what to show on screen at each beat — not a timecoded shot list.`;
+full_script must contain ONLY the words the presenter actually speaks out loud, as continuous natural prose — someone should be able to read it aloud directly with no editing. Never include: time labels (e.g. "0–5秒"), section headers, stage directions, or review-flag annotations (e.g. "需要确认" / "需要人工确认"). If something would need a caveat, leave it out of the script entirely instead — the presenter must never be made to say a caveat about their own script.
+
+Format full_script as a teleprompter script, not a paragraph: one short beat per line (break after most sentences/clauses, blank line between beats), and wrap the handful of words per beat that carry the real weight in **markdown bold** — this is a delivery cue for which words to land harder, not a stage direction, so it must always be actual spoken words (e.g. "**旧护照先别扔。**"), never a bracketed note.
+
+evidence_visuals are short practical suggestions for what to show on screen at each beat — not a timecoded shot list. publish_title is the headline used when actually posting the video (can be more descriptive than cover_text). publish_caption is the short caption/description posted alongside the video, ending with a few relevant hashtags.`;
 
 export const XHS_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
 
-You are writing content for Xiaohongshu (小红书). This must be independently adapted for that platform's behavior — do NOT simply convert a video script into page breaks. Prioritize: search intent, saveability, checklists, decision frameworks, scenario comparison, timelines, and common misunderstandings. Produce 6–10 pages, each page a self-contained chunk of text suitable for one image card.`;
+You are writing the title and caption for a Xiaohongshu (小红书) post — NOT the page-by-page image content (a separate role writes that). This must be independently adapted for Xiaohongshu's behavior — search intent, saveability, "this is for me" specificity — not a generic headline. title_options is 5 candidate titles (Xiaohongshu titles are typically short, concrete, and either name a specific audience/scenario or promise a specific payoff — avoid vague "英国移民政策解读" style titles). cover_title is the short text shown on the cover image itself (a few words, not a full sentence). caption is the text posted alongside the note when it's published — a short, natural wrap-up plus a light call to save/follow, ending with a few relevant hashtags. keywords is a handful of search terms this post should be discoverable for.`;
+
+/** The per-page image-text plan — a separate role (小红书图文规划员) from the title/caption above; it never sees the title/caption draft and vice versa, both ground independently in the Research Pack. */
+export const XHS_PAGES_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
+
+You are planning the page-by-page image-text content for a Xiaohongshu (小红书) 图文 post — a set of image cards, each with its own short text, that together tell the whole story. You write ONLY the plan; you never generate the images yourself — a separate employee (the image designer) turns your plan into the actual P1–Pn images. This must be independently adapted for Xiaohongshu's behavior — do NOT simply convert a video script into page breaks. Prioritize: search intent, saveability, checklists, decision frameworks, scenario comparison, timelines, and common misunderstandings. Produce around 6 pages (5–7 is fine). Each page becomes ONE image card, generated straight from that page's text — so keep every page short: one clear headline/point plus at most 2-3 short supporting lines, never a full paragraph. If a page has more to say than that, split it into two pages instead of cramming it in. Each page's text should also end with a brief design-direction cue for whoever generates the image (e.g. "用对比表格呈现新旧规则" / "放一个时间轴标出关键日期") — this guides the image designer, not just what to say but roughly how to visualize it.`;
 
 export const WECHAT_OUTLINE_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
 
@@ -218,6 +268,31 @@ You are producing an OUTLINE for a WeChat Official Account (公众号) article �
 export const WECHAT_FULL_ARTICLE_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
 
 You are expanding an already-approved outline into a full WeChat Official Account article. Follow the outline's structure and key claims — do not introduce claims beyond what the outline and Research Pack support. Write complete, natural prose suitable for publication (still subject to human review before it goes out).`;
+
+/**
+ * Replaces the outline → full-article two-step flow (live user
+ * instruction: "不要大纲直接给文字") — write the publish-ready WeChat
+ * Official Account article directly from the Research Pack in one call.
+ */
+export const WECHAT_ARTICLE_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
+
+You are writing a complete, publish-ready WeChat Official Account (公众号) article directly from the Research Pack — there is no separate outline step. Write it as a numbered thought-leadership analysis, not a plain Q&A explainer:
+
+full_article structure:
+1. Opens with a concrete news hook — the actual event, date, who/what — 2-4 sentences, scene-setting, not a policy summary.
+2. Immediately reframes it through the company's practitioner lens: not just "what happened" but "what this actually signals" — 1-2 sentences stating the real thesis of the piece.
+3. The body is broken into numbered sections ("01" "02" "03" "04" ...), each opening with a section-title line prefixed "## " (e.g. "## 01 从业者视角的转折点") — this is a real heading, rendered bigger and bolder than body text, so the reader can scan the piece's shape without reading every word. Each section covers: the underlying dynamics/context, what specifically changes or is at stake, who is affected and how, and concrete next steps. Vary the count to fit the topic (3-5 sections is typical) — never pad with a section that has nothing real to say.
+4. At least one section must break its advice down BY AUDIENCE SEGMENT (e.g. 对留学生 / 对雇主 / 对正在申请XX签证的人 / 对家庭团聚申请人 — pick the segments that actually apply to this topic), each with one concrete, actionable takeaway — not the same generic advice repeated for everyone.
+5. Numbered-section analysis is still bound by the evidence rule above: the underlying facts/dates/rules must trace to the Research Pack; the practitioner "what this means" framing is editorial judgment (category B), not a new fact.
+6. Formatting matters as much as the writing — WeChat readers are on mobile and bounce off a dense wall of text immediately. Never write a block of 3+ sentences run together. Instead:
+   - Write short lines, mostly one sentence or one short clause each, with a blank line (double newline) between almost every line — the WeChat-native "一句一行" reading rhythm, not Western-style paragraphs. This is about line length and spacing, NOT about turning the article into a list — most of the piece is still ordinary flowing lines of prose, just short ones, not bullets.
+   - "## " headings (point 3) are the only place font size changes — do not invent any other heading level or repeat "## " on a line that isn't a real section title.
+   - Bullets ("▪️", one per line) are for the rare case of genuinely parallel data points that read naturally as a list (e.g. several parties' poll numbers) — use them sparingly, only when the content actually IS a list; do not convert ordinary sentences into bullets just for visual effect.
+   - Wrap the specific numbers, dates, and pivotal phrases a skimming reader should catch in **markdown bold** (e.g. "**25%**", "**5月27日**") — besides "## " headings, this is the ONLY other markdown syntax ever used; it renders as real emphasis, not literal asterisks, so use it deliberately, not on every other word.
+   - A short rhetorical question or transition beat can stand alone on its own line before its answer (e.g. "为什么？").
+   - Use an em dash ("——") to link a short lead-in clause to what follows, instead of a comma-joined run-on sentence.
+
+full_article should read like an experienced practitioner explaining the real stakes to a client, not a news summary or a government notice — confident, specific, a little wry, never hedging with disclaimers inside the body text. closing_note is the separate reflective closing block that runs after full_article and before the brand footer (which is appended separately — do not write the brand footer yourself): tie the topic back to the company's long-standing presence/experience, then end with a direct, professional invitation to get in touch — this is the one place in the piece a soft call-to-action belongs. closing_note follows the same short-line formatting as full_article (point 6 above), not one dense paragraph. title_options is 5 candidate headlines, in the "concrete claim + company deep-dive" style (e.g. "XX事件背后的'YY'：ZZ，到底NN？李尔王国际移民深度解读"). summary is a short lead-in/abstract shown before the article body. golden_quotes is exactly 3 short, quotable lines pulled from or written for the article, suitable for pull-quotes or social sharing. cover_title/cover_subtitle/cover_visual_direction describe the article's cover image (short headline text, a one-line subtitle, and a plain-language direction for what the cover should depict) — for the image designer, not for the article body. share_caption is a short caption for sharing this article link (e.g. to WeChat Moments/群聊), ending with a couple of relevant hashtags.`;
 
 export function buildEvidenceContextBlock(
   topic: {
@@ -292,15 +367,30 @@ export const CONTENT_TASK_CONFIG = {
     taskInstruction: "Write the VIDEO_CHANNEL script now, following the structure and rules above.",
     schema: VideoChannelContentSchema,
     maxTokens: 8000,
-    textFieldsForScan: (c: VideoChannelContent) => [c.title, c.hook, c.cover_text, c.full_script, c.cta],
+    textFieldsForScan: (c: VideoChannelContent) => [
+      c.title,
+      c.hook,
+      c.cover_text,
+      c.full_script,
+      c.cta,
+      c.publish_title,
+      c.publish_caption,
+    ],
   } satisfies ContentTaskConfig<VideoChannelContent>,
   XIAOHONGSHU_WRITING: {
     systemPrompt: XHS_SYSTEM_PROMPT,
-    taskInstruction: "Write the Xiaohongshu content now, following the structure and rules above.",
+    taskInstruction: "Write the Xiaohongshu title and caption now, following the rules above.",
     schema: XiaohongshuContentSchema,
-    maxTokens: 8000,
-    textFieldsForScan: (c: XiaohongshuContent) => [...c.title_options, c.cover_title, ...c.pages, c.caption],
+    maxTokens: 4000,
+    textFieldsForScan: (c: XiaohongshuContent) => [...c.title_options, c.cover_title, c.caption],
   } satisfies ContentTaskConfig<XiaohongshuContent>,
+  XIAOHONGSHU_PAGES_PLANNING: {
+    systemPrompt: XHS_PAGES_SYSTEM_PROMPT,
+    taskInstruction: "Plan the Xiaohongshu 图文 page-by-page image-text content now, following the rules above.",
+    schema: XiaohongshuPagesPlanSchema,
+    maxTokens: 8000,
+    textFieldsForScan: (c: XiaohongshuPagesPlan) => [...c.pages],
+  } satisfies ContentTaskConfig<XiaohongshuPagesPlan>,
   WECHAT_WRITING: {
     systemPrompt: WECHAT_OUTLINE_SYSTEM_PROMPT,
     taskInstruction:
@@ -309,6 +399,105 @@ export const CONTENT_TASK_CONFIG = {
     maxTokens: 8000,
     textFieldsForScan: (c: WechatOutline) => [...c.title_options, c.summary, ...c.detailed_outline, ...c.key_claims],
   } satisfies ContentTaskConfig<WechatOutline>,
+  WECHAT_ARTICLE_WRITING: {
+    systemPrompt: WECHAT_ARTICLE_SYSTEM_PROMPT,
+    taskInstruction:
+      "Write the complete, publish-ready WeChat Official Account ARTICLE now (no outline step), following the rules above.",
+    schema: WechatArticleSchema,
+    maxTokens: 16000,
+    textFieldsForScan: (c: WechatArticle) => [
+      c.title,
+      ...c.title_options,
+      c.summary,
+      c.full_article,
+      c.closing_note,
+      ...c.golden_quotes,
+      c.cover_title,
+      c.cover_subtitle,
+      c.share_caption,
+    ],
+  } satisfies ContentTaskConfig<WechatArticle>,
 } as const;
 
 export type GenericContentTaskType = keyof typeof CONTENT_TASK_CONFIG;
+
+// ---------------------------------------------------------------------
+// Employee H（终审修改员）— takes a draft Employee G（合规审核员）already
+// flagged issues in, and produces a revised version that fixes ONLY those
+// flagged issues. Still not a final approval: the human reviews the
+// revised draft like any other version before it's published.
+// ---------------------------------------------------------------------
+
+const REVISION_ADDENDUM = `You are now REVISING an existing draft, not writing a new one from scratch. A compliance reviewer already flagged specific issues in it (quoted exactly, below). Fix ONLY those flagged issues — keep wording, structure, tone, and length unchanged everywhere else unless a change is strictly necessary to fix a flagged issue. Do not introduce any new claim beyond what the original draft and the Research Pack already support. Output the complete revised piece in the same structured format as the original, not just the changed parts.`;
+
+export const VIDEO_REVISION_SYSTEM_PROMPT = `${VIDEO_SYSTEM_PROMPT}\n\n${REVISION_ADDENDUM}`;
+export const XHS_REVISION_SYSTEM_PROMPT = `${XHS_SYSTEM_PROMPT}\n\n${REVISION_ADDENDUM}`;
+export const XHS_PAGES_REVISION_SYSTEM_PROMPT = `${XHS_PAGES_SYSTEM_PROMPT}\n\n${REVISION_ADDENDUM}`;
+export const WECHAT_ARTICLE_REVISION_SYSTEM_PROMPT = `${WECHAT_ARTICLE_SYSTEM_PROMPT}\n\n${REVISION_ADDENDUM}`;
+
+/** Renders the existing draft + the compliance findings to fix into one context block, appended after buildEvidenceContextBlock's output. */
+export function buildRevisionContextBlock(
+  existingContentText: string,
+  findings: Array<{ issue_type: string; quote: string; explanation: string }>,
+): string {
+  const lines = [
+    "=== 需要修改的现有草稿 ===",
+    existingContentText,
+    "",
+    "=== 合规审核员标出的问题（只修复下面这些，其余保持不变）===",
+    ...findings.map((f, i) => `${i + 1}. [${f.issue_type}] 原文："${f.quote}"\n   问题：${f.explanation}`),
+  ];
+  return lines.join("\n");
+}
+
+export const REVISION_TASK_CONFIG = {
+  VIDEO_REVISION: {
+    systemPrompt: VIDEO_REVISION_SYSTEM_PROMPT,
+    taskInstruction: "Revise the VIDEO_CHANNEL script now to fix only the flagged issues above, following the rules above.",
+    schema: VideoChannelContentSchema,
+    maxTokens: 8000,
+    textFieldsForScan: (c: VideoChannelContent) => [
+      c.title,
+      c.hook,
+      c.cover_text,
+      c.full_script,
+      c.cta,
+      c.publish_title,
+      c.publish_caption,
+    ],
+  } satisfies ContentTaskConfig<VideoChannelContent>,
+  XIAOHONGSHU_REVISION: {
+    systemPrompt: XHS_REVISION_SYSTEM_PROMPT,
+    taskInstruction: "Revise the Xiaohongshu title/caption now to fix only the flagged issues above, following the rules above.",
+    schema: XiaohongshuContentSchema,
+    maxTokens: 4000,
+    textFieldsForScan: (c: XiaohongshuContent) => [...c.title_options, c.cover_title, c.caption],
+  } satisfies ContentTaskConfig<XiaohongshuContent>,
+  XIAOHONGSHU_PAGES_REVISION: {
+    systemPrompt: XHS_PAGES_REVISION_SYSTEM_PROMPT,
+    taskInstruction: "Revise the Xiaohongshu 图文 page plan now to fix only the flagged issues above, following the rules above.",
+    schema: XiaohongshuPagesPlanSchema,
+    maxTokens: 8000,
+    textFieldsForScan: (c: XiaohongshuPagesPlan) => [...c.pages],
+  } satisfies ContentTaskConfig<XiaohongshuPagesPlan>,
+  WECHAT_ARTICLE_REVISION: {
+    systemPrompt: WECHAT_ARTICLE_REVISION_SYSTEM_PROMPT,
+    taskInstruction:
+      "Revise the WeChat Official Account ARTICLE now to fix only the flagged issues above, following the rules above.",
+    schema: WechatArticleSchema,
+    maxTokens: 16000,
+    textFieldsForScan: (c: WechatArticle) => [
+      c.title,
+      ...c.title_options,
+      c.summary,
+      c.full_article,
+      c.closing_note,
+      ...c.golden_quotes,
+      c.cover_title,
+      c.cover_subtitle,
+      c.share_caption,
+    ],
+  } satisfies ContentTaskConfig<WechatArticle>,
+} as const;
+
+export type RevisionTaskType = keyof typeof REVISION_TASK_CONFIG;

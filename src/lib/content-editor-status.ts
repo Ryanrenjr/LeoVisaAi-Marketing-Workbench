@@ -13,8 +13,10 @@ export function platformStatusLabel(assets: ContentAsset[], platform: ContentPla
   const lineages = groupContentAssetsByLineage(assets).filter((l) => l.platform === platform);
 
   if (platform === "WECHAT_OFFICIAL_ACCOUNT") {
-    const outline = lineages.find((l) => l.contentType === "wechat_outline");
+    const article = lineages.find((l) => l.contentType === "wechat_article");
     const full = lineages.find((l) => l.contentType === "wechat_full_article");
+    const outline = lineages.find((l) => l.contentType === "wechat_outline");
+    if (article) return `文章已完成（v${article.latest.version}）`;
     if (full) return `完整文章已完成（v${full.latest.version}）`;
     if (outline) return `结构已完成（v${outline.latest.version}）`;
     return "待生成";

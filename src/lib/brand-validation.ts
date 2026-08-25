@@ -1,4 +1,4 @@
-import type { VideoChannelContent, XiaohongshuContent, WechatFullArticle } from "./ai/content-schemas";
+import type { VideoChannelContent, XiaohongshuContent, XiaohongshuPagesPlan, WechatFullArticle } from "./ai/content-schemas";
 import type { BrandConfig } from "./brand-defaults";
 
 /**
@@ -27,7 +27,21 @@ export function validateVideoScript(content: Pick<VideoChannelContent, "full_scr
   return issues;
 }
 
-export function validateXiaohongshuPost(content: Pick<XiaohongshuContent, "pages">, brand: BrandConfig): string[] {
+export function validateXiaohongshuPost(content: Pick<XiaohongshuContent, "caption">, brand: BrandConfig): string[] {
+  const issues: string[] = [];
+  const hasExpertName = brand.expertName && content.caption.includes(brand.expertName);
+  const hasContentBrand = brand.contentBrand && content.caption.includes(brand.contentBrand);
+  if (!hasExpertName && !hasContentBrand) {
+    issues.push(`发布文案未出现品牌标识（缺少"${brand.expertName}"或"${brand.contentBrand}"）。`);
+  }
+  return issues;
+}
+
+/** The 图文规划 (per-page plan) has its own brand check — the last page, not the caption, is where the brand outro shows up in the actual carousel. */
+export function validateXiaohongshuPagesPlan(
+  content: Pick<XiaohongshuPagesPlan, "pages">,
+  brand: BrandConfig,
+): string[] {
   const issues: string[] = [];
   const lastPage = content.pages[content.pages.length - 1] ?? "";
   const hasExpertName = brand.expertName && lastPage.includes(brand.expertName);

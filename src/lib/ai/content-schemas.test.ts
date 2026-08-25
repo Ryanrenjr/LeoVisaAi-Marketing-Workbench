@@ -4,6 +4,7 @@ import {
   WechatFullArticleSchema,
   WechatOutlineSchema,
   XiaohongshuContentSchema,
+  XiaohongshuPagesPlanSchema,
   buildEvidenceContextBlock,
   buildForbiddenPhraseNotes,
   buildSourceManifest,
@@ -42,6 +43,8 @@ describe("VideoChannelContentSchema", () => {
     full_script: "完整口播",
     evidence_visuals: ["画面一"],
     cta: "行动号召",
+    publish_title: "发布标题",
+    publish_caption: "发布文案",
     source_references: ["S1"],
     expert_review_notes: [],
   };
@@ -78,7 +81,6 @@ describe("XiaohongshuContentSchema", () => {
   const valid = {
     title_options: ["A", "B", "C"],
     cover_title: "封面标题",
-    pages: Array.from({ length: 6 }, (_, i) => `第${i + 1}页`),
     caption: "正文",
     keywords: ["关键词"],
     source_references: [],
@@ -94,14 +96,26 @@ describe("XiaohongshuContentSchema", () => {
       false,
     );
   });
+});
 
-  it("rejects fewer than 6 pages", () => {
-    expect(XiaohongshuContentSchema.safeParse({ ...valid, pages: ["only one"] }).success).toBe(false);
+describe("XiaohongshuPagesPlanSchema", () => {
+  const valid = {
+    pages: Array.from({ length: 6 }, (_, i) => `第${i + 1}页`),
+    source_references: [],
+    expert_review_notes: [],
+  };
+
+  it("accepts a well-formed pages plan", () => {
+    expect(XiaohongshuPagesPlanSchema.safeParse(valid).success).toBe(true);
   });
 
-  it("rejects more than 10 pages", () => {
-    const tooMany = Array.from({ length: 11 }, (_, i) => `page ${i}`);
-    expect(XiaohongshuContentSchema.safeParse({ ...valid, pages: tooMany }).success).toBe(false);
+  it("rejects fewer than 5 pages", () => {
+    expect(XiaohongshuPagesPlanSchema.safeParse({ ...valid, pages: ["only one"] }).success).toBe(false);
+  });
+
+  it("rejects more than 7 pages", () => {
+    const tooMany = Array.from({ length: 8 }, (_, i) => `page ${i}`);
+    expect(XiaohongshuPagesPlanSchema.safeParse({ ...valid, pages: tooMany }).success).toBe(false);
   });
 });
 

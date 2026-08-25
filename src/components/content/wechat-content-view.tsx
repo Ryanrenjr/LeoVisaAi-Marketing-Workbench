@@ -1,9 +1,10 @@
 import { sourcesForAsset } from "@/lib/content-versions";
-import type { WechatFullArticle, WechatOutline } from "@/lib/ai/content-schemas";
+import type { WechatArticle, WechatFullArticle, WechatOutline } from "@/lib/ai/content-schemas";
 import type { ContentAsset, ContentImageRow, ResearchSource } from "@/lib/types";
 import type { BrandConfig } from "@/lib/brand-defaults";
 import { validateWechatArticle } from "@/lib/brand-validation";
 import { Field } from "./field";
+import { MarkdownText } from "./markdown-text";
 import { ContentSources } from "./content-sources";
 import { ExpertReviewNotes } from "./expert-review-notes";
 import { ContentImageGrid } from "./content-image-grid";
@@ -47,9 +48,11 @@ function WechatOutlineFields({ content, sources }: { content: WechatOutline; sou
       <Field label="来源">
         <ContentSources sourceIds={content.source_references} sources={sources} />
       </Field>
-      <Field label="需要你确认">
-        <ExpertReviewNotes notes={content.expert_review_notes} />
-      </Field>
+      {content.expert_review_notes.length > 0 && (
+        <Field label="需要你确认">
+          <ExpertReviewNotes notes={content.expert_review_notes} />
+        </Field>
+      )}
     </div>
   );
 }
@@ -68,9 +71,89 @@ function WechatFullArticleFields({
       <Field label="来源">
         <ContentSources sourceIds={content.source_references} sources={sources} />
       </Field>
-      <Field label="需要你确认">
-        <ExpertReviewNotes notes={content.expert_review_notes} />
+      {content.expert_review_notes.length > 0 && (
+        <Field label="需要你确认">
+          <ExpertReviewNotes notes={content.expert_review_notes} />
+        </Field>
+      )}
+    </div>
+  );
+}
+
+function WechatArticleFields({ content, sources }: { content: WechatArticle; sources: ResearchSource[] }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <Field label="标题">{content.title}</Field>
+      <Field label="标题候选">
+        <ul className="list-disc pl-5">
+          {content.title_options.map((t, i) => (
+            <li key={i}>{t}</li>
+          ))}
+        </ul>
       </Field>
+      <Field label="摘要">{content.summary}</Field>
+      <Field label="完整文章">
+        <MarkdownText text={content.full_article} />
+      </Field>
+      <Field label="结尾">
+        <MarkdownText text={content.closing_note} />
+      </Field>
+      <Field label="金句">
+        <ul className="list-disc pl-5">
+          {content.golden_quotes.map((q, i) => (
+            <li key={i}>{q}</li>
+          ))}
+        </ul>
+      </Field>
+      <Field label="封面文字">
+        {content.cover_title} · {content.cover_subtitle}
+      </Field>
+      <Field label="封面画面方向">{content.cover_visual_direction}</Field>
+      <Field label="转发文案">{content.share_caption}</Field>
+      <Field label="来源">
+        <ContentSources sourceIds={content.source_references} sources={sources} />
+      </Field>
+      {content.expert_review_notes.length > 0 && (
+        <Field label="需要你确认">
+          <ExpertReviewNotes notes={content.expert_review_notes} />
+        </Field>
+      )}
+    </div>
+  );
+}
+
+export function WechatArticleView({
+  history,
+  sourcesByPackId,
+  images = [],
+  brand,
+}: {
+  history: ContentAsset[];
+  sourcesByPackId: Map<string, ResearchSource[]>;
+  images?: ContentImageRow[];
+  brand: BrandConfig;
+}) {
+  const [latest, ...older] = history;
+  const latestContent = latest.structured_content as unknown as WechatArticle;
+  return (
+    <div className="flex flex-col gap-4">
+      <p className="text-xs text-[var(--muted)]">公众号文章 · 当前版本 v{latest.version}</p>
+      <WechatArticleFields content={latestContent} sources={sourcesForAsset(latest, sourcesByPackId)} />
+      <BrandCheckNotice issues={validateWechatArticle(latestContent, brand)} />
+      <ContentImageGrid images={images} />
+      {older.map((asset) => (
+        <details key={asset.id} className="rounded-md border border-[var(--border)] px-3 py-2">
+          <summary className="cursor-pointer text-sm text-[var(--muted)]">
+            历史版本 v{asset.version} · {new Date(asset.created_at).toLocaleString("zh-CN")}
+          </summary>
+          <div className="mt-3">
+            <WechatArticleFields
+              content={asset.structured_content as unknown as WechatArticle}
+              sources={sourcesForAsset(asset, sourcesByPackId)}
+            />
+          </div>
+        </details>
+      ))}
     </div>
   );
 }

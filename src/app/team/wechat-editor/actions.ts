@@ -9,11 +9,11 @@ import { getLatestForLineage } from "@/lib/content-versions";
 import { buildWechatImageSearchQueries } from "@/lib/ai/image-search-queries";
 import { runImageSearch } from "@/lib/search/image-router";
 import { writeSearchUsageLog } from "@/lib/ai/usage-log";
-import type { WechatOutline } from "@/lib/ai/content-schemas";
+import type { WechatArticle, WechatOutline } from "@/lib/ai/content-schemas";
 
 /**
  * Searches Google Images for real reference photos matching the topic's
- * already-generated 公众号 outline, downloads and re-hosts them into the
+ * already-generated 公众号文章, downloads and re-hosts them into the
  * private content-images bucket (never links directly to a third-party
  * URL — see supabase/migrations/0010_image_search.sql). ADMIN-only, same
  * gate as every other content-generation action. Unlike image-designer's
@@ -27,10 +27,12 @@ export async function searchAndAttachImages(topicId: string): Promise<{ ok: bool
   if (!topic) return { ok: false, error: "未找到选题。" };
 
   const assets = await getContentAssets(topicId);
-  const outline = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_outline");
-  if (!outline) return { ok: false, error: "请先生成公众号大纲，再搜索配图。" };
+  const article = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_article");
+  const outline = article ? null : getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_outline");
+  const source = article ?? outline;
+  if (!source) return { ok: false, error: "请先生成公众号文章，再搜索配图。" };
 
-  const content = outline.structured_content as unknown as WechatOutline;
+  const content = source.structured_content as unknown as WechatArticle | WechatOutline;
   const queries = buildWechatImageSearchQueries(content);
 
   const started = Date.now();
@@ -69,7 +71,7 @@ export async function searchAndAttachImages(topicId: string): Promise<{ ok: bool
 
         const { error: insertError } = await supabase.from("content_images").insert({
           topic_id: topicId,
-          content_asset_id: outline.id,
+          content_asset_id: source.id,
           prompt: execution.query,
           image_path: path,
           provider: "GOOGLE_IMAGES",

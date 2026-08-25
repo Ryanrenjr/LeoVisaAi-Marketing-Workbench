@@ -1,4 +1,4 @@
-# Digital Employee UX (Boss Mode / Admin Mode)
+# Digital Employee UX
 
 This is a **presentation-layer milestone**. No backend workflow, AI
 behaviour, permission logic, database schema, or data was changed to
@@ -17,25 +17,22 @@ no robot avatars, no cartoon illustrations, no gamified virtual office,
 no colourful AI aesthetic. Think British professional services + a
 modern internal operating system, not a consumer app.
 
-## Two view modes
+## One presentation for everyone — no mode toggle
 
-`src/lib/view-mode.ts` — `resolveViewMode(role, cookieValue)`, pure and
-unit-tested:
+There used to be a cookie-backed Boss Mode / Admin Mode toggle
+(`src/lib/view-mode.ts`, `src/components/mode-switch.tsx`). Live user
+instruction removed it: this app has a single ADMIN operator in
+practice, so switching between two presentations of the same data was
+pointless complexity, not a real product need. Every signed-in user now
+sees the same home page (`src/app/page.tsx`'s `BossHome`); ADMIN
+additionally sees a "管理" link in the nav and a collapsed "运营列表"
+section on the home page — both gated directly on `user.role === "ADMIN"`,
+never a switchable cookie.
 
-- **EXPERT always sees Boss Mode.** There is no EXPERT preview of Admin
-  Mode, and the resolve function never even reads the cookie for EXPERT —
-  a tampered cookie cannot grant admin framing.
-- **ADMIN defaults to Admin Mode**, and can opt into a **Boss Mode
-  preview** via a cookie (`view_mode`, set by
-  `src/app/view-mode-actions.ts` → `setViewMode()`), switched from the
-  small control next to the user's name in the header
-  (`src/components/mode-switch.tsx`).
-
-This is presentation only. It never changes what a user is *allowed* to
-do — every existing server-side check (`canRunResearch`,
+This is still presentation only. It never changes what a user is
+*allowed* to do — every existing server-side check (`canRunResearch`,
 `canApproveResearch`, `canManageContentAssets`, RLS, etc.) remains the
-only source of authorization truth, completely unaware that view modes
-exist.
+only source of authorization truth.
 
 ## The five digital employees
 
@@ -110,29 +107,30 @@ If nothing needs Leo, the queue (and the home page's "今天需要你处理"
 banner) says so plainly rather than showing an empty/zero state that
 looks broken.
 
-## Home page (`/`) — one presentation for both modes
+## Home page (`/`) — one presentation for everyone
 
 `早上好，{name}。你的数字团队正在工作。` (`timeBasedGreeting()` — 早上好 / 下午好 /
-晚上好 by server hour), then: a pending-work summary linking to `/review`,
-the five employee cards (`EmployeeCard` component — letter marker, name,
-one-line responsibility, 2-3 real stats, one primary action; no shadow,
-thin border, matches the rest of the app's minimal system), and the Leo
-待处理 count summary. No charts, no colourful widgets.
+晚上好 by server hour), directly followed by the pipeline
+(`src/components/pipeline-flow.tsx`'s `StageRow`/`LaneGroup`/`GateNote`/
+`ManualNote`/`LoopBackNote`): big circular real portraits in real working
+order, numbered, with a fixed "⏸ 需要你看一眼" chip only on the two real
+human gates (research approval, final review after compliance) — no
+decorative "AI 一键产出" chip any more (live user instruction: it repeated
+on every row and added nothing). There used to also be a "现在该做什么"
+spotlight card above the pipeline (`buildHomeSpotlight()` in
+`src/lib/employee-tasks.ts`) — live user instruction removed it as
+unnecessary complexity; the function itself is still there (and tested)
+but the home page no longer calls it.
 
-**Admin Mode shows the exact same page**, live user instruction
-overriding the original "unchanged separate operational dashboard"
-design — see `BossHome({ isAdmin })` in `src/app/page.tsx`. The only
-difference: a collapsed `<details>` "运营列表" section at the bottom,
-ADMIN-only, linking to the pipeline-stage pages no digital employee
-owns (选题库/可进入拍摄/本周已发布/内容资产库 — Leo shoots and publishes by
-hand, there's no AI employee for that). `src/components/nav.tsx`'s old
-8-item admin nav (`ADMIN_LINKS`) is gone for the same reason — 选题库/研究中心/
-内容工作台 are already one click away via the employee cards; only "管理"
-remains as a nav link, since it's the one thing genuinely not reachable
-by clicking an employee.
+ADMIN sees the exact same page — see `BossHome({ isAdmin })` in
+`src/app/page.tsx`. The only difference: a collapsed `<details>` "运营列表"
+section at the bottom, ADMIN-only, linking to the pipeline-stage pages no
+digital employee owns (选题库/可进入拍摄/本周已发布/内容资产库 — a human
+shoots and publishes by hand, there's no AI employee for that), gated
+directly on `user.role === "ADMIN"` — there is no separate "Admin Mode" to
+switch into any more (see `src/components/nav.tsx`).
 
-选题库 (`/topics`) · 研究中心 (`/team/researcher`, shared with Boss Mode's B
-page) · 可进入拍摄 (`/ready-to-shoot`) · 本周已发布 (`/published`) · 内容工作台
+选题库 (`/topics`) · 研究中心 (`/team/researcher`) · 可进入拍摄 (`/ready-to-shoot`) · 本周已发布 (`/published`) · 内容工作台
 (`/team/editor`, shared with Boss Mode's C page) · 内容资产库
 (`/content-assets` — flat cross-topic listing of latest content
 versions) · 管理 (`/admin`).

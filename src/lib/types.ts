@@ -91,7 +91,9 @@ export type TopicActivityType =
   | "content_generation_failed"
   | "content_regenerated"
   | "content_edited"
-  | "full_article_generated";
+  | "full_article_generated"
+  | "content_revised"
+  | "content_revision_failed";
 
 export interface TopicActivity {
   id: string;
@@ -184,7 +186,13 @@ export interface AiUsageLogEntry {
 
 export type ContentPlatform = "VIDEO_CHANNEL" | "XIAOHONGSHU" | "WECHAT_OFFICIAL_ACCOUNT";
 
-export type ContentType = "video_script" | "xiaohongshu_post" | "wechat_outline" | "wechat_full_article";
+export type ContentType =
+  | "video_script"
+  | "xiaohongshu_post"
+  | "xiaohongshu_pages"
+  | "wechat_outline"
+  | "wechat_full_article"
+  | "wechat_article";
 
 export type ContentAssetStatus = "DRAFT" | "APPROVED" | "ARCHIVED";
 
@@ -245,4 +253,17 @@ export interface ContentImageRow {
   source: "generated" | "searched";
   search_query: string | null;
   external_source_url: string | null;
+  /** 'cover' = a single thumbnail/cover image; 'carousel' = one of a Xiaohongshu post's multi-page images. */
+  image_kind: "cover" | "carousel";
+  /** Only set for image_kind: 'carousel' — which page (1-based) this image is for. */
+  page_index: number | null;
+}
+
+/** A real photo of Leo (ADMIN-uploaded) — passed to the image model as a reference when "带特写" is requested, so it can fuse his real likeness into the cover (see generateOpenAIImageEdit in src/lib/ai/providers/openai-provider.ts). Never AI-generated itself. */
+export interface LeoPortraitRow {
+  id: string;
+  image_path: string;
+  label: string | null;
+  created_by: string | null;
+  created_at: string;
 }

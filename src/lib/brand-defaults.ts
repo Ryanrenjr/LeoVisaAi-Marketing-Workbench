@@ -23,9 +23,9 @@ export interface BrandConfig {
 export const DEFAULT_BRAND_CONFIG: BrandConfig = {
   companyNameEn: "Leo Visa Service",
   companyNameZh: "李尔王国际移民",
-  contentBrand: "李尔王说移民",
+  contentBrand: "李尔王移民说",
   expertName: "李尔王",
-  videoOutro: "我是李尔王。这里是李尔王说移民。我会继续从真实规则和实际问题出发，把英国身份问题讲清楚。",
+  videoOutro: "我是李尔王。这里是李尔王移民说。我会继续从真实规则和实际问题出发，把英国身份问题讲清楚。",
   wechatFooter:
-    "本文由 Leo Visa Service（李尔王国际移民）根据公开政策及官方资料整理。李尔王说移民会继续从真实规则和实际问题出发，把英国身份问题讲清楚。本文为一般信息整理，不构成针对任何个人情况的具体移民法律意见。实际情况应结合最新规则及个人背景进一步判断。",
+    "本文由 Leo Visa Service（李尔王国际移民）根据公开政策及官方资料整理。李尔王移民说会继续从真实规则和实际问题出发，把英国身份问题讲清楚。本文为一般信息整理，不构成针对任何个人情况的具体移民法律意见。实际情况应结合最新规则及个人背景进一步判断。",
 };

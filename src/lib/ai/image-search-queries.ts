@@ -12,7 +12,12 @@ export function buildVideoImageSearchQueries(content: { title: string; evidence_
   return queries.filter((q) => q.trim().length > 0).slice(0, 2);
 }
 
-export function buildWechatImageSearchQueries(content: { title_options: string[]; key_claims: string[] }): string[] {
-  const queries = [content.title_options[0], ...content.key_claims.slice(0, 1)];
+export function buildWechatImageSearchQueries(content: {
+  title_options: string[];
+  key_claims?: string[];
+  golden_quotes?: string[];
+}): string[] {
+  const secondary = content.key_claims?.[0] ?? content.golden_quotes?.[0];
+  const queries = [content.title_options[0], ...(secondary ? [secondary] : [])];
   return queries.filter((q) => q.trim().length > 0).slice(0, 2);
 }

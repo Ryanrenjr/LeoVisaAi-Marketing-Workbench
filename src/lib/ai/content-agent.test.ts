@@ -26,6 +26,7 @@ vi.mock("@anthropic-ai/sdk", () => {
 const {
   generateVideoChannelContent,
   generateXiaohongshuContent,
+  generateXiaohongshuPagesPlan,
   generateWechatOutline,
   generateWechatFullArticle,
   isContentAgentConfigured,
@@ -99,6 +100,8 @@ describe("generateVideoChannelContent", () => {
     full_script: "完整口播内容",
     evidence_visuals: ["画面建议"],
     cta: "行动号召",
+    publish_title: "发布标题",
+    publish_caption: "发布文案",
     source_references: ["S1"],
     expert_review_notes: [],
   };
@@ -173,13 +176,25 @@ describe("generateXiaohongshuContent", () => {
     mockParseOnce({
       title_options: ["A", "B", "C"],
       cover_title: "封面",
-      pages: Array.from({ length: 6 }, (_, i) => `第${i + 1}页`),
       caption: "正文",
       keywords: ["关键词"],
       source_references: ["S1"],
       expert_review_notes: [],
     });
     const result = await generateXiaohongshuContent(EVIDENCE_INPUT);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.content.cover_title).toBe("封面");
+  });
+});
+
+describe("generateXiaohongshuPagesPlan", () => {
+  it("returns grounded content on success", async () => {
+    mockParseOnce({
+      pages: Array.from({ length: 6 }, (_, i) => `第${i + 1}页`),
+      source_references: ["S1"],
+      expert_review_notes: [],
+    });
+    const result = await generateXiaohongshuPagesPlan(EVIDENCE_INPUT);
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.content.pages).toHaveLength(6);
   });

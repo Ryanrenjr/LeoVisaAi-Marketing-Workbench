@@ -12,9 +12,7 @@ import { getTaskModelOptions } from "@/lib/ai/task-model-options";
 import { EmployeeHeader } from "@/components/employee-header";
 import { GenerateAction } from "@/components/ai/generate-action";
 import { ContentImageGrid } from "@/components/content/content-image-grid";
-import { SearchImagesButton } from "@/components/ai/search-images-button";
 import { regeneratePlatformContent } from "@/app/topics/content-actions";
-import { searchAndAttachImages } from "./actions";
 import type { ContentAsset, ContentImageRow, Topic } from "@/lib/types";
 
 function TopicRow({
@@ -22,14 +20,12 @@ function TopicRow({
   assets,
   imagesByAssetId,
   canRun,
-  employeeName,
   modelOptions,
 }: {
   topic: Topic;
   assets: ContentAsset[];
   imagesByAssetId: Map<string, ContentImageRow[]>;
   canRun: boolean;
-  employeeName: string;
   modelOptions: Awaited<ReturnType<typeof getTaskModelOptions>> | null;
 }) {
   const script = getLatestForLineage(assets, "VIDEO_CHANNEL", "video_script");
@@ -54,14 +50,6 @@ function TopicRow({
           models={modelOptions.models}
           defaultModel={modelOptions.defaultModel}
           resolutionError={modelOptions.resolutionError}
-        />
-      )}
-      {canRun && script && (
-        <SearchImagesButton
-          action={searchAndAttachImages.bind(null, topic.id)}
-          avatarId="video-editor"
-          employeeName={employeeName}
-          label={images.length > 0 ? "再搜一次配图" : "搜索配图"}
         />
       )}
     </li>
@@ -118,7 +106,6 @@ export default async function VideoEditorPage() {
               assets={assetsByTopicId.get(topic.id) ?? []}
               imagesByAssetId={imagesByAssetId}
               canRun={Boolean(canRun)}
-              employeeName={employeeName}
               modelOptions={modelOptions}
             />
           ))}

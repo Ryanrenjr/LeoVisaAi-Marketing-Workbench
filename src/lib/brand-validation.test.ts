@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { validateVideoScript, validateXiaohongshuPost, validateWechatArticle } from "./brand-validation";
+import {
+  validateVideoScript,
+  validateXiaohongshuPost,
+  validateXiaohongshuPagesPlan,
+  validateWechatArticle,
+} from "./brand-validation";
 import { DEFAULT_BRAND_CONFIG } from "./brand-defaults";
 
 describe("validateVideoScript — Video outro validation", () => {
@@ -17,9 +22,24 @@ describe("validateVideoScript — Video outro validation", () => {
   });
 });
 
-describe("validateXiaohongshuPost — Xiaohongshu final-page brand validation", () => {
-  it("passes when the last page includes the expert name or content brand", () => {
+describe("validateXiaohongshuPost — Xiaohongshu caption brand validation", () => {
+  it("passes when the caption includes the expert name or content brand", () => {
     const issues = validateXiaohongshuPost(
+      { caption: `欢迎关注 ${DEFAULT_BRAND_CONFIG.contentBrand}` },
+      DEFAULT_BRAND_CONFIG,
+    );
+    expect(issues).toEqual([]);
+  });
+
+  it("flags a caption with no brand identity", () => {
+    const issues = validateXiaohongshuPost({ caption: "完全无关的文案" }, DEFAULT_BRAND_CONFIG);
+    expect(issues.length).toBe(1);
+  });
+});
+
+describe("validateXiaohongshuPagesPlan — Xiaohongshu final-page brand validation", () => {
+  it("passes when the last page includes the expert name or content brand", () => {
+    const issues = validateXiaohongshuPagesPlan(
       { pages: ["P1 封面", "P2 结论", `P3 ${DEFAULT_BRAND_CONFIG.contentBrand}`] },
       DEFAULT_BRAND_CONFIG,
     );
@@ -27,7 +47,10 @@ describe("validateXiaohongshuPost — Xiaohongshu final-page brand validation", 
   });
 
   it("flags a final page with no brand identity", () => {
-    const issues = validateXiaohongshuPost({ pages: ["P1 封面", "P2 结论", "P3 完全无关的收尾"] }, DEFAULT_BRAND_CONFIG);
+    const issues = validateXiaohongshuPagesPlan(
+      { pages: ["P1 封面", "P2 结论", "P3 完全无关的收尾"] },
+      DEFAULT_BRAND_CONFIG,
+    );
     expect(issues.length).toBe(1);
   });
 });

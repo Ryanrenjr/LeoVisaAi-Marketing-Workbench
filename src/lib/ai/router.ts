@@ -11,9 +11,9 @@ import {
 import { runGoogleResearch, generateGoogleStructured, generateGoogleStructuredFromImage } from "./providers/google-provider";
 import { generateGroqStructured } from "./providers/groq-provider";
 import { generateOpenRouterStructured } from "./providers/openrouter-provider";
-import { generateOpenAIStructured, generateOpenAIImage } from "./providers/openai-provider";
-import { buildSourceManifest, buildEvidenceContextBlock, buildOutlineContextBlock } from "./content-schemas";
-import { applyGroundingAndSafety, CONTENT_TASK_CONFIG, WECHAT_FULL_ARTICLE_SYSTEM_PROMPT, WechatFullArticleSchema } from "./content-schemas";
+import { generateOpenAIStructured, generateOpenAIImage, generateOpenAIImageEdit } from "./providers/openai-provider";
+import { buildSourceManifest, buildEvidenceContextBlock, buildOutlineContextBlock, buildRevisionContextBlock } from "./content-schemas";
+import { applyGroundingAndSafety, CONTENT_TASK_CONFIG, REVISION_TASK_CONFIG, WECHAT_FULL_ARTICLE_SYSTEM_PROMPT, WechatFullArticleSchema } from "./content-schemas";
 import { runResearchSearch } from "../search/router";
 import { buildResearchQueries, rankSearchResults } from "./research-queries";
 import {
@@ -28,9 +28,12 @@ import type { GroundedResearchPack } from "./research-pack";
 import type {
   VideoChannelContent,
   XiaohongshuContent,
+  XiaohongshuPagesPlan,
   WechatOutline,
   WechatFullArticle,
+  WechatArticle,
   GenericContentTaskType,
+  RevisionTaskType,
   Groundable,
 } from "./content-schemas";
 import {
@@ -293,7 +296,9 @@ export async function runContentTask(
   taskType: GenericContentTaskType,
   input: EvidenceInput,
   executionOverride?: ModelRef | null,
-): Promise<RouterResult<VideoChannelContent | XiaohongshuContent | WechatOutline>> {
+): Promise<
+  RouterResult<VideoChannelContent | XiaohongshuContent | XiaohongshuPagesPlan | WechatOutline | WechatArticle>
+> {
   const started = Date.now();
   const resolution = await resolveModelForTask(taskType, executionOverride);
   if (!resolution.ok) return resolutionFailure(resolution.error, started);
@@ -310,7 +315,94 @@ export async function runContentTask(
   if (taskType === "XIAOHONGSHU_WRITING") {
     return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.XIAOHONGSHU_WRITING, employeeId, customInstructions);
   }
+  if (taskType === "XIAOHONGSHU_PAGES_PLANNING") {
+    return runGenericContentTask(
+      provider,
+      model.modelId,
+      input,
+      CONTENT_TASK_CONFIG.XIAOHONGSHU_PAGES_PLANNING,
+      employeeId,
+      customInstructions,
+    );
+  }
+  if (taskType === "WECHAT_ARTICLE_WRITING") {
+    return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.WECHAT_ARTICLE_WRITING, employeeId, customInstructions);
+  }
   return runGenericContentTask(provider, model.modelId, input, CONTENT_TASK_CONFIG.WECHAT_WRITING, employeeId, customInstructions);
+}
+
+/**
+ * Employee H（终审修改员）— takes a draft plus the specific compliance
+ * findings a human is looking at (see docs), and produces a revised
+ * version that fixes ONLY those findings. Always routed generically (even
+ * for ANTHROPIC) via dispatchStructuredAnyProvider, same as
+ * runComplianceTask/runTopicDiscoveryTask — there's no Anthropic-specific
+ * content-agent.ts path for this task. The caller (revision-actions.ts)
+ * saves the result as a new content_assets version, exactly like any
+ * other regeneration.
+ */
+export interface RevisionInput extends EvidenceInput {
+  existingContentText: string;
+  findings: Array<{ issue_type: string; quote: string; explanation: string }>;
+}
+
+async function runOneRevisionTask<T extends Groundable>(
+  provider: ModelRef["provider"],
+  modelId: string,
+  input: RevisionInput,
+  config: {
+    systemPrompt: string;
+    taskInstruction: string;
+    schema: import("zod").ZodType<T>;
+    maxTokens: number;
+    textFieldsForScan: (parsed: T) => string[];
+  },
+  customInstructions: string | null,
+): Promise<AIExecutionResult<T>> {
+  const { labelToId, manifestText } = buildSourceManifest(input.sources);
+  const context = buildEvidenceContextBlock(input.topic, input.researchPack, manifestText);
+  const revisionContext = buildRevisionContextBlock(input.existingContentText, input.findings);
+  const userMessage = `${context}\n\n${revisionContext}\n\n${config.taskInstruction}`;
+
+  const result = await dispatchStructuredAnyProvider(provider, modelId, {
+    systemPrompt: appendCustomInstructions(buildSkillPrompt("reviser", config.systemPrompt), customInstructions),
+    userMessage,
+    schema: config.schema,
+    maxTokens: config.maxTokens,
+  });
+  if (!result.ok || !result.data) return result;
+
+  return { ...result, data: applyGroundingAndSafety(result.data, labelToId, config.textFieldsForScan) };
+}
+
+export async function runContentRevisionTask(
+  taskType: RevisionTaskType,
+  input: RevisionInput,
+  executionOverride?: ModelRef | null,
+): Promise<RouterResult<VideoChannelContent | XiaohongshuContent | XiaohongshuPagesPlan | WechatArticle>> {
+  const started = Date.now();
+  const resolution = await resolveModelForTask(taskType, executionOverride);
+  if (!resolution.ok) return resolutionFailure(resolution.error, started);
+
+  const { model } = resolution;
+  const customInstructions = await getEmployeeInstruction("reviser");
+
+  if (taskType === "VIDEO_REVISION") {
+    return runOneRevisionTask(model.provider, model.modelId, input, REVISION_TASK_CONFIG.VIDEO_REVISION, customInstructions);
+  }
+  if (taskType === "XIAOHONGSHU_REVISION") {
+    return runOneRevisionTask(model.provider, model.modelId, input, REVISION_TASK_CONFIG.XIAOHONGSHU_REVISION, customInstructions);
+  }
+  if (taskType === "XIAOHONGSHU_PAGES_REVISION") {
+    return runOneRevisionTask(
+      model.provider,
+      model.modelId,
+      input,
+      REVISION_TASK_CONFIG.XIAOHONGSHU_PAGES_REVISION,
+      customInstructions,
+    );
+  }
+  return runOneRevisionTask(model.provider, model.modelId, input, REVISION_TASK_CONFIG.WECHAT_ARTICLE_REVISION, customInstructions);
 }
 
 export async function runWechatFullArticleTask(
@@ -470,6 +562,7 @@ export async function runPerformanceAnalysisTask(
 export async function runImageGenerationTask(
   prompt: string,
   executionOverride?: ModelRef | null,
+  referenceImages?: { bytes: Buffer; mimeType: string; filename: string }[],
 ): Promise<RouterResult<{ images: string[] }>> {
   const started = Date.now();
   const resolution = await resolveModelForTask("IMAGE_GENERATION", executionOverride);
@@ -478,6 +571,9 @@ export async function runImageGenerationTask(
   const { model } = resolution;
   if (model.provider !== "OPENAI") {
     return resolutionFailure("此模型不支持图片生成。", started);
+  }
+  if (referenceImages && referenceImages.length > 0) {
+    return generateOpenAIImageEdit({ prompt, modelId: model.modelId, size: "1024x1536", referenceImages });
   }
   return generateOpenAIImage({ prompt, modelId: model.modelId, size: "1024x1536" });
 }

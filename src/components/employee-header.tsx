@@ -20,15 +20,16 @@ export function EmployeeHeader({
 }) {
   return (
     <div>
-      <div className="flex items-center gap-3">
-        <Image
-          src={`/employees/${avatarId}.png`}
-          alt=""
-          width={80}
-          height={80}
-          priority
-          className="h-20 w-20 shrink-0 rounded-full object-cover"
-        />
+      <div className="flex items-center gap-4">
+        <div className="relative h-28 w-28 shrink-0">
+          <Image
+            src={`/employees/${avatarId}.png`}
+            alt=""
+            fill
+            priority
+            className="rounded-full object-cover shadow-[0_0_0_2px_var(--border)]"
+          />
+        </div>
         <h1 className="text-xl font-semibold">
           <span className="mr-1.5 text-sm text-[var(--muted)]">{letter}</span>
           {name}

@@ -2,7 +2,7 @@ import { groupContentAssetsByLineage } from "./content-versions";
 import { canGenerateContent } from "./permissions";
 import { BOSS_CONFIDENCE_LABEL, getEmployee, resolveEmployeeDisplayName } from "./boss-language";
 import type { EmployeeId } from "./boss-language";
-import type { ComplianceReviewRow, ContentAsset, ContentPlatform, ResearchConfidence, Topic } from "./types";
+import type { ComplianceReviewRow, ContentAsset, ContentPlatform, ContentType, ResearchConfidence, Topic } from "./types";
 import type { EvidenceNote } from "./ai/content-schemas";
 
 /** Which content-editor employee owns a review item generated from a given platform's draft. */
@@ -164,6 +164,7 @@ export interface ComplianceQueueItem {
   topicTitle: string;
   contentAssetId: string;
   platformLabel: string;
+  contentType: ContentType;
   /** Null = never reviewed yet. */
   latestReview: ComplianceReviewRow | null;
 }
@@ -192,6 +193,7 @@ export function buildComplianceQueue(
         topicTitle: topic.title,
         contentAssetId: lineage.latest.id,
         platformLabel: lineage.latest.platform,
+        contentType: lineage.latest.content_type,
         latestReview: reviewsByContentAssetId.get(lineage.latest.id) ?? null,
       });
     }

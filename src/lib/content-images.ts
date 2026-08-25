@@ -51,3 +51,49 @@ export async function getContentImageSignedUrl(path: string): Promise<string | n
   if (error || !data) return null;
   return data.signedUrl;
 }
+
+type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * Shared save step for one generated cover/carousel image — upload to
+ * storage, insert the row. Used by both image-designer/actions.ts
+ * (covers) and xiaohongshu-image-planner/actions.ts (图文 carousel), so
+ * it lives here rather than duplicated or owned by just one employee's
+ * action file.
+ */
+export async function saveGeneratedContentImage(
+  supabase: SupabaseServerClient,
+  params: {
+    topicId: string;
+    contentAssetId: string;
+    prompt: string;
+    imageBase64: string;
+    provider: string;
+    modelId: string;
+    userId: string;
+    imageKind: "cover" | "carousel";
+    pageIndex: number | null;
+  },
+): Promise<{ ok: boolean; error?: string }> {
+  const bytes = Buffer.from(params.imageBase64, "base64");
+  const path = `${params.topicId}/${Date.now()}-${crypto.randomUUID()}.png`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("content-images")
+    .upload(path, bytes, { contentType: "image/png" });
+  if (uploadError) return { ok: false, error: "图片已生成，但保存失败，请重试。" };
+
+  const { error: insertError } = await supabase.from("content_images").insert({
+    topic_id: params.topicId,
+    content_asset_id: params.contentAssetId,
+    prompt: params.prompt,
+    image_path: path,
+    model_alias: `${params.provider}/${params.modelId}`,
+    provider: params.provider,
+    created_by: params.userId,
+    image_kind: params.imageKind,
+    page_index: params.pageIndex,
+  });
+  if (insertError) return { ok: false, error: "图片已生成，但记录保存失败，请重试。" };
+  return { ok: true };
+}

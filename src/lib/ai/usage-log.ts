@@ -19,6 +19,7 @@ export interface UsageLogInput {
   workflow_type:
     | "research"
     | "content"
+    | "content_revision"
     | "compliance"
     | "topic_discovery"
     | "performance_analysis"

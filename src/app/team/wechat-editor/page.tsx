@@ -12,9 +12,7 @@ import { getTaskModelOptions } from "@/lib/ai/task-model-options";
 import { EmployeeHeader } from "@/components/employee-header";
 import { GenerateAction } from "@/components/ai/generate-action";
 import { ContentImageGrid } from "@/components/content/content-image-grid";
-import { SearchImagesButton } from "@/components/ai/search-images-button";
 import { regeneratePlatformContent } from "@/app/topics/content-actions";
-import { searchAndAttachImages } from "./actions";
 import type { ContentAsset, ContentImageRow, Topic } from "@/lib/types";
 
 function TopicRow({
@@ -22,18 +20,16 @@ function TopicRow({
   assets,
   imagesByAssetId,
   canRun,
-  employeeName,
   modelOptions,
 }: {
   topic: Topic;
   assets: ContentAsset[];
   imagesByAssetId: Map<string, ContentImageRow[]>;
   canRun: boolean;
-  employeeName: string;
   modelOptions: Awaited<ReturnType<typeof getTaskModelOptions>> | null;
 }) {
-  const outline = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_outline");
-  const images = outline ? (imagesByAssetId.get(outline.id) ?? []) : [];
+  const article = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_article");
+  const images = article ? (imagesByAssetId.get(article.id) ?? []) : [];
   return (
     <li className="card flex flex-col gap-2 px-5 py-4">
       <Link href={`/topics/${topic.id}?tab=wechat`} className="font-medium hover:underline">
@@ -48,20 +44,12 @@ function TopicRow({
       {canRun && modelOptions && (
         <GenerateAction
           action={regeneratePlatformContent.bind(null, topic.id, "WECHAT_OFFICIAL_ACCOUNT")}
-          label={outline ? "重新生成大纲" : "生成大纲"}
-          variant={outline ? "secondary" : "primary"}
-          taskType="WECHAT_WRITING"
+          label={article ? "重新生成文章" : "生成文章"}
+          variant={article ? "secondary" : "primary"}
+          taskType="WECHAT_ARTICLE_WRITING"
           models={modelOptions.models}
           defaultModel={modelOptions.defaultModel}
           resolutionError={modelOptions.resolutionError}
-        />
-      )}
-      {canRun && outline && (
-        <SearchImagesButton
-          action={searchAndAttachImages.bind(null, topic.id)}
-          avatarId="wechat-editor"
-          employeeName={employeeName}
-          label={images.length > 0 ? "再搜一次配图" : "搜索配图"}
         />
       )}
     </li>
@@ -92,7 +80,7 @@ export default async function WechatEditorPage() {
     else imagesByAssetId.set(image.content_asset_id, [image]);
   }
   const canRun = !demo && user && canManageContentAssets(user.role);
-  const modelOptions = canRun ? await getTaskModelOptions("WECHAT_WRITING") : null;
+  const modelOptions = canRun ? await getTaskModelOptions("WECHAT_ARTICLE_WRITING") : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -118,7 +106,6 @@ export default async function WechatEditorPage() {
               assets={assetsByTopicId.get(topic.id) ?? []}
               imagesByAssetId={imagesByAssetId}
               canRun={Boolean(canRun)}
-              employeeName={employeeName}
               modelOptions={modelOptions}
             />
           ))}

@@ -22,10 +22,16 @@ export type TaskType =
   | "RESEARCH"
   | "VIDEO_WRITING"
   | "XIAOHONGSHU_WRITING"
+  | "XIAOHONGSHU_PAGES_PLANNING"
   | "IMAGE_GENERATION"
   | "WECHAT_WRITING"
   | "WECHAT_FULL_ARTICLE"
+  | "WECHAT_ARTICLE_WRITING"
   | "COMPLIANCE"
+  | "VIDEO_REVISION"
+  | "XIAOHONGSHU_REVISION"
+  | "XIAOHONGSHU_PAGES_REVISION"
+  | "WECHAT_ARTICLE_REVISION"
   | "PERFORMANCE_ANALYSIS";
 
 export const TASK_TYPES: readonly TaskType[] = [
@@ -34,10 +40,16 @@ export const TASK_TYPES: readonly TaskType[] = [
   "RESEARCH",
   "VIDEO_WRITING",
   "XIAOHONGSHU_WRITING",
+  "XIAOHONGSHU_PAGES_PLANNING",
   "IMAGE_GENERATION",
   "WECHAT_WRITING",
   "WECHAT_FULL_ARTICLE",
+  "WECHAT_ARTICLE_WRITING",
   "COMPLIANCE",
+  "VIDEO_REVISION",
+  "XIAOHONGSHU_REVISION",
+  "XIAOHONGSHU_PAGES_REVISION",
+  "WECHAT_ARTICLE_REVISION",
   "PERFORMANCE_ANALYSIS",
 ];
 
@@ -48,10 +60,16 @@ export const TASK_TYPE_EMPLOYEE: Record<TaskType, EmployeeId> = {
   RESEARCH: "researcher",
   VIDEO_WRITING: "video-editor",
   XIAOHONGSHU_WRITING: "xiaohongshu-editor",
+  XIAOHONGSHU_PAGES_PLANNING: "xiaohongshu-image-planner",
   IMAGE_GENERATION: "image-designer",
   WECHAT_WRITING: "wechat-editor",
   WECHAT_FULL_ARTICLE: "wechat-editor",
+  WECHAT_ARTICLE_WRITING: "wechat-editor",
   COMPLIANCE: "compliance",
+  VIDEO_REVISION: "reviser",
+  XIAOHONGSHU_REVISION: "reviser",
+  XIAOHONGSHU_PAGES_REVISION: "reviser",
+  WECHAT_ARTICLE_REVISION: "reviser",
   PERFORMANCE_ANALYSIS: "analyst",
 };
 
@@ -60,11 +78,17 @@ export const TASK_TYPE_LABEL: Record<TaskType, string> = {
   TOPIC_DISCOVERY: "今日选题搜索",
   RESEARCH: "联网研究",
   VIDEO_WRITING: "视频号",
-  XIAOHONGSHU_WRITING: "小红书",
+  XIAOHONGSHU_WRITING: "小红书标题文案",
+  XIAOHONGSHU_PAGES_PLANNING: "小红书图文规划",
   IMAGE_GENERATION: "小红书配图",
-  WECHAT_WRITING: "公众号大纲",
-  WECHAT_FULL_ARTICLE: "公众号完整文章",
+  WECHAT_WRITING: "公众号大纲（旧版）",
+  WECHAT_FULL_ARTICLE: "公众号完整文章（旧版）",
+  WECHAT_ARTICLE_WRITING: "公众号文章",
   COMPLIANCE: "合规审核",
+  VIDEO_REVISION: "视频号修改",
+  XIAOHONGSHU_REVISION: "小红书标题文案修改",
+  XIAOHONGSHU_PAGES_REVISION: "小红书图文规划修改",
+  WECHAT_ARTICLE_REVISION: "公众号文章修改",
   PERFORMANCE_ANALYSIS: "发布数据分析",
 };
 

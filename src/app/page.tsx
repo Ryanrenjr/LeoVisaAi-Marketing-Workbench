@@ -1,33 +1,20 @@
-import Image from "next/image";
-import Link from "next/link";
-import {
-  getAllComplianceReviews,
-  getAllContentAssets,
-  getAllTopics,
-  getLibraryTopics,
-  getStageCounts,
-  isDemoMode,
-} from "@/lib/topics";
+import { getAllComplianceReviews, getAllContentAssets, getAllTopics, getLibraryTopics, isDemoMode } from "@/lib/topics";
 import { getCurrentUser } from "@/lib/auth";
-import { getCurrentViewMode } from "@/lib/get-current-view-mode";
-import { PIPELINE_STAGES } from "@/lib/status";
 import { timeBasedGreeting, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
 import { getRecentPublishPerformanceCount } from "@/lib/analytics";
 import { getAllContentImages } from "@/lib/content-images";
 import {
   buildComplianceQueue,
-  buildHomeSpotlight,
-  buildLeoReviewQueue,
   filterContentEligibleTopics,
   summarizeEditorTasks,
   summarizePlannerTasks,
   summarizeResearcherTasks,
 } from "@/lib/employee-tasks";
 import { groupContentAssetsByTopicId, getLatestForLineage } from "@/lib/content-versions";
-import { Button } from "@/components/ui/button";
-import { GateNote, LaneCard, LaneGroup, LoopBackNote, ManualNote, StageRow } from "@/components/pipeline-flow";
+import { LaneCard, LaneGroup, StageRow } from "@/components/pipeline-flow";
 import type { ComplianceReviewRow } from "@/lib/types";
+import Link from "next/link";
 
 function DemoNotice() {
   return (
@@ -37,41 +24,7 @@ function DemoNotice() {
   );
 }
 
-/**
- * ADMIN-only, collapsed: the pipeline-stage pages (选题库/可进入拍摄/本周已发布/
- * 内容资产库) that aren't any digital employee's job — Leo shoots and
- * publishes by hand. Live user instruction: Admin Mode's home should be
- * the same employee-card view as Boss Mode, so this is tucked away rather
- * than a permanent 8-item nav bar (see src/components/nav.tsx).
- */
-async function OperationalLinks() {
-  const counts = await getStageCounts();
-  const libraryCount = counts.IDEA + counts.RESEARCHING + counts.RESEARCH_READY;
-
-  return (
-    <details className="group">
-      <summary className="cursor-pointer text-sm font-medium text-[var(--muted)]">运营列表</summary>
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
-        <Link href="/topics" className="card px-4 py-3 hover:border-[var(--accent)]/40">
-          <p className="text-sm text-[var(--muted)]">选题库</p>
-          <p className="mt-1 text-2xl font-semibold">{libraryCount}</p>
-        </Link>
-        {PIPELINE_STAGES.map((stage) => (
-          <Link key={stage.status} href={stage.href} className="card px-4 py-3 hover:border-[var(--accent)]/40">
-            <p className="text-sm text-[var(--muted)]">{stage.label}</p>
-            <p className="mt-1 text-2xl font-semibold">{counts[stage.status]}</p>
-          </Link>
-        ))}
-        <Link href="/content-assets" className="card px-4 py-3 hover:border-[var(--accent)]/40">
-          <p className="text-sm text-[var(--muted)]">内容资产库</p>
-          <p className="mt-1 text-sm text-[var(--muted)]">查看全部版本</p>
-        </Link>
-      </div>
-    </details>
-  );
-}
-
-async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) {
+async function BossHome({ demo }: { demo: boolean }) {
   const user = await getCurrentUser();
   const [
     libraryTopics,
@@ -107,21 +60,21 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
   const videoSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "VIDEO_CHANNEL");
   const xiaohongshuSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "XIAOHONGSHU");
   const wechatSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "WECHAT_OFFICIAL_ACCOUNT");
-  const reviewQueue = buildLeoReviewQueue(allTopics, contentAssetsByTopicId, new Map(), employeeNames);
-  const researchReviewCount = reviewQueue.filter((i) => i.employeeId === "researcher").length;
-  const contentReviewCount = reviewQueue.filter((i) => i.employeeId !== "researcher").length;
+  const xhsPagesPending = eligibleTopics.filter(
+    (t) => !getLatestForLineage(contentAssetsByTopicId.get(t.id) ?? [], "XIAOHONGSHU", "xiaohongshu_pages"),
+  ).length;
   const complianceAttentionItems = complianceQueue.filter(
     (item) => !item.latestReview || item.latestReview.overall_risk !== "LOW",
   );
-  const totalPending = researchReviewCount + contentReviewCount + complianceAttentionItems.length;
+  const needsRevisionItems = complianceQueue.filter(
+    (item) => item.latestReview && item.latestReview.overall_risk !== "LOW",
+  );
 
   const xiaohongshuDraftTopicIds = eligibleTopics
     .filter((t) => getLatestForLineage(contentAssetsByTopicId.get(t.id) ?? [], "XIAOHONGSHU", "xiaohongshu_post"))
     .map((t) => t.id);
   const topicsWithImages = new Set(contentImages.map((img) => img.topic_id));
   const imagePendingCount = xiaohongshuDraftTopicIds.filter((id) => !topicsWithImages.has(id)).length;
-
-  const spotlight = buildHomeSpotlight(reviewQueue, complianceAttentionItems, plannerSummary, employeeNames);
 
   const greeting = timeBasedGreeting(new Date().getHours());
   const name = user?.displayName ?? "老板";
@@ -145,38 +98,8 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
         </Link>
       </section>
 
-      <section className="flex flex-col gap-2">
-        <p className="text-xs font-semibold text-[var(--muted)]">现在该做什么</p>
-        {spotlight ? (
-          <Link href={spotlight.href} className="card flex items-center gap-4 px-5 py-4 hover:border-[var(--accent)]/40">
-            <Image
-              src={`/employees/${spotlight.employeeId}.png`}
-              alt=""
-              width={52}
-              height={52}
-              className="h-[52px] w-[52px] shrink-0 rounded-full object-cover"
-            />
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-semibold">{spotlight.title}</p>
-              <p className="truncate text-sm text-[var(--muted)]">{spotlight.subtitle}</p>
-            </div>
-            <Button className="shrink-0">{spotlight.actionLabel} →</Button>
-          </Link>
-        ) : (
-          <p className="card px-5 py-4 text-sm text-[var(--muted)]">暂时没有需要你处理的事项。</p>
-        )}
-        {totalPending > 1 && (
-          <Link href="/review" className="self-start text-xs text-[var(--muted)] hover:text-[var(--foreground)]">
-            还有 {totalPending - 1} 项待处理 →
-          </Link>
-        )}
-      </section>
-
       <section className="flex flex-col gap-1">
-        <h2 className="text-sm font-medium text-[var(--muted)]">工作流程 · 共 7 步</h2>
-        <p className="mb-3 text-xs text-[var(--muted)]">
-          绿色&ldquo;AI 一键产出&rdquo;点一下就出结果；灰色&ldquo;⏸ 需要你看一眼&rdquo;是必须你决定的地方。
-        </p>
+        <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 9 步</h2>
 
         <StageRow
           avatarId="planner"
@@ -202,9 +125,7 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
           href="/team/researcher"
           kind="auto"
         />
-        <GateNote text="等你确认研究结论——这一步必须是人点头，App 里写死的规则" />
-
-        <LaneGroup step={3} label="研究确认后，三路一起写文案">
+        <LaneGroup step={3} label="研究确认后，四路一起写文案">
           <LaneCard
             avatarId="video-editor"
             name={resolveEmployeeDisplayName("video-editor", employeeNames)}
@@ -218,6 +139,12 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
               xiaohongshuSummary.pendingGeneration > 0 ? `待生成 ${xiaohongshuSummary.pendingGeneration}` : "已完成"
             }
             href="/team/xiaohongshu-editor"
+          />
+          <LaneCard
+            avatarId="xiaohongshu-image-planner"
+            name={resolveEmployeeDisplayName("xiaohongshu-image-planner", employeeNames)}
+            status={xhsPagesPending > 0 ? `待生成 ${xhsPagesPending}` : "已完成"}
+            href="/team/xiaohongshu-image-planner"
           />
           <LaneCard
             avatarId="wechat-editor"
@@ -251,13 +178,27 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
           href="/team/compliance"
           kind="auto"
         />
-        <GateNote text="等你看一眼合规结果——发不发、要不要改，你来定" />
-
-        <ManualNote step={6} text="拍摄 + 发布 —— 这两步一直是你自己手动做的，AI 不插手，故意的" />
-
+        <StageRow
+          avatarId="reviser"
+          step={6}
+          name={resolveEmployeeDisplayName("reviser", employeeNames)}
+          status={needsRevisionItems.length > 0 ? `待修改 ${needsRevisionItems.length} 项` : "空闲"}
+          actionLabel="查看修改"
+          href="/team/reviser"
+          kind="auto"
+        />
+        <StageRow
+          avatarId="integrator"
+          step={7}
+          name={resolveEmployeeDisplayName("integrator", employeeNames)}
+          status="查看最终成品"
+          actionLabel="查看整合"
+          href="/team/integrator"
+          kind="auto"
+        />
         <StageRow
           avatarId="analyst"
-          step={7}
+          step={9}
           name={resolveEmployeeDisplayName("analyst", employeeNames)}
           status={performanceCount > 0 ? `已有 ${performanceCount} 条数据` : "等待你上传数据"}
           actionLabel="查看数据"
@@ -265,16 +206,12 @@ async function BossHome({ demo, isAdmin }: { demo: boolean; isAdmin: boolean }) 
           kind="input"
           last
         />
-
-        <LoopBackNote text="表现好的选题方向，下次会出现在选题策划员的参考里" />
       </section>
-
-      {isAdmin && <OperationalLinks />}
     </div>
   );
 }
 
 export default async function HomePage() {
-  const [mode, demo] = await Promise.all([getCurrentViewMode(), isDemoMode()]);
-  return <BossHome demo={demo} isAdmin={mode === "admin"} />;
+  const demo = await isDemoMode();
+  return <BossHome demo={demo} />;
 }

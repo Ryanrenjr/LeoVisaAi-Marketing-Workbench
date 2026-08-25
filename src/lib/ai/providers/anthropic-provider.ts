@@ -6,8 +6,10 @@ import { runResearchAgent, type ResearchAgentResult } from "../research-agent";
 import {
   generateVideoChannelContent,
   generateXiaohongshuContent,
+  generateXiaohongshuPagesPlan,
   generateWechatOutline,
   generateWechatFullArticle,
+  generateWechatArticle,
   type ContentAgentResult,
   type EvidenceInput,
 } from "../content-agent";
@@ -15,8 +17,10 @@ import type { GroundedResearchPack } from "../research-pack";
 import type {
   VideoChannelContent,
   XiaohongshuContent,
+  XiaohongshuPagesPlan,
   WechatOutline,
   WechatFullArticle,
+  WechatArticle,
   GenericContentTaskType,
 } from "../content-schemas";
 import type { AIExecutionResult } from "./types";
@@ -71,10 +75,15 @@ export async function runAnthropicContentTask(
   taskType: GenericContentTaskType,
   input: EvidenceInput,
   customInstructions?: string | null,
-): Promise<AIExecutionResult<VideoChannelContent | XiaohongshuContent | WechatOutline>> {
+): Promise<
+  AIExecutionResult<VideoChannelContent | XiaohongshuContent | XiaohongshuPagesPlan | WechatOutline | WechatArticle>
+> {
   if (taskType === "VIDEO_WRITING") return adaptContent(await generateVideoChannelContent(input, customInstructions));
   if (taskType === "XIAOHONGSHU_WRITING")
     return adaptContent(await generateXiaohongshuContent(input, customInstructions));
+  if (taskType === "XIAOHONGSHU_PAGES_PLANNING")
+    return adaptContent(await generateXiaohongshuPagesPlan(input, customInstructions));
+  if (taskType === "WECHAT_ARTICLE_WRITING") return adaptContent(await generateWechatArticle(input, customInstructions));
   return adaptContent(await generateWechatOutline(input, customInstructions));
 }
 

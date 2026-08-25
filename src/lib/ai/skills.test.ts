@@ -10,11 +10,14 @@ const ALL_EMPLOYEES: EmployeeId[] = [
   "wechat-editor",
   "image-designer",
   "compliance",
+  "reviser",
+  "integrator",
   "analyst",
+  "xiaohongshu-image-planner",
 ];
 
 describe("EMPLOYEE_DEFAULT_SKILL — every employee has a distinct Skill", () => {
-  it("defines exactly the 8 real employees, no gaps", () => {
+  it("defines exactly the 11 real employees, no gaps", () => {
     expect(Object.keys(EMPLOYEE_DEFAULT_SKILL).sort()).toEqual([...ALL_EMPLOYEES].sort());
   });
 

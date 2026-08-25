@@ -13,6 +13,7 @@ import type { AIExecutionResult } from "./types";
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const OPENAI_IMAGES_URL = "https://api.openai.com/v1/images/generations";
+const OPENAI_IMAGES_EDIT_URL = "https://api.openai.com/v1/images/edits";
 const OPENAI_MODELS_URL = "https://api.openai.com/v1/models";
 
 function isConfigured(): boolean {
@@ -175,6 +176,86 @@ export async function generateOpenAIImage(params: {
         size: params.size,
         n: 1,
       }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`HTTP ${response.status}${body ? `: ${body.slice(0, 200)}` : ""}`);
+    }
+
+    const json = (await response.json()) as OpenAIImageResponse;
+    const images = (json.data ?? []).map((d) => d.b64_json).filter((b): b is string => Boolean(b));
+    if (images.length === 0) throw new Error("模型没有返回图片结果。");
+
+    return {
+      ok: true,
+      data: { images },
+      error: null,
+      provider: "OPENAI",
+      modelId: params.modelId,
+      inputTokens: json.usage?.input_tokens ?? null,
+      outputTokens: json.usage?.output_tokens ?? null,
+      latencyMs: Date.now() - started,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      data: null,
+      error: formatError(err),
+      provider: "OPENAI",
+      modelId: params.modelId,
+      inputTokens: null,
+      outputTokens: null,
+      latencyMs: Date.now() - started,
+    };
+  }
+}
+
+/**
+ * The Images EDIT endpoint (multipart/form-data, not JSON) — takes one or
+ * more real reference images plus a prompt and lets the model fuse them
+ * into a newly generated image, instead of generating from text alone.
+ * Used for "带李尔王特写" covers: the reference photo is a real,
+ * ADMIN-uploaded photo of Leo (see src/lib/leo-portraits.ts) — the model
+ * is asked to work his actual likeness into the cover design, not to
+ * hallucinate a face from a text description. Same response shape as
+ * generateOpenAIImage (always base64 PNG).
+ */
+export async function generateOpenAIImageEdit(params: {
+  prompt: string;
+  modelId: string;
+  size: "1024x1024" | "1024x1536" | "1536x1024";
+  referenceImages: { bytes: Buffer; mimeType: string; filename: string }[];
+}): Promise<AIExecutionResult<{ images: string[] }>> {
+  const started = Date.now();
+
+  if (!isConfigured()) {
+    return {
+      ok: false,
+      data: null,
+      error: "OPENAI_API_KEY 未配置，无法生成图片。",
+      provider: "OPENAI",
+      modelId: params.modelId,
+      inputTokens: null,
+      outputTokens: null,
+      latencyMs: Date.now() - started,
+    };
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append("model", params.modelId);
+    formData.append("prompt", params.prompt);
+    formData.append("size", params.size);
+    formData.append("n", "1");
+    for (const ref of params.referenceImages) {
+      formData.append("image[]", new Blob([new Uint8Array(ref.bytes)], { type: ref.mimeType }), ref.filename);
+    }
+
+    const response = await fetch(OPENAI_IMAGES_EDIT_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: formData,
     });
 
     if (!response.ok) {

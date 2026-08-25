@@ -74,6 +74,8 @@ export const TOPIC_ACTIVITY_LABEL: Record<TopicActivityType, string> = {
   content_regenerated: "重新生成了内容",
   content_edited: "编辑了内容草稿",
   full_article_generated: "生成了公众号完整文章",
+  content_revised: "生成了修改版内容",
+  content_revision_failed: "内容修改失败",
 };
 
 export const CONTENT_PLATFORM_LABEL: Record<ContentPlatform, string> = {
@@ -84,9 +86,11 @@ export const CONTENT_PLATFORM_LABEL: Record<ContentPlatform, string> = {
 
 export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
   video_script: "视频号脚本",
-  xiaohongshu_post: "小红书笔记",
+  xiaohongshu_post: "小红书标题文案",
+  xiaohongshu_pages: "小红书图文规划",
   wechat_outline: "公众号大纲",
   wechat_full_article: "公众号完整文章",
+  wechat_article: "公众号文章",
 };
 
 /** Start (Monday 00:00) of the current calendar week, in the server's local time. */

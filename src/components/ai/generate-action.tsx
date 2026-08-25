@@ -32,7 +32,16 @@ export interface OverridableModel {
 }
 
 export interface GenerateActionProps {
-  action: (override: { provider: AIProviderId; modelId: string } | null) => Promise<void>;
+  /**
+   * Most callers still just fire-and-forget (return void) — unchanged
+   * behavior. A caller can optionally return `{ error }` when the
+   * underlying server action reports failure (e.g. schema validation, a
+   * DB constraint rejecting the insert) so it's shown here instead of the
+   * button silently going back to normal with nothing having happened
+   * (live bug report: "点了生成，等了一会，然后没出来" — the action WAS
+   * failing every time, just never surfaced).
+   */
+  action: (override: { provider: AIProviderId; modelId: string } | null) => Promise<{ error?: string } | void>;
   label: string;
   taskType: TaskType;
   variant?: "primary" | "secondary";
@@ -60,6 +69,7 @@ export function GenerateAction({
   const [showPicker, setShowPicker] = useState(false);
   const [selectedKey, setSelectedKey] = useState<string>("");
   const [confirming, setConfirming] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [testResult, testAction, testPending] = useActionState<HealthCheckResult | null, FormData>(
     runModelHealthCheck,
@@ -72,9 +82,11 @@ export function GenerateAction({
 
   function run() {
     const override = selected ? { provider: selected.provider, modelId: selected.modelId } : null;
+    setRunError(null);
     startTransition(async () => {
-      await action(override);
+      const result = await action(override);
       setConfirming(false);
+      if (result?.error) setRunError(result.error);
     });
   }
 
@@ -169,6 +181,12 @@ export function GenerateAction({
             {label}
           </Button>
         </div>
+      )}
+
+      {runError && !pending && (
+        <p className="rounded-md border border-red-600/40 bg-red-600/10 px-3 py-2 text-sm text-[var(--foreground)]">
+          生成失败：{runError}
+        </p>
       )}
     </div>
   );

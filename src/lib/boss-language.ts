@@ -48,11 +48,14 @@ export type EmployeeId =
   | "image-designer"
   | "wechat-editor"
   | "compliance"
-  | "analyst";
+  | "reviser"
+  | "integrator"
+  | "analyst"
+  | "xiaohongshu-image-planner";
 
 export interface DigitalEmployee {
   id: EmployeeId;
-  letter: "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H";
+  letter: "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K";
   name: string;
   responsibility: string;
   href: string;
@@ -60,15 +63,35 @@ export interface DigitalEmployee {
 }
 
 /**
- * Eight digital employees. Originally five (planner/researcher/editor/
+ * Eleven digital employees. Originally five (planner/researcher/editor/
  * compliance/analyst) — "编辑" (content editor) was split into three
  * platform-specific employees (video-editor/xiaohongshu-editor/
  * wechat-editor) plus a new image-designer, by explicit live user
  * instruction: different platforms need visibly different working styles,
- * not one generic "editor" doing all three. `name` here is the default; a
- * signed-in ADMIN can override it per employee via employee_names (see
- * src/lib/employee-names.ts) — always resolve display names through
- * resolveEmployeeDisplayName, not this array directly.
+ * not one generic "editor" doing all three. `reviser` (H) was added next,
+ * also by explicit live user instruction: after compliance (G) flags an
+ * issue, someone needs to actually fix it — reviser produces a revised
+ * draft addressing exactly what was flagged, still subject to human
+ * review before publish (see revision-actions.ts). `integrator` (I) came
+ * next, also explicit live user instruction: text and cover images for
+ * one platform are produced by different employees on different pages,
+ * so before Leo's final look there needs to be one place that shows the
+ * assembled package per platform (text + cover, plus carousel images for
+ * Xiaohongshu) — integrator never generates or changes anything, it's a
+ * pure read-only assembly view (see /team/integrator/page.tsx).
+ * `xiaohongshu-image-planner` (K) split off from `xiaohongshu-editor` (D)
+ * last, also explicit live user instruction: title/caption writing and
+ * per-page image-text planning are different skills — D now owns only
+ * title_options/cover_title/caption/keywords, K owns the page plan
+ * (XiaohongshuPagesPlanSchema, content + design-direction cues per page).
+ * K does NOT generate the images itself — a follow-up live-user
+ * correction moved that back to `image-designer` (E), which reads K's
+ * plan and has its own "生成小红书图文" button (see
+ * generateXiaohongshuCarousel in team/image-designer/actions.ts) — K only
+ * ever produces the text plan. `name` here is the default; a signed-in
+ * ADMIN can override it per employee via
+ * employee_names (see src/lib/employee-names.ts) — always resolve display
+ * names through resolveEmployeeDisplayName, not this array directly.
  */
 export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
   {
@@ -98,8 +121,8 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
   {
     id: "xiaohongshu-editor",
     letter: "D",
-    name: "小红书文字编辑员",
-    responsibility: "把审核过的研究写成小红书攻略文字。",
+    name: "小红书标题文案员",
+    responsibility: "把审核过的研究写成小红书标题和发布文案（图文内页的内容由图文规划员另外负责）。",
     href: "/team/xiaohongshu-editor",
     enabled: true,
   },
@@ -107,7 +130,7 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
     id: "image-designer",
     letter: "E",
     name: "小红书图片设计员",
-    responsibility: "根据小红书文案生成配图。",
+    responsibility: "根据小红书/视频文案和公众号文章生成封面图，也根据图文规划员写好的规划生成小红书图文（P1-P6）配图。",
     href: "/team/image-designer",
     enabled: true,
   },
@@ -115,7 +138,7 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
     id: "wechat-editor",
     letter: "F",
     name: "公众号长文编辑员",
-    responsibility: "把审核过的研究写成公众号大纲和完整文章。",
+    responsibility: "把审核过的研究直接写成公众号长文文案。",
     href: "/team/wechat-editor",
     enabled: true,
   },
@@ -128,11 +151,35 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
     enabled: true,
   },
   {
-    id: "analyst",
+    id: "reviser",
     letter: "H",
+    name: "终审修改员",
+    responsibility: "合规审核员标出问题后，把被标出的地方改好，出一版新的草稿给你确认。",
+    href: "/team/reviser",
+    enabled: true,
+  },
+  {
+    id: "integrator",
+    letter: "I",
+    name: "内容整合员",
+    responsibility: "把每个平台改好的文字和配图放在一起，让你一眼看到最终成品，再决定要不要进入拍摄。",
+    href: "/team/integrator",
+    enabled: true,
+  },
+  {
+    id: "analyst",
+    letter: "J",
     name: "数据分析员",
     responsibility: "看发布后的数据表现，帮你判断下次该往哪个方向选题。",
     href: "/team/analyst",
+    enabled: true,
+  },
+  {
+    id: "xiaohongshu-image-planner",
+    letter: "K",
+    name: "小红书图文规划员",
+    responsibility: "规划小红书图文每一页写什么、怎么设计（配图由小红书图片设计员负责生成，标题和发布文案由小红书标题文案员负责）。",
+    href: "/team/xiaohongshu-image-planner",
     enabled: true,
   },
 ];

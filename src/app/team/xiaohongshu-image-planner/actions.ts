@@ -1,0 +1,121 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { createClient } from "@/lib/supabase/server";
+import { requireUser } from "@/lib/auth";
+import { canGenerateContent, canManageContentAssets } from "@/lib/permissions";
+import {
+  getContentAssets,
+  getLatestResearchPack,
+  getResearchSources,
+  getTopicById,
+} from "@/lib/topics";
+import { nextVersionNumber } from "@/lib/content-versions";
+import { deriveTitleAndContent } from "@/lib/content-mapping";
+import { runContentTask, isRouterResolutionFailure } from "@/lib/ai/router";
+import { getModel } from "@/lib/ai/providers/registry";
+import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
+import { writeUsageLog } from "@/lib/ai/usage-log";
+import type { ModelRef } from "@/lib/ai/providers/types";
+
+/**
+ * Employee K（小红书图文规划员）— writes ONLY the P1–Pn text plan for a 小红书
+ * 图文 carousel (what each page says, what its design direction should be).
+ * Live user instruction (correction): K does not generate the images
+ * itself — that button lives on E｜图片设计员's own page, reading K's plan
+ * (see generateXiaohongshuCarousel in team/image-designer/actions.ts).
+ * Deliberately separate from Employee D（小红书标题文案员）, which only
+ * writes title/caption — see docs/digital-employee-skills.md "K｜小红书图文规划员".
+ */
+
+/** "生成图文规划" — writes the P1–Pn page plan (xiaohongshu_pages), independent of D's title/caption draft. */
+export async function generatePagesPlan(
+  topicId: string,
+  override?: ModelRef | null,
+): Promise<{ ok: boolean; error?: string }> {
+  const user = await requireUser();
+  if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
+
+  const topic = await getTopicById(topicId);
+  if (!topic) return { ok: false, error: "未找到选题。" };
+  if (!canGenerateContent(topic.status)) {
+    return { ok: false, error: "无法生成内容：研究尚未批准（需要状态为 RESEARCH_APPROVED 或之后）。" };
+  }
+
+  const researchPack = await getLatestResearchPack(topicId);
+  if (!researchPack) return { ok: false, error: "未找到已批准的研究成果，无法生成内容。" };
+  const sources = await getResearchSources(researchPack.id);
+
+  const supabase = await createClient();
+  const result = await runContentTask("XIAOHONGSHU_PAGES_PLANNING", { topic, researchPack, sources }, override);
+
+  if (isRouterResolutionFailure(result)) {
+    await supabase.from("topic_activity_log").insert({
+      topic_id: topicId,
+      activity_type: "content_generation_failed",
+      actor_id: user.id,
+      detail: { platform: "XIAOHONGSHU", contentType: "xiaohongshu_pages", error: result.error },
+    });
+    return { ok: false, error: result.error };
+  }
+
+  const model = getModel(result.provider, result.modelId);
+  const { usageLogFailed } = await writeUsageLog(supabase, {
+    workflow_type: "content",
+    model_alias: `${result.provider}/${result.modelId}`,
+    topic_id: topicId,
+    platform: "XIAOHONGSHU",
+    input_tokens: result.inputTokens,
+    output_tokens: result.outputTokens,
+    latency_ms: result.latencyMs,
+    success: result.ok,
+    error: result.ok ? null : result.error,
+    provider: result.provider,
+    task_type: "XIAOHONGSHU_PAGES_PLANNING",
+    digital_employee: TASK_TYPE_EMPLOYEE.XIAOHONGSHU_PAGES_PLANNING,
+    pricing_type_at_execution: model?.pricingType ?? null,
+  });
+
+  if (!result.ok || !result.data) {
+    await supabase.from("topic_activity_log").insert({
+      topic_id: topicId,
+      activity_type: "content_generation_failed",
+      actor_id: user.id,
+      detail: {
+        platform: "XIAOHONGSHU",
+        contentType: "xiaohongshu_pages",
+        error: result.error,
+        ...(usageLogFailed ? { usageLogFailed: true } : {}),
+      },
+    });
+    return { ok: false, error: result.error ?? "生成失败" };
+  }
+
+  const existing = await getContentAssets(topicId);
+  const version = nextVersionNumber(existing, "XIAOHONGSHU", "xiaohongshu_pages");
+  const { title, content } = deriveTitleAndContent("XIAOHONGSHU", result.data);
+
+  const { error: insertError } = await supabase.from("content_assets").insert({
+    topic_id: topicId,
+    research_pack_id: researchPack.id,
+    platform: "XIAOHONGSHU",
+    content_type: "xiaohongshu_pages",
+    title,
+    content,
+    structured_content: result.data,
+    version,
+    created_by: user.id,
+  });
+  if (insertError) return { ok: false, error: "保存失败" };
+
+  await supabase.from("topic_activity_log").insert({
+    topic_id: topicId,
+    activity_type: version === 1 ? "content_generated" : "content_regenerated",
+    actor_id: user.id,
+    detail: { platform: "XIAOHONGSHU", contentType: "xiaohongshu_pages", version, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
+  });
+
+  revalidatePath(`/topics/${topicId}`);
+  revalidatePath("/team/xiaohongshu-image-planner");
+  return { ok: true };
+}

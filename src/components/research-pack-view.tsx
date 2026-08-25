@@ -16,8 +16,10 @@ function ScoreCard({ score, breakdown }: { score: number; breakdown: ScoreBreakd
       </div>
       <p className="text-sm">{bossScoreLabel(score)}</p>
       <p className="text-xs text-[var(--muted)]">
-        优先级 {breakdown.priority}/60 · 信息完整度 {breakdown.completeness}/40
+        优先级 {breakdown.priority}/60 分（选题标记为「高」「中」「低」决定） · 信息完整度 {breakdown.completeness}/40 分（业务线、目标受众、内容支柱、核心问题这
+        4 项每填一项 10 分）
       </p>
+      <p className="text-xs text-[var(--muted)]">50 分以上算合格，可以继续做研究；低于 50 分建议先把选题信息补充完整。</p>
     </div>
   );
 }

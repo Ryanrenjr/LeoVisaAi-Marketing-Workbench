@@ -31,17 +31,17 @@ type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 
 const PLATFORM_CONTENT_TYPE: Record<
   ContentPlatform,
-  Extract<ContentType, "video_script" | "xiaohongshu_post" | "wechat_outline">
+  Extract<ContentType, "video_script" | "xiaohongshu_post" | "wechat_article">
 > = {
   VIDEO_CHANNEL: "video_script",
   XIAOHONGSHU: "xiaohongshu_post",
-  WECHAT_OFFICIAL_ACCOUNT: "wechat_outline",
+  WECHAT_OFFICIAL_ACCOUNT: "wechat_article",
 };
 
 const PLATFORM_TASK_TYPE: Record<ContentPlatform, GenericContentTaskType> = {
   VIDEO_CHANNEL: "VIDEO_WRITING",
   XIAOHONGSHU: "XIAOHONGSHU_WRITING",
-  WECHAT_OFFICIAL_ACCOUNT: "WECHAT_WRITING",
+  WECHAT_OFFICIAL_ACCOUNT: "WECHAT_ARTICLE_WRITING",
 };
 
 /**
