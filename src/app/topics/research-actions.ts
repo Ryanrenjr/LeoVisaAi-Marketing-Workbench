@@ -146,6 +146,8 @@ export async function runResearch(topicId: string, override?: ModelRef | null) {
       key_findings: resultPack.keyFindings,
       warnings: resultPack.warnings,
       confidence: resultPack.confidence,
+      score_total: resultPack.scoreTotal,
+      score_breakdown: resultPack.scoreBreakdown,
     })
     .select("id")
     .single();
@@ -185,6 +187,7 @@ export async function runResearch(topicId: string, override?: ModelRef | null) {
     detail: {
       sourceCount: resultPack.sources.length,
       confidence: resultPack.confidence,
+      scoreTotal: resultPack.scoreTotal,
       latencyMs: Date.now() - started,
       ...(usageLogFailed ? { usageLogFailed: true } : {}),
     },

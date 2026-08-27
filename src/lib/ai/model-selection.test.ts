@@ -28,15 +28,26 @@ describe("selectModel", () => {
     if (!result.ok) expect(result.error).toMatch(/不存在|停用/);
   });
 
-  it("rejects an override lacking web-search capability for RESEARCH with the exact required message", () => {
+  it("accepts a non-web-search override for RESEARCH as long as it supports structured output — the live path (Search Router) never calls the model's own search tool", () => {
     const result = selectModel({
       taskType: "RESEARCH",
       developmentMode: true,
       configuredDefault: null,
       executionOverride: { provider: "GROQ", modelId: "openai/gpt-oss-120b" },
     });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.model.provider).toBe("GROQ");
+  });
+
+  it("rejects an override lacking structured-output capability for RESEARCH with the capability error message", () => {
+    const result = selectModel({
+      taskType: "RESEARCH",
+      developmentMode: true,
+      configuredDefault: null,
+      executionOverride: { provider: "OPENAI", modelId: "gpt-image-2" },
+    });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toBe("此模型不支持当前研究流程所需的联网能力。");
+    if (!result.ok) expect(result.error).toBe("此模型不支持当前任务所需的结构化输出能力。");
   });
 
   it("prefers ADMIN's configured default over Development Mode free-first, even when a free model would otherwise qualify", () => {

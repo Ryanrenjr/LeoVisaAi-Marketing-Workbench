@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getAllTopics, getLatestResearchPack, getResearchSources, isDemoMode } from "@/lib/topics";
+import { hasScoreData } from "@/lib/ai/research-pack";
 import { getEmployee, resolveEmployeeDisplayName, BOSS_CONFIDENCE_LABEL, BOSS_STATUS_LABEL } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
 import { EmployeeHeader } from "@/components/employee-header";
@@ -8,6 +9,7 @@ import type { ResearchConfidence, Topic } from "@/lib/types";
 interface PackInfo {
   confidence: ResearchConfidence;
   sourceCount: number;
+  scoreTotal: number | null;
 }
 
 function ResearchRow({ topic, info, showGenerateLink }: { topic: Topic; info?: PackInfo; showGenerateLink?: boolean }) {
@@ -27,6 +29,7 @@ function ResearchRow({ topic, info, showGenerateLink }: { topic: Topic; info?: P
           <>
             <span>官方来源：{info.sourceCount}</span>
             <span>{BOSS_CONFIDENCE_LABEL[info.confidence]}</span>
+            {info.scoreTotal !== null && <span>研究评分：{info.scoreTotal}/100</span>}
           </>
         )}
       </div>
@@ -85,7 +88,14 @@ export default async function ResearcherPage() {
       const pack = await getLatestResearchPack(topic.id);
       if (!pack) return null;
       const sources = await getResearchSources(pack.id);
-      return [topic.id, { confidence: pack.confidence, sourceCount: sources.length }] as const;
+      return [
+        topic.id,
+        {
+          confidence: pack.confidence,
+          sourceCount: sources.length,
+          scoreTotal: hasScoreData(pack.score_breakdown) ? pack.score_total : null,
+        },
+      ] as const;
     }),
   );
   const infoByTopicId = new Map(

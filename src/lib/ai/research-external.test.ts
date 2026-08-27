@@ -6,6 +6,15 @@ import {
 } from "./research-external";
 import type { SearchResult } from "../search/types";
 
+const SAMPLE_SCORES = {
+  official_sources: { score: 18, reason: "r" },
+  fact_accuracy: { score: 18, reason: "r" },
+  policy_timeline: { score: 18, reason: "r" },
+  scope_exceptions: { score: 13, reason: "r" },
+  data_reliability: { score: 9, reason: "r" },
+  external_safety: { score: 13, reason: "r" },
+};
+
 function makeResult(overrides: Partial<SearchResult> = {}): SearchResult {
   return {
     title: "GOV.UK — ILR guidance",
@@ -28,6 +37,7 @@ describe("ExternalResearchClaimSchema", () => {
       source_references: ["S1"],
       warnings: "",
       confidence: "HIGH",
+      scores: SAMPLE_SCORES,
     });
     expect(parsed.success).toBe(true);
   });
@@ -65,7 +75,7 @@ describe("buildExternalGroundedPack", () => {
     const results = [makeResult({ url: "https://www.gov.uk/real", title: "Real GOV.UK page", snippet: "real snippet" })];
     const { labelToResult } = buildSearchResultManifest(results);
     const pack = buildExternalGroundedPack(
-      { summary: "s", key_findings: ["f"], source_references: ["S1"], warnings: "", confidence: "HIGH" },
+      { summary: "s", key_findings: ["f"], source_references: ["S1"], warnings: "", confidence: "HIGH", scores: SAMPLE_SCORES },
       labelToResult,
     );
     expect(pack.sources).toHaveLength(1);
@@ -77,7 +87,7 @@ describe("buildExternalGroundedPack", () => {
     const results = [makeResult({ url: "https://www.gov.uk/only" })];
     const { labelToResult } = buildSearchResultManifest(results);
     const pack = buildExternalGroundedPack(
-      { summary: "s", key_findings: ["f"], source_references: ["S1", "S99"], warnings: "", confidence: "MEDIUM" },
+      { summary: "s", key_findings: ["f"], source_references: ["S1", "S99"], warnings: "", confidence: "MEDIUM", scores: SAMPLE_SCORES },
       labelToResult,
     );
     expect(pack.sources).toHaveLength(1);
@@ -88,7 +98,7 @@ describe("buildExternalGroundedPack", () => {
   it("never resolves an invented label into a fabricated source even when nothing real was cited", () => {
     const { labelToResult } = buildSearchResultManifest([]);
     const pack = buildExternalGroundedPack(
-      { summary: "s", key_findings: [], source_references: ["S1"], warnings: "", confidence: "LOW" },
+      { summary: "s", key_findings: [], source_references: ["S1"], warnings: "", confidence: "LOW", scores: SAMPLE_SCORES },
       labelToResult,
     );
     expect(pack.sources).toHaveLength(0);
@@ -97,7 +107,7 @@ describe("buildExternalGroundedPack", () => {
   it("always discloses the snippet-only limitation regardless of confidence", () => {
     const { labelToResult } = buildSearchResultManifest([]);
     const pack = buildExternalGroundedPack(
-      { summary: "s", key_findings: [], source_references: [], warnings: "", confidence: "HIGH" },
+      { summary: "s", key_findings: [], source_references: [], warnings: "", confidence: "HIGH", scores: SAMPLE_SCORES },
       labelToResult,
     );
     expect(pack.warnings).toMatch(/未完整阅读原始网页全文/);
@@ -106,7 +116,7 @@ describe("buildExternalGroundedPack", () => {
   it("preserves the model's own uncertainty notes in warnings", () => {
     const { labelToResult } = buildSearchResultManifest([]);
     const pack = buildExternalGroundedPack(
-      { summary: "s", key_findings: [], source_references: [], warnings: "规则可能已更新，建议人工核实。", confidence: "LOW" },
+      { summary: "s", key_findings: [], source_references: [], warnings: "规则可能已更新，建议人工核实。", confidence: "LOW", scores: SAMPLE_SCORES },
       labelToResult,
     );
     expect(pack.warnings).toContain("规则可能已更新，建议人工核实。");
@@ -116,7 +126,7 @@ describe("buildExternalGroundedPack", () => {
     const results = [makeResult({ url: "https://www.gov.uk/dup" })];
     const { labelToResult } = buildSearchResultManifest(results);
     const pack = buildExternalGroundedPack(
-      { summary: "s", key_findings: [], source_references: ["S1", "S1"], warnings: "", confidence: "HIGH" },
+      { summary: "s", key_findings: [], source_references: ["S1", "S1"], warnings: "", confidence: "HIGH", scores: SAMPLE_SCORES },
       labelToResult,
     );
     expect(pack.sources).toHaveLength(1);

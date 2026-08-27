@@ -24,11 +24,16 @@ describe("getModel", () => {
 });
 
 describe("isModelSuitableForTask", () => {
-  it("requires supportsWebSearch for RESEARCH", () => {
+  it("requires only supportsStructuredOutput for RESEARCH — not supportsWebSearch — since the live path (Search Router) never calls the model's own search tool", () => {
     const anthropic = getModel("ANTHROPIC", "claude-opus-5")!;
     const groq = getModel("GROQ", "openai/gpt-oss-120b")!;
+    const openaiSol = getModel("OPENAI", "gpt-5.6-sol")!;
     expect(isModelSuitableForTask(anthropic, "RESEARCH")).toBe(true);
-    expect(isModelSuitableForTask(groq, "RESEARCH")).toBe(false);
+    expect(isModelSuitableForTask(groq, "RESEARCH")).toBe(true);
+    expect(isModelSuitableForTask(openaiSol, "RESEARCH")).toBe(true);
+    // gpt-image-2 is the one registry entry with supportsStructuredOutput: false.
+    const image = getModel("OPENAI", "gpt-image-2")!;
+    expect(isModelSuitableForTask(image, "RESEARCH")).toBe(false);
   });
 
   it("requires supportsStructuredOutput for content-writing tasks", () => {
@@ -56,7 +61,7 @@ describe("isModelSuitableForTask", () => {
 describe("listModelsForTask", () => {
   it("only returns models satisfying the task's capability requirement", () => {
     const models = listModelsForTask("RESEARCH");
-    expect(models.every((m) => m.supportsWebSearch)).toBe(true);
+    expect(models.every((m) => m.supportsStructuredOutput)).toBe(true);
     expect(models.length).toBeGreaterThan(0);
   });
 });

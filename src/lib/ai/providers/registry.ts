@@ -165,14 +165,23 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
 
   // --- OpenAI ----------------------------------------------------------------
   // Real calls via raw HTTP (Chat Completions, JSON mode) — no native
-  // web-search or vision path wired yet, so these never satisfy RESEARCH or
-  // PERFORMANCE_ANALYSIS. OpenAI has no free tier, so both entries are PAID
-  // and NOT developmentRecommended — Development Mode's free-first routing
-  // will never auto-select them; an ADMIN must explicitly set one as the
-  // default in /admin/ai-models. gpt-5-mini confirmed working end-to-end
-  // via a real chat completions call (JSON mode) on 2026-08-21; gpt-5
-  // confirmed present in this account's /v1/models listing the same day
-  // but not separately smoke-tested.
+  // web-search or vision path wired yet, so no OpenAI entry can satisfy
+  // PERFORMANCE_ANALYSIS (needs supportsVision). RESEARCH is different: an
+  // OpenAI model CAN be selected for RESEARCH, but only for the Search
+  // Router path (Search Provider retrieves real sources first, model only
+  // analyses them via structured output — see runResearchTask in
+  // router.ts) — never the native-grounding fallback, which is gated
+  // separately and explicitly to ANTHROPIC/GOOGLE only regardless of this
+  // registry (see runNativeResearchTask). isModelSuitableForTask's RESEARCH
+  // check is therefore just supportsStructuredOutput, same as every other
+  // task, not supportsWebSearch — see registry.ts below. OpenAI has no
+  // free tier, so every entry here is PAID and NOT developmentRecommended
+  // — Development Mode's free-first routing will never auto-select one; an
+  // ADMIN must explicitly set one as the default in /admin/ai-models.
+  // gpt-5-mini confirmed working end-to-end via a real chat completions
+  // call (JSON mode) on 2026-08-21; gpt-5 confirmed present in this
+  // account's /v1/models listing the same day but not separately
+  // smoke-tested.
   {
     provider: "OPENAI",
     modelId: "gpt-5-mini",
@@ -190,6 +199,60 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     freeTierNote: null,
     pricingNote: "按输入/输出 token 计费，需要在你的 OpenAI 账户绑定付款方式并保有余额，价格以 OpenAI 官方定价为准。",
     lastVerifiedAt: "2026-08-21",
+  },
+  // gpt-5.6-terra — the balanced tier of OpenAI's GPT-5.6 series (between
+  // the flagship Sol and cost-efficient Luna), supports vision/tool
+  // use/structured outputs/reasoning via both Chat Completions and
+  // Responses; this app calls it through Chat Completions like the rest of
+  // the OpenAI entries above. Live user instruction: fixed as A｜选题策划员's
+  // TOPIC_DISCOVERY model with reasoning_effort locked to "medium" (its own
+  // documented default) — "性价比最好" for 搜新闻/找角度/判断传播/排序. See
+  // reasoningEffort below and generateOpenAIStructured in openai-provider.ts
+  // for how that gets sent on the request.
+  {
+    provider: "OPENAI",
+    modelId: "gpt-5.6-terra",
+    displayName: "GPT-5.6 Terra (OpenAI)",
+    pricingType: "PAID",
+    supportsWebSearch: false,
+    supportsStructuredOutput: true,
+    supportsToolUse: true,
+    supportsVision: true,
+    supportsImageGeneration: false,
+    supportsReasoning: true,
+    reasoningEffort: "medium",
+    enabled: true,
+    developmentRecommended: false,
+    dataPolicyNote: "通过 OpenAI API 直接调用；按 OpenAI API 数据使用政策，API 数据默认不用于训练模型。",
+    freeTierNote: null,
+    pricingNote: "按输入/输出 token 计费（含独立的缓存读写价格），需要在你的 OpenAI 账户绑定付款方式并保有余额，价格以 OpenAI 官方定价为准。",
+    lastVerifiedAt: "2026-08-27",
+  },
+  // gpt-5.6-sol — the flagship tier of OpenAI's GPT-5.6 series (above
+  // Terra and Luna), strongest reasoning/coding/agentic performance in the
+  // family. Live user instruction: fixed as B｜政策研究员's RESEARCH model
+  // with reasoning_effort locked to "high" — B's job (查清事实、判断规则、
+  // 六项打分、二次复审) is exactly the kind of careful, multi-step
+  // reasoning task worth paying for the flagship tier, unlike A's
+  // higher-volume/lower-stakes topic triage on Terra/medium.
+  {
+    provider: "OPENAI",
+    modelId: "gpt-5.6-sol",
+    displayName: "GPT-5.6 Sol (OpenAI)",
+    pricingType: "PAID",
+    supportsWebSearch: false,
+    supportsStructuredOutput: true,
+    supportsToolUse: true,
+    supportsVision: true,
+    supportsImageGeneration: false,
+    supportsReasoning: true,
+    reasoningEffort: "high",
+    enabled: true,
+    developmentRecommended: false,
+    dataPolicyNote: "通过 OpenAI API 直接调用；按 OpenAI API 数据使用政策，API 数据默认不用于训练模型。",
+    freeTierNote: null,
+    pricingNote: "按输入/输出 token 计费（含独立的缓存读写价格），比 Terra 更贵，需要在你的 OpenAI 账户绑定付款方式并保有余额，价格以 OpenAI 官方定价为准。",
+    lastVerifiedAt: "2026-08-27",
   },
   {
     provider: "OPENAI",
@@ -248,14 +311,23 @@ export function listModels(): readonly ModelRegistryEntry[] {
 }
 
 /**
- * RESEARCH requires real web/search capability; PERFORMANCE_ANALYSIS
- * requires reading a screenshot (vision); every other task (including
- * COMPLIANCE, live as of the Digital Employee Expansion milestone) only
- * requires structured output.
+ * PERFORMANCE_ANALYSIS requires reading a screenshot (vision);
+ * IMAGE_GENERATION requires the Images endpoint capability; every other
+ * task — including RESEARCH — only requires structured output.
+ *
+ * RESEARCH doesn't require `supportsWebSearch` here: the live path
+ * (Search Router retrieves real sources, then the resolved model only
+ * analyses them via structured output — see runResearchTask in router.ts)
+ * never calls the model's own search tool. `supportsWebSearch` still
+ * matters for the native-grounding fallback (no search provider
+ * configured), but that path is gated separately and explicitly to
+ * ANTHROPIC/GOOGLE regardless of this function (see
+ * runNativeResearchTask) — a model that reaches that path without real
+ * search ability fails there with a clear error, it doesn't silently
+ * proceed.
  */
 export function isModelSuitableForTask(model: ModelRegistryEntry, taskType: TaskType): boolean {
   if (!model.enabled) return false;
-  if (taskType === "RESEARCH") return model.supportsWebSearch;
   if (taskType === "PERFORMANCE_ANALYSIS") return model.supportsVision && model.supportsStructuredOutput;
   if (taskType === "IMAGE_GENERATION") return model.supportsImageGeneration;
   return model.supportsStructuredOutput;

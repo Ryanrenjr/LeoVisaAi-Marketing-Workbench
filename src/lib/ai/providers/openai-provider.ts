@@ -38,6 +38,8 @@ export async function generateOpenAIStructured<T>(params: {
   userMessage: string;
   schema: ZodType<T>;
   modelId: string;
+  /** e.g. "medium" for gpt-5.6-terra — omit for models with no reasoning-effort knob. This app never sends `tools`, so the "tools + reasoning_effort" conflict some reasoning models have on /v1/chat/completions doesn't apply here. */
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
 }): Promise<AIExecutionResult<T>> {
   const started = Date.now();
 
@@ -82,6 +84,7 @@ export async function generateOpenAIStructured<T>(params: {
           type: "json_schema",
           json_schema: { name: "response", schema: jsonSchema, strict: true },
         },
+        ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
       }),
     });
 

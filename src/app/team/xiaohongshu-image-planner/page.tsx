@@ -96,7 +96,7 @@ export default async function XiaohongshuImagePlannerPage() {
         avatarId="xiaohongshu-image-planner"
         letter={employee.letter}
         name={employeeName}
-        subtitle="规划小红书图文每一页写什么、怎么设计（P1 是什么、P2 怎么设计……），实际配图由小红书图片设计员生成。"
+        subtitle="规划小红书图文每一页写什么、怎么设计（P1 是什么、P2 怎么设计……），实际配图由图片设计员生成。"
       />
 
       {demo && (

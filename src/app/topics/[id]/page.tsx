@@ -353,15 +353,15 @@ export default async function TopicDetailPage({
               </p>
             )}
             <div className="flex flex-wrap items-start gap-2">
-              {showRunResearch && researchOptions && (
-                <GenerateAction
-                  action={runResearch.bind(null, topic.id)}
-                  label={researchPack ? "重新运行研究" : "运行研究"}
-                  taskType="RESEARCH"
-                  models={researchOptions.models}
-                  defaultModel={researchOptions.defaultModel}
-                  resolutionError={researchOptions.resolutionError}
-                />
+              {/* Live user instruction: B｜政策研究员 model is fixed
+                  (GPT-5.6 Sol / high reasoning, set in /admin/ai-models) —
+                  no picker/override here, unlike other GenerateAction
+                  buttons on this page. A plain form-action button, not
+                  GenerateAction, so there's nothing to show. */}
+              {showRunResearch && (
+                <form action={runResearch.bind(null, topic.id, null)}>
+                  <Button type="submit">{researchPack ? "重新运行研究" : "运行研究"}</Button>
+                </form>
               )}
               {showEditResearch && (
                 <Link href={`/topics/${topic.id}/research/edit`}>

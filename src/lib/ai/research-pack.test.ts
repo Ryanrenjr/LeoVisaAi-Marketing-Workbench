@@ -1,10 +1,59 @@
 import { describe, expect, it } from "vitest";
 import {
+  RESEARCH_SCORE_DIMENSIONS,
   buildGroundedPack,
   buildResearchUserPrompt,
   groundSources,
+  normalizeScoreBreakdown,
   parseResearchPackJson,
+  totalScore,
 } from "./research-pack";
+
+const FULL_SCORES = {
+  official_sources: { score: 20, reason: "a" },
+  fact_accuracy: { score: 20, reason: "a" },
+  policy_timeline: { score: 20, reason: "a" },
+  scope_exceptions: { score: 15, reason: "a" },
+  data_reliability: { score: 10, reason: "a" },
+  external_safety: { score: 15, reason: "a" },
+};
+
+describe("normalizeScoreBreakdown — B｜政策研究员's six-dimension score", () => {
+  it("carries through a fully-formed claim with each dimension's fixed max", () => {
+    const breakdown = normalizeScoreBreakdown(FULL_SCORES);
+    expect(breakdown.officialSources).toEqual({ score: 20, max: 20, reason: "a" });
+    expect(breakdown.scopeExceptions).toEqual({ score: 15, max: 15, reason: "a" });
+    expect(totalScore(breakdown)).toBe(100);
+  });
+
+  it("defaults a missing dimension to 0 with an explicit reason, never silently omitted", () => {
+    const { official_sources, ...rest } = FULL_SCORES;
+    void official_sources;
+    const breakdown = normalizeScoreBreakdown(rest);
+    expect(breakdown.officialSources.score).toBe(0);
+    expect(breakdown.officialSources.max).toBe(20);
+    expect(breakdown.officialSources.reason).toMatch(/未提供有效打分/);
+  });
+
+  it("clamps an out-of-range score to the dimension's max rather than trusting it", () => {
+    const breakdown = normalizeScoreBreakdown({ ...FULL_SCORES, fact_accuracy: { score: 999, reason: "a" } });
+    expect(breakdown.factAccuracy.score).toBe(20);
+  });
+
+  it("clamps a negative score to 0", () => {
+    const breakdown = normalizeScoreBreakdown({ ...FULL_SCORES, data_reliability: { score: -5, reason: "a" } });
+    expect(breakdown.dataReliability.score).toBe(0);
+  });
+
+  it("defaults every dimension to 0 when given a non-object", () => {
+    const breakdown = normalizeScoreBreakdown(null);
+    expect(totalScore(breakdown)).toBe(0);
+  });
+
+  it("the six dimensions' max values sum to exactly 100", () => {
+    expect(RESEARCH_SCORE_DIMENSIONS.reduce((sum, d) => sum + d.max, 0)).toBe(100);
+  });
+});
 
 describe("parseResearchPackJson", () => {
   const valid = JSON.stringify({
@@ -215,6 +264,14 @@ describe("buildGroundedPack", () => {
         warnings: "",
         confidence: "MEDIUM",
         confidenceInferred: false,
+      scoreBreakdown: {
+        officialSources: { score: 18, max: 20, reason: "r" },
+        factAccuracy: { score: 18, max: 20, reason: "r" },
+        policyTimeline: { score: 18, max: 20, reason: "r" },
+        scopeExceptions: { score: 13, max: 15, reason: "r" },
+        dataReliability: { score: 9, max: 10, reason: "r" },
+        externalSafety: { score: 13, max: 15, reason: "r" },
+      },
       },
       realResults,
     );
@@ -231,6 +288,14 @@ describe("buildGroundedPack", () => {
         warnings: "原始警告",
         confidence: "HIGH",
         confidenceInferred: false,
+      scoreBreakdown: {
+        officialSources: { score: 18, max: 20, reason: "r" },
+        factAccuracy: { score: 18, max: 20, reason: "r" },
+        policyTimeline: { score: 18, max: 20, reason: "r" },
+        scopeExceptions: { score: 13, max: 15, reason: "r" },
+        dataReliability: { score: 9, max: 10, reason: "r" },
+        externalSafety: { score: 13, max: 15, reason: "r" },
+      },
       },
       realResults,
     );
@@ -246,6 +311,14 @@ describe("buildGroundedPack", () => {
         warnings: "",
         confidence: "LOW",
         confidenceInferred: false,
+      scoreBreakdown: {
+        officialSources: { score: 18, max: 20, reason: "r" },
+        factAccuracy: { score: 18, max: 20, reason: "r" },
+        policyTimeline: { score: 18, max: 20, reason: "r" },
+        scopeExceptions: { score: 13, max: 15, reason: "r" },
+        dataReliability: { score: 9, max: 10, reason: "r" },
+        externalSafety: { score: 13, max: 15, reason: "r" },
+      },
       },
       [],
     );
@@ -261,6 +334,14 @@ describe("buildGroundedPack", () => {
         warnings: "",
         confidence: "LOW",
         confidenceInferred: true,
+      scoreBreakdown: {
+        officialSources: { score: 18, max: 20, reason: "r" },
+        factAccuracy: { score: 18, max: 20, reason: "r" },
+        policyTimeline: { score: 18, max: 20, reason: "r" },
+        scopeExceptions: { score: 13, max: 15, reason: "r" },
+        dataReliability: { score: 9, max: 10, reason: "r" },
+        externalSafety: { score: 13, max: 15, reason: "r" },
+      },
       },
       [],
     );
@@ -276,6 +357,14 @@ describe("buildGroundedPack", () => {
         warnings: "",
         confidence: "HIGH",
         confidenceInferred: false,
+      scoreBreakdown: {
+        officialSources: { score: 18, max: 20, reason: "r" },
+        factAccuracy: { score: 18, max: 20, reason: "r" },
+        policyTimeline: { score: 18, max: 20, reason: "r" },
+        scopeExceptions: { score: 13, max: 15, reason: "r" },
+        dataReliability: { score: 9, max: 10, reason: "r" },
+        externalSafety: { score: 13, max: 15, reason: "r" },
+      },
       },
       realResults,
     );

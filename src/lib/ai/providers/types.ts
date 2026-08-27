@@ -130,6 +130,12 @@ export interface ModelRegistryEntry {
   freeTierNote: string | null;
   pricingNote: string;
   lastVerifiedAt: string;
+  /**
+   * Fixed reasoning-effort level to request for this model, when it
+   * supports one (currently only wired through for OPENAI — see
+   * generateOpenAIStructured). Omit for models with no such knob.
+   */
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 /** The normalized shape every provider returns, regardless of SDK. */

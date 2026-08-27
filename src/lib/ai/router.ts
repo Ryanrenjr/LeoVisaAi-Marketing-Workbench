@@ -1,6 +1,7 @@
 import "server-only";
 import { selectModel } from "./model-selection";
 import { getModelRoutingConfig } from "./model-config";
+import { getModel } from "./providers/registry";
 import {
   runAnthropicResearch,
   runAnthropicContentTask,
@@ -144,7 +145,9 @@ async function dispatchStructuredAnyProvider<T>(
   if (provider === "ANTHROPIC") return generateAnthropicStructured({ ...params, modelId });
   if (provider === "GOOGLE") return generateGoogleStructured({ ...params, modelId });
   if (provider === "GROQ") return generateGroqStructured({ ...params, modelId });
-  if (provider === "OPENAI") return generateOpenAIStructured({ ...params, modelId });
+  if (provider === "OPENAI") {
+    return generateOpenAIStructured({ ...params, modelId, reasoningEffort: getModel(provider, modelId)?.reasoningEffort });
+  }
   return generateOpenRouterStructured({ ...params, modelId });
 }
 
@@ -258,7 +261,9 @@ async function dispatchStructured<T>(
 ): Promise<AIExecutionResult<T>> {
   if (provider === "GOOGLE") return generateGoogleStructured({ ...params, modelId });
   if (provider === "GROQ") return generateGroqStructured({ ...params, modelId });
-  if (provider === "OPENAI") return generateOpenAIStructured({ ...params, modelId });
+  if (provider === "OPENAI") {
+    return generateOpenAIStructured({ ...params, modelId, reasoningEffort: getModel(provider, modelId)?.reasoningEffort });
+  }
   return generateOpenRouterStructured({ ...params, modelId });
 }
 
@@ -552,7 +557,7 @@ export async function runPerformanceAnalysisTask(
 }
 
 /**
- * Employee 小红书图片设计员 — generates a cover image from an already
+ * Employee 图片设计员 — generates a cover image from an already
  * human-reviewed 小红书 post draft (never from raw research directly).
  * Only OPENAI currently registers a supportsImageGeneration model — the
  * registry filter makes any other resolution unreachable, but this stays a

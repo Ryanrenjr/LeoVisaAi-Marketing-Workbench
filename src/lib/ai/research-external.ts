@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { SearchResult } from "../search/types";
 import type { GroundedResearchPack, GroundedSource } from "./research-pack";
+import { normalizeScoreBreakdown, totalScore } from "./research-pack";
 
 /**
  * Pure prompt/schema/manifest/grounding logic for the external-search
@@ -23,6 +24,7 @@ Hard rules:
 - The manifest gives you titles and short snippets, NOT the full text of each page. You have not read any complete official document. Do not write as if you have — treat snippet-level evidence as partial, and be conservative about claims that would require the full page to verify.
 - If the evidence doesn't clearly and sufficiently support a claim, do NOT state it. Instead note the gap in "warnings" (what's uncertain, what a human should verify against the full source, what requires expert review before publishing) and reflect it in your confidence level.
 - Self-assess confidence honestly: HIGH requires multiple consistent primary-source (gov.uk / legislation.gov.uk / parliament.uk / official Home Office guidance) results clearly supporting the findings; MEDIUM means some support exists but with gaps, reliance on non-primary sources, or only snippet-level evidence for an important point; LOW means evidence is thin, conflicting, off-topic, or from non-primary sources only. When in doubt, choose the lower confidence level.
+- Score your own research honestly across six dimensions, each with a max score and a one-sentence reason grounded in what the evidence manifest actually shows (see the Skill's full scoring rubric for what each dimension means) — a low score on a dimension is a legitimate, useful outcome, not a failure to hide.
 
 Output format: your reply must be ONLY a single JSON object — no markdown code fences, no prose before or after it — matching exactly this shape:
 {
@@ -30,8 +32,18 @@ Output format: your reply must be ONLY a single JSON object — no markdown code
   "key_findings": ["short finding 1", "short finding 2", "..."],
   "source_references": ["S1", "S2", "..."],
   "warnings": "caveats, uncertainty, or anything a human should double-check (including anything only supported by a snippet rather than the full page) before this is used in content — empty string if none",
-  "confidence": "LOW" | "MEDIUM" | "HIGH"
+  "confidence": "LOW" | "MEDIUM" | "HIGH",
+  "scores": {
+    "official_sources": {"score": 0-20, "reason": "one sentence"},
+    "fact_accuracy": {"score": 0-20, "reason": "one sentence"},
+    "policy_timeline": {"score": 0-20, "reason": "one sentence"},
+    "scope_exceptions": {"score": 0-15, "reason": "one sentence"},
+    "data_reliability": {"score": 0-10, "reason": "one sentence"},
+    "external_safety": {"score": 0-15, "reason": "one sentence"}
+  }
 }`;
+
+const scoreItemSchema = (max: number) => z.object({ score: z.number().min(0).max(max), reason: z.string() });
 
 export const ExternalResearchClaimSchema = z.object({
   summary: z.string(),
@@ -39,6 +51,14 @@ export const ExternalResearchClaimSchema = z.object({
   source_references: z.array(z.string()),
   warnings: z.string(),
   confidence: z.enum(["LOW", "MEDIUM", "HIGH"]),
+  scores: z.object({
+    official_sources: scoreItemSchema(20),
+    fact_accuracy: scoreItemSchema(20),
+    policy_timeline: scoreItemSchema(20),
+    scope_exceptions: scoreItemSchema(15),
+    data_reliability: scoreItemSchema(10),
+    external_safety: scoreItemSchema(15),
+  }),
 });
 export type ExternalResearchClaim = z.infer<typeof ExternalResearchClaimSchema>;
 
@@ -123,11 +143,15 @@ export function buildExternalGroundedPack(
     "（本次研究基于搜索结果标题与摘要生成，AI 未完整阅读原始网页全文；如涉及重要细节，请人工核实原始页面。）",
   );
 
+  const scoreBreakdown = normalizeScoreBreakdown(claim.scores);
+
   return {
     summary: claim.summary,
     keyFindings: claim.key_findings,
     sources,
     warnings: notes.join(" "),
     confidence: claim.confidence,
+    scoreBreakdown,
+    scoreTotal: totalScore(scoreBreakdown),
   };
 }

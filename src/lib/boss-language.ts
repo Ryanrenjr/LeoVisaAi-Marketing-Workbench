@@ -129,7 +129,7 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
   {
     id: "image-designer",
     letter: "E",
-    name: "小红书图片设计员",
+    name: "图片设计员",
     responsibility: "根据小红书/视频文案和公众号文章生成封面图，也根据图文规划员写好的规划生成小红书图文（P1-P6）配图。",
     href: "/team/image-designer",
     enabled: true,
@@ -178,7 +178,7 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
     id: "xiaohongshu-image-planner",
     letter: "K",
     name: "小红书图文规划员",
-    responsibility: "规划小红书图文每一页写什么、怎么设计（配图由小红书图片设计员负责生成，标题和发布文案由小红书标题文案员负责）。",
+    responsibility: "规划小红书图文每一页写什么、怎么设计（配图由图片设计员负责生成，标题和发布文案由小红书标题文案员负责）。",
     href: "/team/xiaohongshu-image-planner",
     enabled: true,
   },

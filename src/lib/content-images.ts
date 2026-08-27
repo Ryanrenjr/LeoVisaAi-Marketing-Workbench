@@ -4,7 +4,7 @@ import { isSupabaseConfigured } from "./supabase/config";
 import type { ContentImageRow } from "./types";
 
 /**
- * Data access for Employee 小红书图片设计员 (image-designer)
+ * Data access for Employee 图片设计员 (image-designer)
  * (content_images table + the private 'content-images' storage bucket —
  * see supabase/migrations/0009_editor_split_and_image_designer.sql).
  * Mirrors analytics.ts's shape for publish_performance/publish-screenshots.

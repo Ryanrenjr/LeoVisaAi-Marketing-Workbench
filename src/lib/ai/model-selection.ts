@@ -28,8 +28,13 @@ export type SelectModelResult =
   | { ok: true; model: ModelRegistryEntry; source: SelectModelSource }
   | { ok: false; error: string };
 
-function capabilityError(taskType: TaskType): string {
-  if (taskType === "RESEARCH") return "此模型不支持当前研究流程所需的联网能力。";
+/**
+ * RESEARCH has no special-cased message: it only requires structured
+ * output now (the Search Router path never calls the model's own search
+ * tool — see isModelSuitableForTask in registry.ts), same requirement as
+ * every other task, so the generic message is already accurate.
+ */
+function capabilityError(): string {
   return "此模型不支持当前任务所需的结构化输出能力。";
 }
 
@@ -39,7 +44,7 @@ export function selectModel(params: SelectModelParams): SelectModelResult {
   if (executionOverride) {
     const model = getModel(executionOverride.provider, executionOverride.modelId);
     if (!model) return { ok: false, error: "所选模型不存在或已停用。" };
-    if (!isModelSuitableForTask(model, taskType)) return { ok: false, error: capabilityError(taskType) };
+    if (!isModelSuitableForTask(model, taskType)) return { ok: false, error: capabilityError() };
     return { ok: true, model, source: "override" };
   }
 

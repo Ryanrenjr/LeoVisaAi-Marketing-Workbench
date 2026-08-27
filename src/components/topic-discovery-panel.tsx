@@ -65,6 +65,45 @@ export interface TopicDiscoveryModelOptions {
   resolutionError: string | null;
 }
 
+/**
+ * The account/column this search runs for. Live user instruction: add the
+ * buttons for the other columns now, but only 李尔王讲政策 actually works —
+ * the other two are visible-but-disabled ("正在开发") rather than hidden,
+ * matching this app's usual "never silently hide, show disabled + reason"
+ * convention. When a second column goes live, this list (and the actual
+ * per-account search/prompt logic behind it) needs to grow together.
+ */
+const ACCOUNTS = [
+  { id: "policy", name: "李尔王讲政策", enabled: true },
+  { id: "uk-watch", name: "李尔王看英国", enabled: false },
+  { id: "storytelling", name: "李尔王讲故事", enabled: false },
+] as const;
+
+function AccountSelector() {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {ACCOUNTS.map((account) =>
+        account.enabled ? (
+          <span
+            key={account.id}
+            className="rounded-full border border-[var(--accent)] bg-[var(--accent)]/10 px-3 py-1.5 text-sm font-medium text-[var(--accent)]"
+          >
+            {account.name}
+          </span>
+        ) : (
+          <span
+            key={account.id}
+            className="flex items-center gap-1.5 rounded-full border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--muted)] opacity-60"
+          >
+            {account.name}
+            <span className="text-xs">（开发中）</span>
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
 export function TopicDiscoveryPanel({
   modelOptions,
 }: {
@@ -86,10 +125,12 @@ export function TopicDiscoveryPanel({
     setCandidates(result.candidates);
   }
 
-  const buttonLabel = keyword.trim() ? `搜索「${keyword.trim()}」相关选题` : "搜索当日选题";
+  const buttonLabel = keyword.trim() ? `搜索「${keyword.trim()}」相关选题` : "一键搜选题";
 
   return (
     <section className="flex flex-col gap-3">
+      <AccountSelector />
+
       <input
         type="text"
         value={keyword}

@@ -141,6 +141,30 @@ export interface ResearchSource {
   created_at: string;
 }
 
+/**
+ * B｜政策研究员's six-dimension research-quality score (see
+ * docs/digital-employee-skills.md "B｜政策研究员" §10) — a separate concept
+ * from `topics.score_breakdown` (which scores whether a topic is worth
+ * pursuing, set by A before research even starts). Each item's `max` is
+ * fixed by the Skill (20/20/20/15/10/15, summing to 100) but carried on
+ * every item rather than hard-coded in the UI, so a pack always renders
+ * correctly even if the point allocation changes later.
+ */
+export interface ResearchScoreItem {
+  score: number;
+  max: number;
+  reason: string;
+}
+
+export interface ResearchScoreBreakdown {
+  officialSources: ResearchScoreItem;
+  factAccuracy: ResearchScoreItem;
+  policyTimeline: ResearchScoreItem;
+  scopeExceptions: ResearchScoreItem;
+  dataReliability: ResearchScoreItem;
+  externalSafety: ResearchScoreItem;
+}
+
 export interface ResearchPack {
   id: string;
   research_run_id: string;
@@ -149,6 +173,9 @@ export interface ResearchPack {
   key_findings: string[];
   warnings: string;
   confidence: ResearchConfidence;
+  /** Null for packs generated before this scoring feature existed. */
+  score_total: number | null;
+  score_breakdown: ResearchScoreBreakdown | null;
   edited_by: string | null;
   edited_at: string | null;
   created_at: string;

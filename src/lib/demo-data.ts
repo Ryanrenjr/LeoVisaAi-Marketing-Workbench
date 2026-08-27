@@ -1,14 +1,47 @@
 import { computeTopicScore } from "./scoring";
+import { totalScore } from "./ai/research-pack";
 import type {
   AiUsageLogEntry,
   ContentAsset,
   Profile,
   ResearchPack,
+  ResearchScoreBreakdown,
   ResearchSource,
   Topic,
   TopicActivity,
   TopicStatusEvent,
 } from "./types";
+
+/** One demo score breakdown per confidence level, so the preview shows realistic variation across the three scenarios below. */
+function demoScoreBreakdown(level: "high" | "medium" | "low"): ResearchScoreBreakdown {
+  const presets: Record<typeof level, ResearchScoreBreakdown> = {
+    high: {
+      officialSources: { score: 20, max: 20, reason: "（示例）核心结论均有 GOV.UK / Home Office 官方来源直接支持。" },
+      factAccuracy: { score: 19, max: 20, reason: "（示例）关键事实已交叉核实，无明显冲突。" },
+      policyTimeline: { score: 20, max: 20, reason: "（示例）政策状态与生效日期均明确。" },
+      scopeExceptions: { score: 14, max: 15, reason: "（示例）适用范围和主要例外已列出。" },
+      dataReliability: { score: 10, max: 10, reason: "（示例）无重要数据引用，默认满分。" },
+      externalSafety: { score: 14, max: 15, reason: "（示例）可直接用于公开内容，个别措辞建议加限定词。" },
+    },
+    medium: {
+      officialSources: { score: 15, max: 20, reason: "（示例）大部分结论有官方来源，少量依赖高质量法律解释。" },
+      factAccuracy: { score: 16, max: 20, reason: "（示例）基本准确，但有少量无法完全确认的信息。" },
+      policyTimeline: { score: 15, max: 20, reason: "（示例）主要时间线清楚，过渡安排细节待确认。" },
+      scopeExceptions: { score: 11, max: 15, reason: "（示例）基本清楚，存在少量边界问题。" },
+      dataReliability: { score: 7, max: 10, reason: "（示例）部分数字来自可靠二手来源。" },
+      externalSafety: { score: 12, max: 15, reason: "（示例）可以使用，但需要限定词。" },
+    },
+    low: {
+      officialSources: { score: 6, max: 20, reason: "（示例）主要依赖新闻和二手信息，官方来源不足。" },
+      factAccuracy: { score: 8, max: 20, reason: "（示例）核心事实存在明显不确定点。" },
+      policyTimeline: { score: 8, max: 20, reason: "（示例）政策状态或时间点不明确。" },
+      scopeExceptions: { score: 5, max: 15, reason: "（示例）只能确认一般规则，容易造成一刀切误导。" },
+      dataReliability: { score: 4, max: 10, reason: "（示例）数字存在口径问题。" },
+      externalSafety: { score: 6, max: 15, reason: "（示例）必须明显改写后才能发布。" },
+    },
+  };
+  return presets[level];
+}
 
 /**
  * Static fallback content, used only when Supabase isn't configured yet
@@ -316,6 +349,8 @@ export const DEMO_RESEARCH_PACKS: ResearchPack[] = [
     ],
     warnings: "（示例）以下来源与摘要为占位演示数据，非真实网络搜索结果；请在正式使用前通过“运行研究”生成真实来源。",
     confidence: "MEDIUM",
+    score_breakdown: demoScoreBreakdown("medium"),
+    score_total: totalScore(demoScoreBreakdown("medium")),
     edited_by: null,
     edited_at: null,
     created_at: days(3),
@@ -329,6 +364,8 @@ export const DEMO_RESEARCH_PACKS: ResearchPack[] = [
     key_findings: ["示例发现：不同来源对“单次中断的可接受时长”表述不一致，需以官方指引为准"],
     warnings: "（示例）本次演示数据模拟“来源薄弱、置信度低”的情况，用于预览低置信度提示样式，非真实搜索结果。",
     confidence: "LOW",
+    score_breakdown: demoScoreBreakdown("low"),
+    score_total: totalScore(demoScoreBreakdown("low")),
     edited_by: null,
     edited_at: null,
     created_at: days(4),
@@ -344,6 +381,8 @@ export const DEMO_RESEARCH_PACKS: ResearchPack[] = [
     ],
     warnings: "（示例）以下内容与来源为占位演示数据，非真实网络搜索结果。",
     confidence: "HIGH",
+    score_breakdown: demoScoreBreakdown("high"),
+    score_total: totalScore(demoScoreBreakdown("high")),
     edited_by: null,
     edited_at: null,
     created_at: days(2),

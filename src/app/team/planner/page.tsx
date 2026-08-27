@@ -1,54 +1,29 @@
-import Link from "next/link";
-import { getLibraryTopics, isDemoMode } from "@/lib/topics";
-import { getCurrentUser } from "@/lib/auth";
-import { getEmployee, BOSS_STATUS_LABEL, resolveEmployeeDisplayName } from "@/lib/boss-language";
+import { isDemoMode } from "@/lib/topics";
+import { getEmployee, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
-import { getTaskModelOptions } from "@/lib/ai/task-model-options";
-import { Button } from "@/components/ui/button";
 import { EmployeeHeader } from "@/components/employee-header";
 import { TopicDiscoveryPanel } from "@/components/topic-discovery-panel";
-import type { Topic } from "@/lib/types";
 
-function TopicRow({ topic }: { topic: Topic }) {
-  return (
-    <li className="border-b border-[var(--border)] py-2 last:border-b-0">
-      <Link href={`/topics/${topic.id}`} className="flex items-center justify-between gap-4 hover:underline">
-        <span className="truncate">{topic.title}</span>
-        <span className="shrink-0 text-xs text-[var(--muted)]">{BOSS_STATUS_LABEL[topic.status]}</span>
-      </Link>
-    </li>
-  );
-}
-
-function TopicList({ topics, empty }: { topics: Topic[]; empty: string }) {
-  if (topics.length === 0) return <p className="text-sm text-[var(--muted)]">{empty}</p>;
-  return (
-    <ul>
-      {topics.map((t) => (
-        <TopicRow key={t.id} topic={t} />
-      ))}
-    </ul>
-  );
-}
-
+/**
+ * Live user instruction: this page is used by a non-technical employee who
+ * doesn't know software or AI — one job, one button. Everything that isn't
+ * "搜索当日选题 → ✓/✗ each candidate" was removed: the 查看选题/新建想法
+ * links (no replacement entry point — /topics and /topics/new are URL-only
+ * now, same as the other pipeline-stage pages since 运营列表 was dropped),
+ * and the three redundant topic lists that mostly repeated the same
+ * handful of topics under different headers. Live user instruction
+ * (follow-up): the model is locked here for everyone, ADMIN included —
+ * "用户不能更改，我到时候在后台更改就行了" — so `modelOptions` is always null
+ * (never fetched via getTaskModelOptions), which makes TopicDiscoveryPanel
+ * render its plain-button fallback with no "更换本次模型"/"测试这个模型"
+ * controls. The task still runs on whatever model ADMIN has configured as
+ * TOPIC_DISCOVERY's default in /admin/ai-models — only the picker is
+ * hidden, not the underlying Model Router behavior.
+ */
 export default async function PlannerPage() {
   const employee = getEmployee("planner");
-  const [libraryTopics, demo, employeeNames, user] = await Promise.all([
-    getLibraryTopics(),
-    isDemoMode(),
-    getEmployeeNames(),
-    getCurrentUser(),
-  ]);
+  const [demo, employeeNames] = await Promise.all([isDemoMode(), getEmployeeNames()]);
   const employeeName = resolveEmployeeDisplayName("planner", employeeNames);
-
-  const isAdmin = !demo && user?.role === "ADMIN";
-  const modelOptions = isAdmin ? await getTaskModelOptions("TOPIC_DISCOVERY") : null;
-
-  const highPriority = libraryTopics.filter((t) => t.priority === "HIGH");
-  const notStarted = libraryTopics.filter((t) => t.status === "IDEA");
-  const recentlyCreated = [...libraryTopics]
-    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-    .slice(0, 5);
 
   return (
     <div className="flex flex-col gap-8">
@@ -60,31 +35,7 @@ export default async function PlannerPage() {
         </p>
       )}
 
-      {!demo && <TopicDiscoveryPanel modelOptions={modelOptions} />}
-
-      <div className="flex flex-wrap gap-2">
-        <Link href="/topics">
-          <Button variant="secondary">查看选题</Button>
-        </Link>
-        <Link href="/topics/new">
-          <Button variant="secondary">新建想法</Button>
-        </Link>
-      </div>
-
-      <section>
-        <h2 className="mb-2 text-sm font-medium text-[var(--muted)]">高优先级选题</h2>
-        <TopicList topics={highPriority} empty="暂无高优先级选题。" />
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-sm font-medium text-[var(--muted)]">待开始选题</h2>
-        <TopicList topics={notStarted} empty="暂无待开始的选题。" />
-      </section>
-
-      <section>
-        <h2 className="mb-2 text-sm font-medium text-[var(--muted)]">最近新建选题</h2>
-        <TopicList topics={recentlyCreated} empty="暂无选题。" />
-      </section>
+      {!demo && <TopicDiscoveryPanel modelOptions={null} />}
     </div>
   );
 }
