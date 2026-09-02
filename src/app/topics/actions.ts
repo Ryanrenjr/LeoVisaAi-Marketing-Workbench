@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { getTopicById } from "@/lib/topics";
 import { computeTopicScore } from "@/lib/scoring";
 import { validateTopicInput } from "@/lib/topic-validation";
-import { canArchiveTopic } from "@/lib/permissions";
+import { canApproveResearch, canArchiveTopic } from "@/lib/permissions";
 import { canArchive, canStartResearch } from "@/lib/topic-workflow";
 import type { ContentPillar, TopicInput, TopicPriority, TopicStatus } from "@/lib/types";
 
@@ -179,6 +179,35 @@ export async function startResearch(topicId: string, currentStatus: TopicStatus)
 
   revalidatePath(`/topics/${topicId}`);
   revalidatePath("/topics");
+}
+
+/**
+ * The "淘汰" / "一次性工具" primitive (live user instruction, 2026-09):
+ * this topic and everything derived from it is gone, permanently — not a
+ * status change, not a soft-hide. `topics` cascades (`on delete cascade`)
+ * through research/content/compliance/activity/status-event rows, so a
+ * single delete here clears the whole tree; the one thing that does NOT
+ * cascade is the actual bytes in Supabase Storage, so generated images
+ * are removed explicitly first. Called both when a session is rejected
+ * partway through, and — bound to the final download — when a session
+ * completes. See CLAUDE.md rule 4.
+ */
+export async function discardTopic(topicId: string) {
+  const user = await requireUser();
+  if (!canApproveResearch(user.role)) throw new Error("Forbidden: ADMIN or EXPERT role required");
+
+  const supabase = await createClient();
+
+  const { data: images } = await supabase.from("content_images").select("image_path").eq("topic_id", topicId);
+  const paths = (images ?? []).map((img) => img.image_path).filter((p): p is string => Boolean(p));
+  if (paths.length > 0) {
+    await supabase.storage.from("content-images").remove(paths);
+  }
+
+  await supabase.from("topics").delete().eq("id", topicId);
+
+  revalidatePath("/topics");
+  redirect("/");
 }
 
 export async function archiveTopic(topicId: string, currentStatus: TopicStatus) {

@@ -7,7 +7,7 @@ import { runPerformanceAnalysisTask, isRouterResolutionFailure } from "@/lib/ai/
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
-import type { ContentPlatform } from "@/lib/types";
+import type { ContentPillar, ContentPlatform } from "@/lib/types";
 import type { AIProviderId } from "@/lib/ai/providers/types";
 
 export interface UploadPerformanceState {
@@ -28,6 +28,12 @@ const MAX_BYTES = 8 * 1024 * 1024;
  * feature anywhere in this app" (docs/security-boundaries.md) — only a
  * platform's own public post-performance numbers, stored in a private
  * bucket only staff can read, never a client document.
+ *
+ * Takes a hand-typed `topicTitle` (+ optional `contentPillar`) rather than
+ * picking from a dropdown of published topics: under the "工具化" model a
+ * topic is deleted the moment its session ends, so by the time a post's
+ * performance is uploaded (days/weeks later) there is no `topics` row left
+ * to select. See CLAUDE.md rule 4 and `publish_performance.topic_title`.
  */
 export async function uploadPerformanceScreenshot(
   _prevState: UploadPerformanceState,
@@ -35,14 +41,16 @@ export async function uploadPerformanceScreenshot(
 ): Promise<UploadPerformanceState> {
   const user = await requireUser();
 
-  const topicId = String(formData.get("topicId") ?? "");
+  const topicTitle = String(formData.get("topicTitle") ?? "").trim();
+  const contentPillarRaw = String(formData.get("contentPillar") ?? "");
+  const contentPillar = contentPillarRaw ? (contentPillarRaw as ContentPillar) : null;
   const platform = String(formData.get("platform") ?? "") as ContentPlatform;
   const file = formData.get("screenshot");
   const modelKey = formData.get("modelKey");
   const [modelProvider, modelId] = typeof modelKey === "string" ? modelKey.split("::") : [];
   const override = modelProvider && modelId ? { provider: modelProvider as AIProviderId, modelId } : null;
 
-  if (!topicId) return { error: "请选择对应的选题。" };
+  if (!topicTitle) return { error: "请填写这条内容的标题。" };
   if (!platform) return { error: "请选择平台。" };
   if (!(file instanceof File) || file.size === 0) return { error: "请选择一张截图。" };
 
@@ -55,7 +63,7 @@ export async function uploadPerformanceScreenshot(
 
   const supabase = await createClient();
   const ext = mimeType.split("/")[1];
-  const path = `${topicId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const path = `${user.id}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
 
   const { error: uploadError } = await supabase.storage
     .from("publish-screenshots")
@@ -72,7 +80,7 @@ export async function uploadPerformanceScreenshot(
   await writeUsageLog(supabase, {
     workflow_type: "performance_analysis",
     model_alias: `${result.provider}/${result.modelId}`,
-    topic_id: topicId,
+    topic_id: null,
     platform,
     input_tokens: result.inputTokens,
     output_tokens: result.outputTokens,
@@ -90,7 +98,8 @@ export async function uploadPerformanceScreenshot(
   }
 
   const { error: insertError } = await supabase.from("publish_performance").insert({
-    topic_id: topicId,
+    topic_title: topicTitle,
+    content_pillar: contentPillar,
     platform,
     screenshot_path: path,
     extracted_metrics: result.data,

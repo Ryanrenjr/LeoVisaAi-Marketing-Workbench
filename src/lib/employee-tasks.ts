@@ -23,55 +23,6 @@ export interface PlannerSummary {
   highPriority: number;
 }
 
-/** `libraryTopics` = topics in IDEA/RESEARCHING/RESEARCH_READY (getLibraryTopics()). */
-export function summarizePlannerTasks(libraryTopics: Topic[]): PlannerSummary {
-  return {
-    todayCandidates: libraryTopics.length,
-    highPriority: libraryTopics.filter((t) => t.priority === "HIGH").length,
-  };
-}
-
-export interface ResearcherSummary {
-  inProgress: number;
-  awaitingReview: number;
-}
-
-export function summarizeResearcherTasks(topics: Topic[]): ResearcherSummary {
-  return {
-    inProgress: topics.filter((t) => t.status === "RESEARCHING").length,
-    awaitingReview: topics.filter((t) => t.status === "RESEARCH_READY").length,
-  };
-}
-
-export interface EditorSummary {
-  pendingGeneration: number;
-  draftsComplete: number;
-}
-
-/**
- * `contentEligibleTopics` = topics at RESEARCH_APPROVED or later
- * (canGenerateContent). `contentAssetsByTopicId` need only contain
- * entries for topics that actually have at least one asset. `platform`
- * scopes the count to one platform-specific editor — since the "编辑"
- * employee split into video-editor/xiaohongshu-editor/wechat-editor, a
- * topic can be "drafts complete" for one platform while still pending for
- * another.
- */
-export function summarizeEditorTasks(
-  contentEligibleTopics: Topic[],
-  contentAssetsByTopicId: Map<string, ContentAsset[]>,
-  platform: ContentPlatform,
-): EditorSummary {
-  let pendingGeneration = 0;
-  let draftsComplete = 0;
-  for (const topic of contentEligibleTopics) {
-    const assets = contentAssetsByTopicId.get(topic.id);
-    if (assets?.some((a) => a.platform === platform)) draftsComplete++;
-    else pendingGeneration++;
-  }
-  return { pendingGeneration, draftsComplete };
-}
-
 /** Topics eligible for the Editor's attention — a thin filter, not new business logic. */
 export function filterContentEligibleTopics(topics: Topic[]): Topic[] {
   return topics.filter((t) => canGenerateContent(t.status));

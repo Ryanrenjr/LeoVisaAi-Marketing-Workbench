@@ -72,7 +72,6 @@ export function StageRow({
   avatarId,
   step,
   name,
-  status,
   actionLabel,
   href,
   kind,
@@ -81,7 +80,6 @@ export function StageRow({
   avatarId: string;
   step: number;
   name: string;
-  status: string;
   actionLabel: string;
   href: string;
   kind: StageKind;
@@ -97,10 +95,7 @@ export function StageRow({
         href={href}
         className="card mb-5 flex flex-1 items-center gap-3 px-5 py-4 hover:border-[var(--accent)]/40"
       >
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-lg font-semibold">{name}</p>
-          <p className="truncate text-sm text-[var(--muted)]">{status}</p>
-        </div>
+        <p className="min-w-0 flex-1 truncate text-lg font-semibold">{name}</p>
         <div className="flex shrink-0 flex-col items-end gap-2">
           <StageChip kind={kind} />
           <span className="text-sm font-semibold text-[var(--accent)]">{actionLabel} →</span>
@@ -165,12 +160,10 @@ export function LaneGroup({ step, label, children }: { step: number; label: stri
 export function LaneCard({
   avatarId,
   name,
-  status,
   href,
 }: {
   avatarId: string;
   name: string;
-  status: string;
   href: string;
 }) {
   return (
@@ -186,10 +179,7 @@ export function LaneCard({
           className="rounded-full object-cover shadow-[0_0_0_1.5px_var(--border)]"
         />
       </div>
-      <div className="min-w-0 w-full">
-        <p className="truncate text-sm font-medium">{name}</p>
-        <p className="truncate text-xs text-[var(--muted)]">{status}</p>
-      </div>
+      <p className="w-full truncate text-sm font-medium">{name}</p>
     </Link>
   );
 }

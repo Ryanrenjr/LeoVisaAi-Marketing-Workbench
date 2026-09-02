@@ -251,6 +251,11 @@ user, through a Server Action that re-checks the caller's session and role.
 `RESEARCH_READY → RESEARCH_APPROVED` and `RESEARCH_READY → RESEARCHING`
 additionally write a `topic_status_events` row, `approved_by = auth.uid()`,
 enforced by RLS — nobody can record an approval on someone else's behalf.
+**Note (2026-09, "工具化"):** this row still gets written, but it is no
+longer a retained audit trail — see CLAUDE.md rule 4 and
+[data-model.md](data-model.md)'s data-lifecycle note. A "淘汰" (discard) at
+any step, and a session that reaches its final download, both end by
+hard-deleting the `topics` row, which cascades this row away with it.
 `RESEARCH_APPROVED → CONTENT_DRAFT` is different in kind: it isn't a
 second human *approving* something, it's the direct, deterministic result
 of an ADMIN's own explicit "生成内容" click succeeding — there's no

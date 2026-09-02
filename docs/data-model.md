@@ -8,6 +8,24 @@ Schema lives in
 [`0005_content_agent.sql`](../supabase/migrations/0005_content_agent.sql).
 Demo rows live in [`supabase/seed.sql`](../supabase/seed.sql).
 
+**Data lifecycle note (2026-09, "工具化"):** the schema below still uses
+`topics` as the anchor row for everything a session touches, and the
+audit/versioning tables described below (`topic_status_events`,
+`topic_activity_log`, `research_approvals`, `content_assets` version
+history) still get written to internally while a session is in progress.
+But none of it is a retained product feature any more — when a session
+ends, whether the topic was discarded partway through or the final
+content was downloaded, `discardTopic()`
+([`src/app/topics/actions.ts`](../src/app/topics/actions.ts)) deletes the
+`topics` row, and every table below with `topic_id … on delete cascade`
+disappears with it. See CLAUDE.md rule 4. The one exception is `publish_performance` (J｜数据分析员's uploaded
+post-performance screenshots): it decoupled from `topics` entirely for
+exactly this reason — `topic_id` is now nullable, and a `topic_title` +
+`content_pillar` snapshot (`supabase/migrations/0022_tool_mode_discard_and_performance_snapshot.sql`,
+`0023_publish_performance_pillar_snapshot.sql`) is taken at upload time
+instead, since the topic a published post came from is long gone by the
+time its performance is uploaded (days/weeks later).
+
 ## Tables
 
 ### `profiles`
@@ -304,6 +322,9 @@ RLS is enabled on every table. Summary (full policies in the migrations):
   this is a small internal team and everyone needs visibility into the
   whole pipeline, including AI usage and research history.
 - Any signed-in staff member can **create** and **update** `topics`.
+  ADMIN or EXPERT can also **delete** a `topics` row (migration `0022`) —
+  the "工具化" hard-delete-on-session-end primitive, cascading through
+  every table below that FKs to `topic_id … on delete cascade`.
 - `topic_status_events`, `topic_activity_log`, and `research_approvals`
   rows can only be inserted with the self-attribution column
   (`approved_by` / `actor_id` / `decided_by`) = `auth.uid()` — nobody can

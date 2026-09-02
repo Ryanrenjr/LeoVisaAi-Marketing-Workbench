@@ -5,6 +5,15 @@ behaviour, permission logic, database schema, or data was changed to
 build this — see "What did NOT change" below. Everything here is a new
 way of showing the same underlying system.
 
+**Migration note (2026-09, "工具化"):** this document describes the
+persistent, multi-topic "queue" UI that predates the "工具化" rewrite
+(see CLAUDE.md "What this is"). That rewrite is landing in phases — where
+this doc says a page lists several topics in flight, or that something
+"lingers" in a queue, treat that as the pre-rewrite shape, not a pattern
+to keep building. The actual current shape of each employee's page may
+already be ahead of this doc; check the page's own source before relying
+on this document for anything beyond the general mental model above.
+
 ## The mental model
 
 The system should not feel like "a software dashboard with modules." It

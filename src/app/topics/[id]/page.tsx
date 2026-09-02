@@ -16,36 +16,32 @@ import { getBrandConfig } from "@/lib/brand-config";
 import { getCurrentUser } from "@/lib/auth";
 import {
   canApproveResearch,
-  canArchiveTopic,
   canGenerateContent,
   canManageContentAssets,
   canRunCompliance,
   canRunResearch,
 } from "@/lib/permissions";
-import { canArchive, canStartResearch, isAtOrPastStage } from "@/lib/topic-workflow";
+import { canStartResearch, isAtOrPastStage } from "@/lib/topic-workflow";
 import { AdvanceButton } from "@/components/advance-button";
 import { canApproveResearchFromStatus, canRunResearchFromStatus } from "@/lib/research-workflow";
 import { getTaskModelOptions } from "@/lib/ai/task-model-options";
 import { GenerateAction } from "@/components/ai/generate-action";
 import { groupContentAssetsByLineage, groupSourcesByPackId } from "@/lib/content-versions";
-import {
-  CONTENT_PILLAR_LABEL,
-  CONTENT_PLATFORM_LABEL,
-  PRIORITY_LABEL,
-  STATUS_LABEL,
-  TOPIC_ACTIVITY_LABEL,
-} from "@/lib/status";
+import { CONTENT_PLATFORM_LABEL, TOPIC_ACTIVITY_LABEL } from "@/lib/status";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import { RunActionButton } from "@/components/ai/run-action-button";
+import { getEmployee } from "@/lib/boss-language";
 import { ResearchPackView } from "@/components/research-pack-view";
 import { TopicTabs, type TabDef } from "@/components/content/topic-tabs";
 import { VideoContentView } from "@/components/content/video-content-view";
 import { XiaohongshuContentView } from "@/components/content/xiaohongshu-content-view";
 import { WechatArticleView, WechatFullArticleView, WechatOutlineView } from "@/components/content/wechat-content-view";
 import { ComplianceReviewResult } from "@/components/compliance-review-result";
-import { archiveTopic, rescoreTopic, startResearch } from "../actions";
-import { approveResearch, requestResearchChanges, runResearch } from "../research-actions";
-import { generateContent, regeneratePlatformContent } from "../content-actions";
+import { discardTopic, startResearch } from "../actions";
+import { runResearch } from "../research-actions";
+import { regeneratePlatformContent } from "../content-actions";
+import { approveAndGoHome } from "../pipeline-actions";
 import { runComplianceReview } from "../compliance-actions";
 import { reviseContentAsset } from "../revision-actions";
 import { CONTENT_TYPE_REVISION } from "@/lib/content-mapping";
@@ -121,7 +117,6 @@ export default async function TopicDetailPage({
 
   const canShowActions = !demo && user;
   const showStartResearch = canShowActions && canStartResearch(topic.status);
-  const showArchive = canShowActions && canArchiveTopic(user.role) && canArchive(topic.status);
 
   const showRunResearch =
     canShowActions && canRunResearch(user.role) && canRunResearchFromStatus(topic.status);
@@ -332,7 +327,7 @@ export default async function TopicDetailPage({
     );
   };
 
-  const tabs: TabDef[] = [
+  const allTabs: TabDef[] = [
     {
       key: "research",
       label: "研究包",
@@ -356,12 +351,18 @@ export default async function TopicDetailPage({
               {/* Live user instruction: B｜政策研究员 model is fixed
                   (GPT-5.6 Sol / high reasoning, set in /admin/ai-models) —
                   no picker/override here, unlike other GenerateAction
-                  buttons on this page. A plain form-action button, not
-                  GenerateAction, so there's nothing to show. */}
+                  buttons on this page. RunActionButton still shows the
+                  same ThinkingRow "正在思考…N%" feedback GenerateAction
+                  buttons get (live bug report: "点了没反应，也没有百分比" —
+                  a plain <form action> gives zero feedback while a
+                  research call is in flight). */}
               {showRunResearch && (
-                <form action={runResearch.bind(null, topic.id, null)}>
-                  <Button type="submit">{researchPack ? "重新运行研究" : "运行研究"}</Button>
-                </form>
+                <RunActionButton
+                  action={runResearch.bind(null, topic.id, null)}
+                  label={researchPack ? "重新运行研究" : "运行研究"}
+                  employeeId="researcher"
+                  employeeName={getEmployee("researcher").name}
+                />
               )}
               {showEditResearch && (
                 <Link href={`/topics/${topic.id}/research/edit`}>
@@ -370,26 +371,16 @@ export default async function TopicDetailPage({
               )}
             </div>
             {showApproval && researchPack && (
-              <div className="flex flex-col gap-3 rounded-md border border-[var(--border)] px-4 py-3">
-                <p className="text-sm font-medium">专家审批</p>
-                <form action={approveResearch.bind(null, topic.id, researchPack.id)}>
-                  <Button type="submit">批准研究</Button>
+              <div className="flex gap-3">
+                <form action={discardTopic.bind(null, topic.id)} className="flex-1">
+                  <Button type="submit" variant="secondary" className="w-full">
+                    淘汰
+                  </Button>
                 </form>
-                <form
-                  action={requestResearchChanges.bind(null, topic.id, researchPack.id)}
-                  className="flex flex-col gap-2"
-                >
-                  <textarea
-                    name="note"
-                    placeholder="请求修改的原因（可选）"
-                    rows={2}
-                    className="rounded-md border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm"
-                  />
-                  <div>
-                    <Button type="submit" variant="secondary">
-                      请求修改
-                    </Button>
-                  </div>
+                <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex-1">
+                  <Button type="submit" className="w-full">
+                    通过，一键生成全部
+                  </Button>
                 </form>
               </div>
             )}
@@ -544,14 +535,19 @@ export default async function TopicDetailPage({
     },
   ];
 
+  // Before research is approved, video/xiaohongshu/wechat/compliance would
+  // just show "尚未生成" placeholders — hide those tabs entirely rather than
+  // let staff click into an empty screen. They reappear once contentGateOpen.
+  const PLATFORM_TAB_KEYS = new Set(["video", "xiaohongshu", "wechat", "compliance"]);
+  const tabs = allTabs.filter((tab) => contentGateOpen || !PLATFORM_TAB_KEYS.has(tab.key));
+
   return (
     <div className="flex flex-col gap-8">
       <div>
         <p className="text-xs text-[var(--muted)]">{topic.code}</p>
         <h1 className="text-lg font-semibold">{topic.title}</h1>
-        <div className="mt-2 flex items-center gap-2">
+        <div className="mt-2">
           <StatusBadge status={topic.status} />
-          <span className="text-xs text-[var(--muted)]">{STATUS_LABEL[topic.status]}</span>
         </div>
       </div>
 
@@ -563,66 +559,10 @@ export default async function TopicDetailPage({
 
       {topic.question && <p className="text-sm">{topic.question}</p>}
 
-      <details className="group rounded-md border border-[var(--border)]">
-        <summary className="cursor-pointer list-none px-4 py-2.5 text-sm text-[var(--muted)] hover:text-[var(--foreground)]">
-          更多信息（业务线、受众、评分等）
-        </summary>
-        <div className="flex flex-col gap-4 border-t border-[var(--border)] px-4 py-4">
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <p className="text-xs text-[var(--muted)]">业务线</p>
-              <p className="mt-0.5 text-sm">{topic.business || "—"}</p>
-            </div>
-            <div>
-              <p className="text-xs text-[var(--muted)]">目标受众</p>
-              <p className="mt-0.5 text-sm">{topic.audience || "—"}</p>
-            </div>
-            <div>
-              <p className="text-xs text-[var(--muted)]">内容支柱</p>
-              <p className="mt-0.5 text-sm">
-                {topic.content_pillar ? CONTENT_PILLAR_LABEL[topic.content_pillar] : "—"}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-[var(--muted)]">优先级</p>
-              <p className="mt-0.5 text-sm">{PRIORITY_LABEL[topic.priority]}</p>
-            </div>
-          </section>
-
-          <section>
-            <p className="text-xs text-[var(--muted)]">选题评分</p>
-            <p className="mt-1 text-2xl font-semibold">{topic.topic_score}</p>
-            <div className="mt-1 flex gap-4 text-xs text-[var(--muted)]">
-              <span>优先级权重 {topic.score_breakdown.priority}</span>
-              <span>完整度 {topic.score_breakdown.completeness}</span>
-            </div>
-          </section>
-        </div>
-      </details>
-
       <section className="flex flex-wrap gap-2">
-        {!demo && (
-          <Link href={`/topics/${topic.id}/edit`}>
-            <Button variant="secondary">编辑</Button>
-          </Link>
-        )}
-        {!demo && (
-          <form action={rescoreTopic.bind(null, topic.id)}>
-            <Button type="submit" variant="secondary">
-              重新评分
-            </Button>
-          </form>
-        )}
         {showStartResearch && (
           <form action={startResearch.bind(null, topic.id, topic.status)}>
             <Button type="submit">开始研究</Button>
-          </form>
-        )}
-        {showArchive && (
-          <form action={archiveTopic.bind(null, topic.id, topic.status)}>
-            <Button type="submit" variant="secondary">
-              归档
-            </Button>
           </form>
         )}
         {canShowActions && isAtOrPastStage(topic.status, "CONTENT_DRAFT") && <AdvanceButton topic={topic} />}
@@ -631,9 +571,9 @@ export default async function TopicDetailPage({
       {canManageContent && contentGateOpen && contentAssets.length === 0 && (
         <section className="flex flex-col gap-3 rounded-md border border-[var(--border)] px-4 py-3">
           <div>
-            <p className="text-sm font-medium">生成内容</p>
+            <p className="text-sm font-medium">一键生成</p>
             <p className="text-sm text-[var(--muted)]">
-              研究已批准 — 可基于已批准的研究包一次生成视频号 / 小红书 / 公众号三个平台的草稿。
+              研究已批准 — 一次生成视频号 / 小红书 / 公众号三个平台的草稿，自动跑一遍合规审核，有问题的自动改一版。
             </p>
           </div>
           {!contentReady ? (
@@ -643,11 +583,11 @@ export default async function TopicDetailPage({
           ) : (
             <>
               <p className="text-xs text-[var(--muted)]">
-                三个平台各自按「AI 模型配置」中的默认模型独立生成；如需为单个平台更换模型，请在生成后使用对应标签页的「重新生成」。
+                三个平台各自按「AI 模型配置」中的默认模型独立生成；如需为单个平台更换模型，请在生成后使用对应标签页的「重新生成」。这一步可能要等一会（生成+审核+校对是连着跑的）——去首页能看到实时进度。
               </p>
-              <form action={generateContent.bind(null, topic.id)}>
-                <Button type="submit">生成内容</Button>
-              </form>
+              <Link href={`/?generating=${topic.id}`}>
+                <Button type="button">一键生成 + 审核 + 校对</Button>
+              </Link>
             </>
           )}
         </section>

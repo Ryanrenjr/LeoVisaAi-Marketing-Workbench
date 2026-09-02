@@ -5,13 +5,31 @@ Guidance for any AI agent (or human) working in this repository.
 ## What this is
 
 **LeoVisaAi 营销工作台** (LeoVisa AI Marketing Workbench) is an **internal
-operations tool** for LeoVisa staff to track marketing content moving
-through a fixed content pipeline:
+one-shot generation tool** for LeoVisa staff — not a system that tracks
+ongoing work. Live user instruction (2026-09):
 
-`草稿 (draft)` → `研究已完成` → `可进入拍摄` → `本周已发布`
+> 淘汰之后直接消失，要做成一个工具的感觉，就是不复用的工具。整个平台的思路
+> 改了，现在就是完全做成一个工具。员工点开，直接生成选题，生成内容，拿到
+> 内容之后直接就退出了，这个思路。
 
-It exists so staff can see, at a glance, what content ideas have been
-researched, what's ready to film, and what shipped this week.
+The intended use of the tool: a staff member opens a digital employee's
+tool, works through one topic — generate it, research it, generate
+platform content from it — and downloads the final result. That single
+pass is the whole interaction. There is no dashboard of topics in flight,
+no queue to come back to, no history to browse. A pass that's rejected at
+any step, and a pass that reaches the final download, both end the exact
+same way: the underlying data is gone (see rule 4 below). See the
+"工具化" milestone context in the repo's plan history for the full
+reasoning behind this shift — it deliberately replaces the earlier
+"track a fixed content pipeline" model this file used to describe.
+
+**Migration note:** this is the *target* model. As of 2026-09 the UI is
+mid-migration from the old persistent-pipeline design (9 independent
+"queue" pages, one per digital employee, each listing every topic
+currently at that stage) to the single-task wizard described above — see
+the active plan for the phase breakdown. Where a page still shows a
+multi-topic queue, that is leftover from the old model, not a sanctioned
+pattern to extend.
 
 ## What this is explicitly NOT
 
@@ -41,11 +59,19 @@ They require an explicit, separate instruction from a human.
    [docs/security-boundaries.md](docs/security-boundaries.md) for the exact
    list of data types that must never be stored here. Do not add a field,
    table, upload, or free-text box that could end up holding this data.
-4. **Human approval gates are mandatory.** No pipeline status transition
-   happens automatically or via AI. Every transition is a deliberate click
-   by a signed-in `ADMIN` or `EXPERT` user, and every transition is recorded
-   (who approved it, when, from what status, to what status) in
-   `topic_status_events`. See [docs/data-model.md](docs/data-model.md).
+4. **Nothing persists past a session's outcome — and nothing about a
+   session is user-facing history.** There is no pipeline status for
+   staff to track and no audit trail for staff to browse. A session that
+   is rejected at any step (研究淘汰, 合规淘汰, etc.), and a session that
+   reaches the final download, both end the same way: every row belonging
+   to that topic (research, content, images, compliance findings,
+   activity/status-event rows) is deleted — cascading via the `topics`
+   row's `on delete cascade` foreign keys — the moment the session ends.
+   No soft-hide, no recycle bin, no way to recover it afterward. AI still
+   never changes a topic's stage on its own — every step forward is still
+   a deliberate human click — but the *record* of that click is not a
+   retained product feature any more. See
+   [docs/data-model.md](docs/data-model.md).
 5. **API keys must never appear client-side.** The Supabase *anon* key is
    the only key allowed in the browser bundle (that's the standard, safe
    Supabase pattern — it is meaningless without Row Level Security, which is

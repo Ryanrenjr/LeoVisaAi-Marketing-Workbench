@@ -8,6 +8,8 @@ import { getEmployeeNames } from "@/lib/employee-names";
 import { EmployeeHeader } from "@/components/employee-header";
 import { ContentImageGrid } from "@/components/content/content-image-grid";
 import { MarkdownText } from "@/components/content/markdown-text";
+import { Button } from "@/components/ui/button";
+import { discardTopic } from "@/app/topics/actions";
 import type {
   VideoChannelContent,
   WechatArticle,
@@ -211,10 +213,12 @@ function TopicCard({
   topic,
   assets,
   imagesByAssetId,
+  demo,
 }: {
   topic: Topic;
   assets: ContentAsset[];
   imagesByAssetId: Map<string, ContentImageRow[]>;
+  demo: boolean;
 }) {
   const videoScript = getLatestForLineage(assets, "VIDEO_CHANNEL", "video_script");
   const xhsPost = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_post");
@@ -270,6 +274,22 @@ function TopicCard({
           imageHref="/team/image-designer"
         />
       </div>
+      {!demo && (
+        <div className="flex flex-col items-end gap-2 self-end">
+          <a
+            href={`/api/integrator/download?topicId=${topic.id}&platform=all`}
+            className="text-sm font-medium text-[var(--accent)] hover:underline"
+          >
+            打包下载全部平台 →
+          </a>
+          <form action={discardTopic.bind(null, topic.id)}>
+            <p className="mb-2 text-xs text-[var(--muted)]">打包下载好了再点——点了这条选题就没了。</p>
+            <Button type="submit" variant="secondary">
+              完成，清空这条选题
+            </Button>
+          </form>
+        </div>
+      )}
     </li>
   );
 }
@@ -320,6 +340,7 @@ export default async function IntegratorPage() {
               topic={topic}
               assets={assetsByTopicId.get(topic.id) ?? []}
               imagesByAssetId={imagesByAssetId}
+              demo={demo}
             />
           ))}
         </ul>

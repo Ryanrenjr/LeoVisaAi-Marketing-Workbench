@@ -1,19 +1,9 @@
-import { getAllComplianceReviews, getAllContentAssets, getAllTopics, getLibraryTopics, isDemoMode } from "@/lib/topics";
+import { isDemoMode } from "@/lib/topics";
 import { getCurrentUser } from "@/lib/auth";
 import { timeBasedGreeting, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
-import { getRecentPublishPerformanceCount } from "@/lib/analytics";
-import { getAllContentImages } from "@/lib/content-images";
-import {
-  buildComplianceQueue,
-  filterContentEligibleTopics,
-  summarizeEditorTasks,
-  summarizePlannerTasks,
-  summarizeResearcherTasks,
-} from "@/lib/employee-tasks";
-import { groupContentAssetsByTopicId, getLatestForLineage } from "@/lib/content-versions";
 import { LaneCard, LaneGroup, StageRow } from "@/components/pipeline-flow";
-import type { ComplianceReviewRow } from "@/lib/types";
+import { GenerationRunner } from "@/components/generation-runner";
 import Link from "next/link";
 
 function DemoNotice() {
@@ -24,57 +14,8 @@ function DemoNotice() {
   );
 }
 
-async function BossHome({ demo }: { demo: boolean }) {
-  const user = await getCurrentUser();
-  const [
-    libraryTopics,
-    allTopics,
-    allContentAssets,
-    complianceReviews,
-    performanceCount,
-    contentImages,
-    employeeNames,
-  ] = await Promise.all([
-    getLibraryTopics(),
-    getAllTopics(),
-    getAllContentAssets(),
-    getAllComplianceReviews(),
-    getRecentPublishPerformanceCount(),
-    getAllContentImages(),
-    getEmployeeNames(),
-  ]);
-
-  const contentAssetsByTopicId = groupContentAssetsByTopicId(allContentAssets);
-  const eligibleTopics = filterContentEligibleTopics(allTopics);
-
-  const reviewsByContentAssetId = new Map<string, ComplianceReviewRow>();
-  for (const review of complianceReviews) {
-    if (!reviewsByContentAssetId.has(review.content_asset_id)) {
-      reviewsByContentAssetId.set(review.content_asset_id, review);
-    }
-  }
-  const complianceQueue = buildComplianceQueue(allTopics, contentAssetsByTopicId, reviewsByContentAssetId);
-
-  const plannerSummary = summarizePlannerTasks(libraryTopics);
-  const researcherSummary = summarizeResearcherTasks(libraryTopics);
-  const videoSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "VIDEO_CHANNEL");
-  const xiaohongshuSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "XIAOHONGSHU");
-  const wechatSummary = summarizeEditorTasks(eligibleTopics, contentAssetsByTopicId, "WECHAT_OFFICIAL_ACCOUNT");
-  const xhsPagesPending = eligibleTopics.filter(
-    (t) => !getLatestForLineage(contentAssetsByTopicId.get(t.id) ?? [], "XIAOHONGSHU", "xiaohongshu_pages"),
-  ).length;
-  const complianceAttentionItems = complianceQueue.filter(
-    (item) => !item.latestReview || item.latestReview.overall_risk !== "LOW",
-  );
-  const needsRevisionItems = complianceQueue.filter(
-    (item) => item.latestReview && item.latestReview.overall_risk !== "LOW",
-  );
-
-  const xiaohongshuDraftTopicIds = eligibleTopics
-    .filter((t) => getLatestForLineage(contentAssetsByTopicId.get(t.id) ?? [], "XIAOHONGSHU", "xiaohongshu_post"))
-    .map((t) => t.id);
-  const topicsWithImages = new Set(contentImages.map((img) => img.topic_id));
-  const imagePendingCount = xiaohongshuDraftTopicIds.filter((id) => !topicsWithImages.has(id)).length;
+async function BossHome({ demo, generatingTopicId }: { demo: boolean; generatingTopicId: string | null }) {
+  const [user, employeeNames] = await Promise.all([getCurrentUser(), getEmployeeNames()]);
 
   const greeting = timeBasedGreeting(new Date().getHours());
   const name = user?.displayName ?? "老板";
@@ -98,6 +39,8 @@ async function BossHome({ demo }: { demo: boolean }) {
         </Link>
       </section>
 
+      {generatingTopicId && <GenerationRunner topicId={generatingTopicId} employeeNames={employeeNames} />}
+
       <section className="flex flex-col gap-1">
         <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 9 步</h2>
 
@@ -105,7 +48,6 @@ async function BossHome({ demo }: { demo: boolean }) {
           avatarId="planner"
           step={1}
           name={resolveEmployeeDisplayName("planner", employeeNames)}
-          status={plannerSummary.todayCandidates > 0 ? `今日候选 ${plannerSummary.todayCandidates} 个` : "空闲"}
           actionLabel="查看选题"
           href="/team/planner"
           kind="auto"
@@ -114,13 +56,6 @@ async function BossHome({ demo }: { demo: boolean }) {
           avatarId="researcher"
           step={2}
           name={resolveEmployeeDisplayName("researcher", employeeNames)}
-          status={
-            researcherSummary.awaitingReview > 0
-              ? `等你确认 ${researcherSummary.awaitingReview} 篇`
-              : researcherSummary.inProgress > 0
-                ? `研究中 ${researcherSummary.inProgress} 篇`
-                : "空闲"
-          }
           actionLabel="查看研究"
           href="/team/researcher"
           kind="auto"
@@ -129,27 +64,21 @@ async function BossHome({ demo }: { demo: boolean }) {
           <LaneCard
             avatarId="video-editor"
             name={resolveEmployeeDisplayName("video-editor", employeeNames)}
-            status={videoSummary.pendingGeneration > 0 ? `待生成 ${videoSummary.pendingGeneration}` : "已完成"}
             href="/team/video-editor"
           />
           <LaneCard
             avatarId="xiaohongshu-editor"
             name={resolveEmployeeDisplayName("xiaohongshu-editor", employeeNames)}
-            status={
-              xiaohongshuSummary.pendingGeneration > 0 ? `待生成 ${xiaohongshuSummary.pendingGeneration}` : "已完成"
-            }
             href="/team/xiaohongshu-editor"
           />
           <LaneCard
             avatarId="xiaohongshu-image-planner"
             name={resolveEmployeeDisplayName("xiaohongshu-image-planner", employeeNames)}
-            status={xhsPagesPending > 0 ? `待生成 ${xhsPagesPending}` : "已完成"}
             href="/team/xiaohongshu-image-planner"
           />
           <LaneCard
             avatarId="wechat-editor"
             name={resolveEmployeeDisplayName("wechat-editor", employeeNames)}
-            status={wechatSummary.pendingGeneration > 0 ? `待生成 ${wechatSummary.pendingGeneration}` : "已完成"}
             href="/team/wechat-editor"
           />
         </LaneGroup>
@@ -158,13 +87,6 @@ async function BossHome({ demo }: { demo: boolean }) {
           avatarId="image-designer"
           step={4}
           name={resolveEmployeeDisplayName("image-designer", employeeNames)}
-          status={
-            imagePendingCount > 0
-              ? `待生成 ${imagePendingCount}`
-              : contentImages.length > 0
-                ? "已完成"
-                : "空闲"
-          }
           actionLabel="查看配图"
           href="/team/image-designer"
           kind="auto"
@@ -173,7 +95,6 @@ async function BossHome({ demo }: { demo: boolean }) {
           avatarId="compliance"
           step={5}
           name={resolveEmployeeDisplayName("compliance", employeeNames)}
-          status={complianceAttentionItems.length > 0 ? `有 ${complianceAttentionItems.length} 项需要确认` : "空闲"}
           actionLabel="查看合规"
           href="/team/compliance"
           kind="auto"
@@ -182,7 +103,6 @@ async function BossHome({ demo }: { demo: boolean }) {
           avatarId="reviser"
           step={6}
           name={resolveEmployeeDisplayName("reviser", employeeNames)}
-          status={needsRevisionItems.length > 0 ? `待修改 ${needsRevisionItems.length} 项` : "空闲"}
           actionLabel="查看修改"
           href="/team/reviser"
           kind="auto"
@@ -191,7 +111,6 @@ async function BossHome({ demo }: { demo: boolean }) {
           avatarId="integrator"
           step={7}
           name={resolveEmployeeDisplayName("integrator", employeeNames)}
-          status="查看最终成品"
           actionLabel="查看整合"
           href="/team/integrator"
           kind="auto"
@@ -200,7 +119,6 @@ async function BossHome({ demo }: { demo: boolean }) {
           avatarId="analyst"
           step={9}
           name={resolveEmployeeDisplayName("analyst", employeeNames)}
-          status={performanceCount > 0 ? `已有 ${performanceCount} 条数据` : "等待你上传数据"}
           actionLabel="查看数据"
           href="/team/analyst"
           kind="input"
@@ -211,7 +129,11 @@ async function BossHome({ demo }: { demo: boolean }) {
   );
 }
 
-export default async function HomePage() {
-  const demo = await isDemoMode();
-  return <BossHome demo={demo} />;
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ generating?: string }>;
+}) {
+  const [demo, { generating }] = await Promise.all([isDemoMode(), searchParams]);
+  return <BossHome demo={demo} generatingTopicId={generating ?? null} />;
 }

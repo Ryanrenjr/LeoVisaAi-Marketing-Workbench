@@ -6,7 +6,8 @@ import { canApproveResearch } from "@/lib/permissions";
 import { canApproveResearchFromStatus } from "@/lib/research-workflow";
 import { ResearchPackView } from "@/components/research-pack-view";
 import { Button } from "@/components/ui/button";
-import { approveResearch, requestResearchChanges } from "../../../research-actions";
+import { discardTopic } from "../../../actions";
+import { approveAndGoHome } from "../../../pipeline-actions";
 
 /**
  * The dedicated, single-purpose approval screen — deliberately separate
@@ -54,28 +55,16 @@ export default async function ReviewResearchPage({ params }: { params: Promise<{
       <ResearchPackView pack={researchPack} sources={sources} topic={topic} />
 
       {canDecide ? (
-        <div className="flex flex-col gap-3 rounded-md border border-[var(--border)] px-4 py-4">
-          <p className="text-sm font-medium">你的决定</p>
-          <form action={approveResearch.bind(null, topic.id, researchPack.id)}>
-            <Button type="submit" className="w-full sm:w-auto">
-              批准研究
+        <div className="flex gap-3">
+          <form action={discardTopic.bind(null, topic.id)} className="flex-1">
+            <Button type="submit" variant="secondary" className="w-full">
+              淘汰
             </Button>
           </form>
-          <form
-            action={requestResearchChanges.bind(null, topic.id, researchPack.id)}
-            className="flex flex-col gap-2"
-          >
-            <textarea
-              name="note"
-              placeholder="需要修改的地方（可选，留空也可以提交）"
-              rows={2}
-              className="rounded-md border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm"
-            />
-            <div>
-              <Button type="submit" variant="secondary" className="w-full sm:w-auto">
-                请求修改
-              </Button>
-            </div>
+          <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex-1">
+            <Button type="submit" className="w-full">
+              通过，一键生成全部
+            </Button>
           </form>
         </div>
       ) : (

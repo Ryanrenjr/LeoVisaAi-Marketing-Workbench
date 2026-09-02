@@ -1,14 +1,14 @@
 import { RESEARCH_SCORE_DIMENSIONS, hasScoreData } from "@/lib/ai/research-pack";
 import { CONFIDENCE_LABEL } from "@/lib/status";
 import { bossScoreLabel } from "@/lib/boss-language";
-import type { ResearchPack, ResearchScoreBreakdown, ResearchSource, ScoreBreakdown } from "@/lib/types";
+import type { ResearchPack, ResearchScoreBreakdown, ResearchSource } from "@/lib/types";
 
 /**
  * `topic_score`/`score_breakdown` (see src/lib/scoring.ts) — surfaced here
  * so the researcher sees it right next to the research quality signal
  * (ConfidenceBadge), rather than buried in a collapsed admin-only panel.
  */
-function ScoreCard({ score, breakdown }: { score: number; breakdown: ScoreBreakdown }) {
+function ScoreCard({ score }: { score: number }) {
   return (
     <div className="card flex flex-col gap-1 px-4 py-3">
       <div className="flex items-baseline gap-2">
@@ -16,11 +16,6 @@ function ScoreCard({ score, breakdown }: { score: number; breakdown: ScoreBreakd
         <span className="text-sm text-[var(--muted)]">/ 100 分 · 选题分数</span>
       </div>
       <p className="text-base">{bossScoreLabel(score)}</p>
-      <p className="text-sm text-[var(--muted)]">
-        优先级 {breakdown.priority}/60 分（选题标记为「高」「中」「低」决定） · 信息完整度 {breakdown.completeness}/40 分（业务线、目标受众、内容支柱、核心问题这
-        4 项每填一项 10 分）
-      </p>
-      <p className="text-sm text-[var(--muted)]">50 分以上算合格，可以继续做研究；低于 50 分建议先把选题信息补充完整。</p>
     </div>
   );
 }
@@ -94,11 +89,7 @@ function ResearchScoreBoard({ total, breakdown }: { total: number; breakdown: Re
 function ExpertWarningBanner() {
   return (
     <div className="rounded-md border border-amber-600/40 bg-amber-600/10 px-4 py-3 text-base text-amber-900 dark:text-amber-200">
-      <p className="font-medium">专家审阅须知</p>
-      <p className="mt-1">
-        本内容为 AI 生成的一般性营销研究资料，<strong>不构成个人化法律意见</strong>
-        ，不针对任何具体客户案件。请在批准前核实来源真实性与内容准确性，并确认内容中不包含任何真实客户信息。
-      </p>
+      AI 生成的一般资料，不是正式法律意见，批准前请核实来源。
     </div>
   );
 }
@@ -108,10 +99,7 @@ function ConfidenceBadge({ confidence }: { confidence: ResearchPack["confidence"
   if (confidence === "LOW") {
     return (
       <div className="rounded-md border border-red-600/40 bg-red-600/10 px-4 py-3 text-base text-red-900 dark:text-red-200">
-        <p className="font-medium">⚠ 低置信度</p>
-        <p className="mt-1">
-          模型对本次研究结果的把握较低（来源较薄弱、结论存在分歧，或与主题关联不够明确）。批准前请格外仔细核实每条来源。
-        </p>
+        ⚠ 低置信度，请仔细核实来源。
       </div>
     );
   }
@@ -129,11 +117,11 @@ export function ResearchPackView({
 }: {
   pack: ResearchPack;
   sources: ResearchSource[];
-  topic?: { topic_score: number; score_breakdown: ScoreBreakdown };
+  topic?: { topic_score: number };
 }) {
   return (
     <div className="flex flex-col gap-4">
-      {topic && <ScoreCard score={topic.topic_score} breakdown={topic.score_breakdown} />}
+      {topic && <ScoreCard score={topic.topic_score} />}
       <ExpertWarningBanner />
       <ConfidenceBadge confidence={pack.confidence} />
       <ResearchScoreBoard total={pack.score_total ?? 0} breakdown={pack.score_breakdown} />

@@ -1,4 +1,4 @@
-import type { ContentPillar, PublishPerformanceRow, Topic } from "./types";
+import type { ContentPillar, PublishPerformanceRow } from "./types";
 
 /**
  * Pure aggregation of real publish_performance rows into "which content
@@ -6,6 +6,11 @@ import type { ContentPillar, PublishPerformanceRow, Topic } from "./types";
  * call: averaging real numbers is more trustworthy than an LLM guessing
  * insights from a handful of data points, and it can never fabricate a
  * number the way a summarization pass could.
+ *
+ * Reads `row.content_pillar` directly — a snapshot taken at upload time
+ * — rather than joining through the topics table, since a topic is
+ * deleted the moment its "工具化" session ends and is long gone by the
+ * time Leo uploads a post's performance screenshot.
  */
 
 export interface PillarPerformance {
@@ -20,15 +25,11 @@ function avgOf(values: number[]): number | null {
   return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
 }
 
-export function computePillarPerformance(
-  performance: PublishPerformanceRow[],
-  topicsById: Map<string, Topic>,
-): PillarPerformance[] {
+export function computePillarPerformance(performance: PublishPerformanceRow[]): PillarPerformance[] {
   const byPillar = new Map<ContentPillar | "unset", { views: number[]; likes: number[] }>();
 
   for (const row of performance) {
-    const topic = topicsById.get(row.topic_id);
-    const pillar = topic?.content_pillar ?? "unset";
+    const pillar = row.content_pillar ?? "unset";
     const bucket = byPillar.get(pillar) ?? { views: [], likes: [] };
     const metrics = row.extracted_metrics as { views?: number | null; likes?: number | null };
     if (typeof metrics.views === "number") bucket.views.push(metrics.views);

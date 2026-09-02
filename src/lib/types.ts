@@ -255,7 +255,12 @@ export interface ComplianceReviewRow {
 
 export interface PublishPerformanceRow {
   id: string;
-  topic_id: string;
+  /** Null for every row uploaded after the "工具化" rewrite — the topic it came from no longer exists by upload time. See `topic_title`. */
+  topic_id: string | null;
+  /** A snapshot of the topic's title at upload time, since the topic itself is gone. */
+  topic_title: string;
+  /** A snapshot of the topic's content pillar at upload time, for the same reason. */
+  content_pillar: ContentPillar | null;
   platform: ContentPlatform;
   screenshot_path: string;
   extracted_metrics: Record<string, unknown>;

@@ -6,11 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/auth";
 import { getTopicById } from "@/lib/topics";
 import { canApproveResearch, canRunResearch } from "@/lib/permissions";
-import {
-  canApproveResearchFromStatus,
-  canRequestResearchChangesFromStatus,
-  canRunResearchFromStatus,
-} from "@/lib/research-workflow";
+import { canApproveResearchFromStatus, canRunResearchFromStatus } from "@/lib/research-workflow";
 import { runResearchTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { getModel } from "@/lib/ai/providers/registry";
@@ -27,7 +23,7 @@ export interface ResearchEditState {
  * the RESEARCH task through the Model Router, saves the (already-grounded)
  * pack, and logs both the AI usage and the activity. On success, moves the
  * topic to RESEARCH_READY ("a pack exists, awaiting Expert review") —
- * never further than that; only approveResearch can reach
+ * never further than that; only `approveResearchOnly` below can reach
  * RESEARCH_APPROVED. `override` is the section-9 one-off model choice —
  * it never changes the persisted default in model_routing_config.
  */
@@ -248,17 +244,21 @@ export async function editResearchPack(
 }
 
 /**
- * The mandatory human-approval-gate action itself. Ends at
- * RESEARCH_APPROVED — deliberately never READY_TO_SHOOT or anything
- * further; advancing past RESEARCH_APPROVED needs the (not yet built)
- * Content AI / Compliance / Leo review stages.
+ * The mandatory human-approval-gate write itself — RESEARCH_READY →
+ * RESEARCH_APPROVED, deliberately never further (advancing past that
+ * needs Content/Compliance, which happen afterward, not here). No
+ * redirect, so `pipeline-actions.ts`'s `confirmAndGenerateAll` — the
+ * only caller, bound to the actual "通过" buttons — can chain content
+ * generation right after this and redirect somewhere else entirely; a
+ * function that redirects can't safely be called as a sub-step of
+ * another action, since `redirect()` aborts the caller immediately.
  */
-export async function approveResearch(topicId: string, researchPackId: string) {
+export async function approveResearchOnly(topicId: string, researchPackId: string): Promise<boolean> {
   const user = await requireUser();
   if (!canApproveResearch(user.role)) throw new Error("Forbidden: EXPERT role required");
 
   const topic = await getTopicById(topicId);
-  if (!topic || !canApproveResearchFromStatus(topic.status)) return;
+  if (!topic || !canApproveResearchFromStatus(topic.status)) return false;
 
   const supabase = await createClient();
 
@@ -268,7 +268,7 @@ export async function approveResearch(topicId: string, researchPackId: string) {
     decision: "approved",
     decided_by: user.id,
   });
-  if (approvalError) return;
+  if (approvalError) return false;
 
   await supabase
     .from("topics")
@@ -292,58 +292,6 @@ export async function approveResearch(topicId: string, researchPackId: string) {
   revalidatePath(`/topics/${topicId}`);
   revalidatePath("/topics");
   revalidatePath("/research-completed");
+  return true;
 }
 
-/**
- * Sends a pack back for rework: RESEARCH_READY → RESEARCHING, so the
- * ADMIN knows another run/edit is expected before the Expert reviews
- * again. This is a real status transition (unlike the previous
- * milestone, where "request changes" only logged an activity entry).
- */
-export async function requestResearchChanges(
-  topicId: string,
-  researchPackId: string,
-  formData: FormData,
-) {
-  const user = await requireUser();
-  if (!canApproveResearch(user.role)) throw new Error("Forbidden: EXPERT role required");
-
-  const topic = await getTopicById(topicId);
-  if (!topic || !canRequestResearchChangesFromStatus(topic.status)) return;
-
-  const note = String(formData.get("note") ?? "").trim();
-
-  const supabase = await createClient();
-  const { error } = await supabase.from("research_approvals").insert({
-    topic_id: topicId,
-    research_pack_id: researchPackId,
-    decision: "changes_requested",
-    decided_by: user.id,
-    note: note || null,
-  });
-  if (error) return;
-
-  await supabase
-    .from("topics")
-    .update({ status: "RESEARCHING" })
-    .eq("id", topicId)
-    .eq("status", "RESEARCH_READY");
-
-  await supabase.from("topic_status_events").insert({
-    topic_id: topicId,
-    from_status: "RESEARCH_READY",
-    to_status: "RESEARCHING",
-    approved_by: user.id,
-    note: note || null,
-  });
-
-  await supabase.from("topic_activity_log").insert({
-    topic_id: topicId,
-    activity_type: "research_changes_requested",
-    actor_id: user.id,
-    detail: note ? { note } : null,
-  });
-
-  revalidatePath(`/topics/${topicId}`);
-  revalidatePath("/topics");
-}

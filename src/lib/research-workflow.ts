@@ -15,7 +15,3 @@ export function canRunResearchFromStatus(status: TopicStatus): boolean {
 export function canApproveResearchFromStatus(status: TopicStatus): boolean {
   return status === "RESEARCH_READY";
 }
-
-export function canRequestResearchChangesFromStatus(status: TopicStatus): boolean {
-  return status === "RESEARCH_READY";
-}

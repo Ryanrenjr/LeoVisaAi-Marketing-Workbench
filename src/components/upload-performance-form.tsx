@@ -2,17 +2,18 @@
 
 import { useActionState, useState } from "react";
 import { uploadPerformanceScreenshot } from "@/app/team/analyst/actions";
-import { CONTENT_PLATFORM_LABEL } from "@/lib/status";
+import { CONTENT_PILLAR_LABEL, CONTENT_PLATFORM_LABEL } from "@/lib/status";
 import { PRICING_LABEL } from "@/lib/ai/providers/types";
 import { Button } from "./ui/button";
 import { ThinkingRow } from "./ai/thinking-row";
 import { getEmployee } from "@/lib/boss-language";
 import type { OverridableModel } from "./ai/generate-action";
-import type { ContentPlatform, Topic } from "@/lib/types";
+import type { ContentPillar, ContentPlatform } from "@/lib/types";
 
 const inputClass = "w-full rounded-md border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm";
 
 const PLATFORMS = Object.entries(CONTENT_PLATFORM_LABEL) as [ContentPlatform, string][];
+const CONTENT_PILLARS = Object.entries(CONTENT_PILLAR_LABEL) as [ContentPillar, string][];
 
 export interface UploadModelOptions {
   models: OverridableModel[];
@@ -24,13 +25,7 @@ function modelKey(m: Pick<OverridableModel, "provider" | "modelId">) {
   return `${m.provider}::${m.modelId}`;
 }
 
-export function UploadPerformanceForm({
-  publishedTopics,
-  modelOptions,
-}: {
-  publishedTopics: Topic[];
-  modelOptions: UploadModelOptions | null;
-}) {
+export function UploadPerformanceForm({ modelOptions }: { modelOptions: UploadModelOptions | null }) {
   const [state, formAction, pending] = useActionState(uploadPerformanceScreenshot, { error: null });
   const [selectedKey, setSelectedKey] = useState("");
   const [confirming, setConfirming] = useState(false);
@@ -51,15 +46,8 @@ export function UploadPerformanceForm({
       className="flex flex-col gap-4 rounded-md border border-[var(--border)] px-4 py-3"
     >
       <label className="flex flex-col gap-1 text-sm">
-        选题
-        <select name="topicId" required className={inputClass}>
-          <option value="">请选择</option>
-          {publishedTopics.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.code} {t.title}
-            </option>
-          ))}
-        </select>
+        标题
+        <input name="topicTitle" type="text" required placeholder="这条内容的标题" className={inputClass} />
       </label>
 
       <label className="flex flex-col gap-1 text-sm">
@@ -67,6 +55,18 @@ export function UploadPerformanceForm({
         <select name="platform" required className={inputClass}>
           <option value="">请选择</option>
           {PLATFORMS.map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1 text-sm">
+        内容支柱（可选，用于「哪类选题表现更好」统计）
+        <select name="contentPillar" className={inputClass}>
+          <option value="">不填</option>
+          {CONTENT_PILLARS.map(([value, label]) => (
             <option key={value} value={value}>
               {label}
             </option>

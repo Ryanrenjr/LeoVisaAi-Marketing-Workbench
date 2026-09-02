@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildHomeSpotlight,
-  buildLeoReviewQueue,
-  filterContentEligibleTopics,
-  summarizeEditorTasks,
-  summarizePlannerTasks,
-  summarizeResearcherTasks,
-} from "./employee-tasks";
+import { buildHomeSpotlight, buildLeoReviewQueue, filterContentEligibleTopics } from "./employee-tasks";
 import type { ComplianceQueueItem, ReviewItem } from "./employee-tasks";
 import type { ContentAsset, Topic } from "./types";
 
@@ -50,34 +43,7 @@ function makeAsset(overrides: Partial<ContentAsset>): ContentAsset {
   };
 }
 
-describe("summarizePlannerTasks — employee task aggregation", () => {
-  it("counts total library topics and how many are HIGH priority", () => {
-    const topics = [
-      makeTopic({ id: "1", priority: "HIGH" }),
-      makeTopic({ id: "2", priority: "MEDIUM" }),
-      makeTopic({ id: "3", priority: "HIGH" }),
-    ];
-    expect(summarizePlannerTasks(topics)).toEqual({ todayCandidates: 3, highPriority: 2 });
-  });
-
-  it("handles an empty library", () => {
-    expect(summarizePlannerTasks([])).toEqual({ todayCandidates: 0, highPriority: 0 });
-  });
-});
-
-describe("summarizeResearcherTasks", () => {
-  it("separates in-progress from awaiting-review counts", () => {
-    const topics = [
-      makeTopic({ id: "1", status: "RESEARCHING" }),
-      makeTopic({ id: "2", status: "RESEARCHING" }),
-      makeTopic({ id: "3", status: "RESEARCH_READY" }),
-      makeTopic({ id: "4", status: "IDEA" }),
-    ];
-    expect(summarizeResearcherTasks(topics)).toEqual({ inProgress: 2, awaitingReview: 1 });
-  });
-});
-
-describe("filterContentEligibleTopics / summarizeEditorTasks", () => {
+describe("filterContentEligibleTopics", () => {
   it("only includes topics at RESEARCH_APPROVED or later", () => {
     const topics = [
       makeTopic({ id: "1", status: "RESEARCH_READY" }),
@@ -88,19 +54,6 @@ describe("filterContentEligibleTopics / summarizeEditorTasks", () => {
     ];
     const eligible = filterContentEligibleTopics(topics);
     expect(eligible.map((t) => t.id)).toEqual(["2", "3", "4"]);
-  });
-
-  it("counts a topic as drafts-complete once it has at least one asset, pending otherwise", () => {
-    const eligible = [makeTopic({ id: "1" }), makeTopic({ id: "2" }), makeTopic({ id: "3" })];
-    const byTopic = new Map<string, ContentAsset[]>([
-      ["1", [makeAsset({ topic_id: "1" })]],
-      // topic "2" has no entry at all — pending
-      ["3", []], // present but empty — still pending
-    ]);
-    expect(summarizeEditorTasks(eligible, byTopic, "VIDEO_CHANNEL")).toEqual({
-      pendingGeneration: 2,
-      draftsComplete: 1,
-    });
   });
 });
 

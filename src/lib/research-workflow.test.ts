@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  canApproveResearchFromStatus,
-  canRequestResearchChangesFromStatus,
-  canRunResearchFromStatus,
-} from "./research-workflow";
+import { canApproveResearchFromStatus, canRunResearchFromStatus } from "./research-workflow";
 import type { TopicStatus } from "./types";
 
 const ALL_STATUSES: TopicStatus[] = [
@@ -52,13 +48,5 @@ describe("canApproveResearchFromStatus", () => {
     for (const status of disallowed) {
       expect(canApproveResearchFromStatus(status)).toBe(false);
     }
-  });
-});
-
-describe("canRequestResearchChangesFromStatus", () => {
-  it("allows requesting changes only from RESEARCH_READY", () => {
-    expect(canRequestResearchChangesFromStatus("RESEARCH_READY")).toBe(true);
-    expect(canRequestResearchChangesFromStatus("RESEARCHING")).toBe(false);
-    expect(canRequestResearchChangesFromStatus("RESEARCH_APPROVED")).toBe(false);
   });
 });

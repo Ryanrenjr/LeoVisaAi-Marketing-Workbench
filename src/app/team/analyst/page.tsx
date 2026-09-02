@@ -1,6 +1,5 @@
-import Link from "next/link";
 import { getAllPublishPerformance } from "@/lib/analytics";
-import { getAllTopics, isDemoMode } from "@/lib/topics";
+import { isDemoMode } from "@/lib/topics";
 import { getCurrentUser } from "@/lib/auth";
 import { getEmployeeNames } from "@/lib/employee-names";
 import { getEmployee, resolveEmployeeDisplayName } from "@/lib/boss-language";
@@ -12,17 +11,14 @@ import { UploadPerformanceForm } from "@/components/upload-performance-form";
 import type { ContentPillar, ContentPlatform } from "@/lib/types";
 
 export default async function AnalystPage() {
-  const [demo, allTopics, performance, employeeNames, user] = await Promise.all([
+  const [demo, performance, employeeNames, user] = await Promise.all([
     isDemoMode(),
-    getAllTopics(),
     getAllPublishPerformance(),
     getEmployeeNames(),
     getCurrentUser(),
   ]);
 
-  const publishedTopics = allTopics.filter((t) => t.status === "PUBLISHED");
-  const topicsById = new Map(allTopics.map((t) => [t.id, t]));
-  const pillarPerformance = computePillarPerformance(performance, topicsById);
+  const pillarPerformance = computePillarPerformance(performance);
   const employee = getEmployee("analyst");
   const employeeName = resolveEmployeeDisplayName("analyst", employeeNames);
 
@@ -47,7 +43,7 @@ export default async function AnalystPage() {
       {!demo && (
         <section className="flex flex-col gap-2">
           <h2 className="text-sm font-medium text-[var(--muted)]">上传发布数据截图</h2>
-          <UploadPerformanceForm publishedTopics={publishedTopics} modelOptions={modelOptions} />
+          <UploadPerformanceForm modelOptions={modelOptions} />
         </section>
       )}
 
@@ -82,7 +78,6 @@ export default async function AnalystPage() {
         ) : (
           <ul>
             {performance.slice(0, 20).map((row) => {
-              const topic = topicsById.get(row.topic_id);
               const metrics = row.extracted_metrics as {
                 views?: number | null;
                 likes?: number | null;
@@ -92,9 +87,7 @@ export default async function AnalystPage() {
               return (
                 <li key={row.id} className="border-b border-[var(--border)] py-2 text-sm last:border-b-0">
                   <div className="flex items-center justify-between gap-4">
-                    <Link href={topic ? `/topics/${topic.id}` : "#"} className="min-w-0 truncate hover:underline">
-                      {topic?.title ?? "（选题已删除）"}
-                    </Link>
+                    <span className="min-w-0 truncate">{row.topic_title}</span>
                     <span className="shrink-0 text-[var(--muted)]">
                       {CONTENT_PLATFORM_LABEL[row.platform as ContentPlatform] ?? row.platform}
                     </span>
