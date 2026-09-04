@@ -6,9 +6,9 @@ const base =
   "inline-flex items-center justify-center rounded-full px-4 py-1.5 text-sm font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer active:scale-[0.98]";
 
 const variants: Record<Variant, string> = {
-  primary: "bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90",
+  primary: "bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90 hover:-translate-y-px hover:shadow-[var(--shadow-card-hover)]",
   secondary:
-    "border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--border)]/40",
+    "border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--border)]/40 hover:-translate-y-px",
 };
 
 export function Button({

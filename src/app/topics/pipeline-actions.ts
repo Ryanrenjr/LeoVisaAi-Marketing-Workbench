@@ -14,6 +14,7 @@ import {
   generateWechatCover,
   generateXiaohongshuCarousel,
 } from "../team/image-designer/actions";
+import { getLatestLeoPortrait } from "@/lib/leo-portraits";
 import type { ContentAsset, ContentPlatform, ContentType } from "@/lib/types";
 
 /**
@@ -62,14 +63,18 @@ export async function runImagePlanningStep(topicId: string): Promise<void> {
  * 小红书 cover, the 公众号 cover, and the 小红书图文 carousel (one image per
  * page of step 2's plan). Runs in parallel — three independent images,
  * same "isolate the failure" principle as every other step: one image
- * failing (e.g. no portrait uploaded, or step 2's plan came back empty)
- * never blocks the other two. No portrait reference by default — that's
- * a deliberate per-run styling choice on 图片设计员's own page, not
- * something this automated chain should decide on its own.
+ * failing (e.g. step 2's plan came back empty) never blocks the other
+ * two. Includes Leo's portrait in the shared cover automatically when
+ * one has been uploaded (live bug report: this automated chain used to
+ * hardcode `includePortrait: false`, silently skipping it every run even
+ * when a portrait existed — manual runs from 图片设理员's own page still
+ * default to no portrait, since there it's a deliberate per-click choice
+ * with its own checkbox).
  */
 export async function runImageGenerationStep(topicId: string): Promise<void> {
+  const portrait = await getLatestLeoPortrait();
   await Promise.allSettled([
-    generateCrossPlatformCover(topicId, false),
+    generateCrossPlatformCover(topicId, portrait !== null),
     generateWechatCover(topicId),
     generateXiaohongshuCarousel(topicId),
   ]);

@@ -12,7 +12,6 @@ const ALL_EMPLOYEES: EmployeeId[] = [
   "compliance",
   "reviser",
   "integrator",
-  "analyst",
   "xiaohongshu-image-planner",
 ];
 

@@ -12,7 +12,8 @@ import {
 } from "@/lib/topics";
 import { canManageContentAssets } from "@/lib/permissions";
 import { nextVersionNumber } from "@/lib/content-versions";
-import { deriveTitleAndContent, CONTENT_TYPE_REVISION } from "@/lib/content-mapping";
+import { buildWechatBrandFooter, deriveTitleAndContent, CONTENT_TYPE_REVISION } from "@/lib/content-mapping";
+import { getBrandConfig } from "@/lib/brand-config";
 import { runContentRevisionTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
@@ -114,9 +115,19 @@ export async function reviseContentAsset(
     return { ok: false, error: result.error ?? "修改失败。" };
   }
 
+  // Same deterministic append as content-actions.ts's initial generation —
+  // the revision model regenerates the whole WechatArticle shape (title,
+  // full_article, closing_note, ...) from scratch, so it needs the brand
+  // footer re-injected here too, never carried over implicitly.
+  let structuredContent: Record<string, unknown> = result.data;
+  if (asset.platform === "WECHAT_OFFICIAL_ACCOUNT" && "closing_note" in result.data) {
+    const brand = await getBrandConfig();
+    structuredContent = { ...result.data, brand_footer: buildWechatBrandFooter(brand) };
+  }
+
   const existingAssets = await getContentAssets(asset.topic_id);
   const version = nextVersionNumber(existingAssets, asset.platform, asset.content_type);
-  const { title, content } = deriveTitleAndContent(asset.platform, result.data);
+  const { title, content } = deriveTitleAndContent(asset.platform, structuredContent);
 
   const { error: insertError } = await supabase.from("content_assets").insert({
     topic_id: asset.topic_id,
@@ -125,7 +136,7 @@ export async function reviseContentAsset(
     content_type: asset.content_type,
     title,
     content,
-    structured_content: result.data,
+    structured_content: structuredContent,
     version,
     created_by: user.id,
   });

@@ -81,4 +81,15 @@ describe("validateWechatArticle", () => {
     const issues = validateWechatArticle({ full_article: article }, DEFAULT_BRAND_CONFIG);
     expect(issues.some((i) => i.includes("Footer"))).toBe(true);
   });
+
+  it("passes when the deterministically-injected brand_footer alone carries the date/company/footer, even though full_article has none of it", () => {
+    const issues = validateWechatArticle(
+      {
+        full_article: "这是一篇完全不含品牌信息的正文。",
+        brand_footer: `最后核验：2026-08-24\n\n${DEFAULT_BRAND_CONFIG.wechatFooter}`,
+      },
+      DEFAULT_BRAND_CONFIG,
+    );
+    expect(issues).toEqual([]);
+  });
 });

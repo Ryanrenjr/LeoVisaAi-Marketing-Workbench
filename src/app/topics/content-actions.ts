@@ -7,7 +7,8 @@ import { requireUser } from "@/lib/auth";
 import { getContentAssets, getLatestResearchPack, getResearchSources, getTopicById } from "@/lib/topics";
 import { canGenerateContent, canManageContentAssets } from "@/lib/permissions";
 import { getLatestForLineage, nextVersionNumber } from "@/lib/content-versions";
-import { deriveTitleAndContent, mergeEditIntoStructuredContent } from "@/lib/content-mapping";
+import { buildWechatBrandFooter, deriveTitleAndContent, mergeEditIntoStructuredContent } from "@/lib/content-mapping";
+import { getBrandConfig } from "@/lib/brand-config";
 import { runContentTask, runWechatFullArticleTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
@@ -104,9 +105,18 @@ async function generateAndPersistPlatform(
     return { ok: false, error: result.error ?? "生成失败" };
   }
 
+  // The task-specific system prompt tells the model NOT to write the
+  // brand footer itself ("appended separately") — this is that separate
+  // step, deterministic and never AI-guessed. See buildWechatBrandFooter.
+  let structuredContent: Record<string, unknown> = result.data;
+  if (platform === "WECHAT_OFFICIAL_ACCOUNT" && "closing_note" in result.data) {
+    const brand = await getBrandConfig();
+    structuredContent = { ...result.data, brand_footer: buildWechatBrandFooter(brand) };
+  }
+
   const existing = await getContentAssets(topic.id);
   const version = nextVersionNumber(existing, platform, contentType);
-  const { title, content } = deriveTitleAndContent(platform, result.data);
+  const { title, content } = deriveTitleAndContent(platform, structuredContent);
 
   const { error: insertError } = await supabase.from("content_assets").insert({
     topic_id: topic.id,
@@ -115,7 +125,7 @@ async function generateAndPersistPlatform(
     content_type: contentType,
     title,
     content,
-    structured_content: result.data,
+    structured_content: structuredContent,
     version,
     created_by: user.id,
   });

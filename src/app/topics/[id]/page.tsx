@@ -30,6 +30,7 @@ import { groupContentAssetsByLineage, groupSourcesByPackId } from "@/lib/content
 import { CONTENT_PLATFORM_LABEL, TOPIC_ACTIVITY_LABEL } from "@/lib/status";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { RunActionButton } from "@/components/ai/run-action-button";
 import { getEmployee } from "@/lib/boss-language";
 import { ResearchPackView } from "@/components/research-pack-view";
@@ -373,14 +374,12 @@ export default async function TopicDetailPage({
             {showApproval && researchPack && (
               <div className="flex gap-3">
                 <form action={discardTopic.bind(null, topic.id)} className="flex-1">
-                  <Button type="submit" variant="secondary" className="w-full">
+                  <PendingSubmitButton variant="secondary" className="w-full">
                     淘汰
-                  </Button>
+                  </PendingSubmitButton>
                 </form>
                 <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex-1">
-                  <Button type="submit" className="w-full">
-                    通过，一键生成全部
-                  </Button>
+                  <PendingSubmitButton className="w-full">通过，一键生成全部</PendingSubmitButton>
                 </form>
               </div>
             )}

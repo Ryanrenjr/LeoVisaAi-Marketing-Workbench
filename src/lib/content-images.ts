@@ -56,16 +56,27 @@ type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 
 /**
  * Shared save step for one generated cover/carousel image — upload to
- * storage, insert the row. Used by both image-designer/actions.ts
+ * storage, insert the row(s). Used by both image-designer/actions.ts
  * (covers) and xiaohongshu-image-planner/actions.ts (图文 carousel), so
  * it lives here rather than duplicated or owned by just one employee's
  * action file.
+ *
+ * `additionalAssetIds` (live bug report): the 视频号/小红书 shared cover
+ * is generated ONCE but is meant to represent both platforms' cover —
+ * every place that displays a platform's cover looks it up by THAT
+ * platform's own `content_asset_id` (never a shared, asset-independent
+ * "topic cover" concept), so a single row only ever showed up under
+ * whichever platform happened to be picked as the generation source,
+ * leaving the other platform showing "封面：待生成" even though a cover
+ * genuinely exists. One upload, one row per asset it should appear under
+ * — cheap (same bytes, same Storage path, just more small metadata rows).
  */
 export async function saveGeneratedContentImage(
   supabase: SupabaseServerClient,
   params: {
     topicId: string;
     contentAssetId: string;
+    additionalAssetIds?: string[];
     prompt: string;
     imageBase64: string;
     provider: string;
@@ -83,17 +94,20 @@ export async function saveGeneratedContentImage(
     .upload(path, bytes, { contentType: "image/png" });
   if (uploadError) return { ok: false, error: "图片已生成，但保存失败，请重试。" };
 
-  const { error: insertError } = await supabase.from("content_images").insert({
-    topic_id: params.topicId,
-    content_asset_id: params.contentAssetId,
-    prompt: params.prompt,
-    image_path: path,
-    model_alias: `${params.provider}/${params.modelId}`,
-    provider: params.provider,
-    created_by: params.userId,
-    image_kind: params.imageKind,
-    page_index: params.pageIndex,
-  });
+  const assetIds = [params.contentAssetId, ...(params.additionalAssetIds ?? [])];
+  const { error: insertError } = await supabase.from("content_images").insert(
+    assetIds.map((contentAssetId) => ({
+      topic_id: params.topicId,
+      content_asset_id: contentAssetId,
+      prompt: params.prompt,
+      image_path: path,
+      model_alias: `${params.provider}/${params.modelId}`,
+      provider: params.provider,
+      created_by: params.userId,
+      image_kind: params.imageKind,
+      page_index: params.pageIndex,
+    })),
+  );
   if (insertError) return { ok: false, error: "图片已生成，但记录保存失败，请重试。" };
   return { ok: true };
 }

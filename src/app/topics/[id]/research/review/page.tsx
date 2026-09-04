@@ -5,7 +5,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { canApproveResearch } from "@/lib/permissions";
 import { canApproveResearchFromStatus } from "@/lib/research-workflow";
 import { ResearchPackView } from "@/components/research-pack-view";
-import { Button } from "@/components/ui/button";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
 import { discardTopic } from "../../../actions";
 import { approveAndGoHome } from "../../../pipeline-actions";
 
@@ -57,14 +57,12 @@ export default async function ReviewResearchPage({ params }: { params: Promise<{
       {canDecide ? (
         <div className="flex gap-3">
           <form action={discardTopic.bind(null, topic.id)} className="flex-1">
-            <Button type="submit" variant="secondary" className="w-full">
+            <PendingSubmitButton variant="secondary" className="w-full">
               淘汰
-            </Button>
+            </PendingSubmitButton>
           </form>
           <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex-1">
-            <Button type="submit" className="w-full">
-              通过，一键生成全部
-            </Button>
+            <PendingSubmitButton className="w-full">通过，一键生成全部</PendingSubmitButton>
           </form>
         </div>
       ) : (

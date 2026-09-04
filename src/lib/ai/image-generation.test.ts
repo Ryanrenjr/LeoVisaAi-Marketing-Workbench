@@ -27,6 +27,36 @@ describe("buildCoverImagePrompt", () => {
     expect(prompt).toContain("参考图是李尔王本人的真实照片");
     expect(prompt).toContain("保留他的真实长相");
   });
+
+  it("does not instruct the model to draw any specific data rows when no highlights are given", () => {
+    const prompt = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "视频号");
+    expect(prompt).not.toContain("严格使用下面提供的原文");
+    expect(prompt).not.toContain("1. ");
+  });
+
+  it("includes the exact highlight strings verbatim when provided", () => {
+    const prompt = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "视频号", false, [
+      "ILR/ILE：2年",
+      "EUSS：5年",
+    ]);
+    expect(prompt).toContain("ILR/ILE：2年");
+    expect(prompt).toContain("EUSS：5年");
+    expect(prompt).toContain("严格使用下面提供的原文");
+  });
+
+  it("includes a brand badge instruction only when contentBrand is given", () => {
+    const withBrand = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "视频号", false, [], "李尔王移民说");
+    expect(withBrand).toContain("李尔王移民说");
+    const withoutBrand = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "视频号");
+    expect(withoutBrand).not.toContain("品牌标签");
+  });
+
+  it("defaults to portrait composition, and switches to landscape when requested", () => {
+    const portrait = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "公众号");
+    expect(portrait).toContain("竖版构图");
+    const landscape = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "公众号", false, [], undefined, "landscape");
+    expect(landscape).toContain("横版通栏构图");
+  });
 });
 
 describe("buildCarouselImagePrompt", () => {

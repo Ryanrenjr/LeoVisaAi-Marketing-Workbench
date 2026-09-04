@@ -1,5 +1,6 @@
 import type { ContentPlatform, ContentType } from "./types";
 import type { RevisionTaskType } from "./ai/content-schemas";
+import type { BrandConfig } from "./brand-defaults";
 
 /**
  * Pure field-mapping helpers for content_assets — no Supabase, no
@@ -28,6 +29,21 @@ export const CONTENT_TYPE_REVISION: Partial<Record<ContentType, RevisionTaskType
   wechat_article: "WECHAT_ARTICLE_REVISION",
 };
 
+/**
+ * The task-specific system prompt (`WECHAT_ARTICLE_SYSTEM_PROMPT`,
+ * content-schemas.ts) deliberately tells the model NOT to write the brand
+ * footer itself — "which is appended separately". This is that separate
+ * step: a plain date stamp + the configured `wechatFooter` (which already
+ * contains the company name), built deterministically from real
+ * `brand_config`, never guessed by the model. See E｜公众号编辑员's Skill
+ * "DATE REQUIREMENT" / "COMPANY BRAND REQUIREMENT" and
+ * `src/lib/brand-validation.ts`.
+ */
+export function buildWechatBrandFooter(brand: Pick<BrandConfig, "wechatFooter">): string {
+  const today = new Date().toISOString().slice(0, 10);
+  return `最后核验：${today}\n\n${brand.wechatFooter}`;
+}
+
 /** Derives the plain `title`/`content` columns from a freshly-generated structured content object. */
 export function deriveTitleAndContent(
   platform: ContentPlatform,
@@ -48,7 +64,22 @@ export function deriveTitleAndContent(
     const titleOptions = (content.title_options as string[] | undefined) ?? [];
     return { title: titleOptions[0] ?? String(content.cover_title ?? ""), content: String(content.caption ?? "") };
   }
-  // WECHAT_OFFICIAL_ACCOUNT — direct article generation (title + full_article).
+  // WECHAT_OFFICIAL_ACCOUNT — the current direct-article shape has a
+  // separate closing_note (rendered after full_article, before the brand
+  // footer) and a `brand_footer` injected by the caller (see
+  // buildWechatBrandFooter above) before this ever runs — join all three
+  // so the flat `content` column (downloads, compliance scanning) matches
+  // what the UI shows as three separate fields. The legacy
+  // wechat_full_article shape has neither field, so this degrades to the
+  // old "just full_article" behavior automatically.
+  if ("closing_note" in content) {
+    return {
+      title: String(content.title ?? ""),
+      content: [content.full_article, content.closing_note, content.brand_footer]
+        .filter((part): part is string => typeof part === "string" && part.length > 0)
+        .join("\n\n"),
+    };
+  }
   return { title: String(content.title ?? ""), content: String(content.full_article ?? "") };
 }
 

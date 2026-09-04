@@ -28,7 +28,6 @@ const CORE_SUMMARY: Record<EmployeeId, string> = {
   compliance: "只做复核，不做认证——永远不会说内容「合规/通过」，只列出具体问题交给人判断。",
   reviser: "只修改合规审核员标出的具体问题，其余内容原样保留；不能为了改通顺而编造新的事实或数字；改不好就留给人工判断，不自称「已修好」。",
   integrator: "不生成、不修改任何内容——只把每个平台已经存在的最新文字和配图放在一起展示；缺文字或缺图就如实显示「待补充」，不自己生成来填补。",
-  analyst: "只能读取截图里真实可见的数字，看不清就留空，不能靠猜；不读取截图里的人名或评论内容。",
   "xiaohongshu-image-planner": "只规划图文每一页写什么、怎么设计——不自己生成配图（那是图片设计员的工作），不写标题和发布文案（那是小红书标题文案员的工作）；不得直接把视频稿分页，不得编造未经研究支持的政策结论。",
 };
 
@@ -39,6 +38,7 @@ const BRAND_CONFIG_FORM_FIELDS: Array<{ name: string; label: string; multiline?:
   { name: "expertName", label: "专家 IP 名" },
   { name: "videoOutro", label: "视频号固定 Outro", multiline: true },
   { name: "wechatFooter", label: "公众号底部 Footer", multiline: true },
+  { name: "expertCredentials", label: "专家资历简介（用于小红书/视频号发布文案结尾，真实可核实的信息才填）" },
 ];
 
 export default async function HandbookPage() {

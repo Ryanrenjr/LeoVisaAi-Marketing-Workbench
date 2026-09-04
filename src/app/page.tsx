@@ -1,5 +1,4 @@
 import { isDemoMode } from "@/lib/topics";
-import { getCurrentUser } from "@/lib/auth";
 import { timeBasedGreeting, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
 import { LaneCard, LaneGroup, StageRow } from "@/components/pipeline-flow";
@@ -15,10 +14,9 @@ function DemoNotice() {
 }
 
 async function BossHome({ demo, generatingTopicId }: { demo: boolean; generatingTopicId: string | null }) {
-  const [user, employeeNames] = await Promise.all([getCurrentUser(), getEmployeeNames()]);
+  const employeeNames = await getEmployeeNames();
 
   const greeting = timeBasedGreeting(new Date().getHours());
-  const name = user?.displayName ?? "老板";
 
   return (
     <div className="flex flex-col gap-10">
@@ -26,9 +24,7 @@ async function BossHome({ demo, generatingTopicId }: { demo: boolean; generating
 
       <section className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {greeting}，{name}。
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{greeting}。</h1>
           <p className="mt-1 text-sm text-[var(--muted)]">你的数字团队正在工作。</p>
         </div>
         <Link
@@ -42,13 +38,13 @@ async function BossHome({ demo, generatingTopicId }: { demo: boolean; generating
       {generatingTopicId && <GenerationRunner topicId={generatingTopicId} employeeNames={employeeNames} />}
 
       <section className="flex flex-col gap-1">
-        <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 9 步</h2>
+        <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 7 步</h2>
 
         <StageRow
           avatarId="planner"
           step={1}
           name={resolveEmployeeDisplayName("planner", employeeNames)}
-          actionLabel="查看选题"
+          actionLabel="搜索选题"
           href="/team/planner"
           kind="auto"
         />
@@ -114,14 +110,6 @@ async function BossHome({ demo, generatingTopicId }: { demo: boolean; generating
           actionLabel="查看整合"
           href="/team/integrator"
           kind="auto"
-        />
-        <StageRow
-          avatarId="analyst"
-          step={9}
-          name={resolveEmployeeDisplayName("analyst", employeeNames)}
-          actionLabel="查看数据"
-          href="/team/analyst"
-          kind="input"
           last
         />
       </section>

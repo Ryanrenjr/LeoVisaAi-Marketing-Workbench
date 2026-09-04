@@ -4,7 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { getContentAssets, getTopicById } from "@/lib/topics";
 import { getLatestForLineage } from "@/lib/content-versions";
-import { deriveTitleAndContent } from "@/lib/content-mapping";
+import { renderContentAsHtml } from "@/lib/content-html-export";
 import { CONTENT_PLATFORM_LABEL } from "@/lib/status";
 import type { ContentAsset, ContentPlatform, ContentType } from "@/lib/types";
 
@@ -54,9 +54,15 @@ async function addPlatformToZip(
       .eq("content_asset_id", asset.id)
       .order("page_index", { ascending: true, nullsFirst: true });
 
-    const { title, content } = deriveTitleAndContent(platform, asset.structured_content);
+    // Use the already-stored title/content columns rather than
+    // recomputing from structured_content — they were derived once, at
+    // save time, by the same generation/revision code path that also
+    // deterministically appends the WeChat brand footer (see
+    // content-mapping.ts's deriveTitleAndContent + buildWechatBrandFooter).
+    // Recomputing here would silently drop that footer, since it has no
+    // access to brand_config at download time.
     const subfolder = contentTypes.length > 1 ? `${label}/` : "";
-    zip.file(`${folderPrefix}${subfolder}${label}.txt`, `${title}\n\n${content}`);
+    zip.file(`${folderPrefix}${subfolder}${label}.html`, renderContentAsHtml(asset.title, asset.content));
 
     for (const image of images ?? []) {
       const { data: downloaded } = await supabase.storage.from("content-images").download(image.image_path);

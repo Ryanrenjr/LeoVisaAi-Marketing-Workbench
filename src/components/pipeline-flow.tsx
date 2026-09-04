@@ -51,7 +51,7 @@ function RailThread() {
 
 const RAIL_WIDTH = 96;
 
-/** The rail node IS the employee's own circular portrait — big enough to read as an actual person — with a numbered badge in the corner. */
+/** The rail node IS the employee's own circular portrait — big enough to read as an actual person — with a numbered badge in the corner. Hover feedback (scale + brighter ring) is driven by the parent `.group` (the whole row/card is one hover target, not just the avatar itself). */
 function PersonNode({ avatarId, step, size = RAIL_WIDTH }: { avatarId: string; step: number; size?: number }) {
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
@@ -59,9 +59,9 @@ function PersonNode({ avatarId, step, size = RAIL_WIDTH }: { avatarId: string; s
         src={`/employees/${avatarId}.png`}
         alt=""
         fill
-        className="rounded-full object-cover shadow-[0_0_0_1.5px_var(--border)]"
+        className="rounded-full object-cover shadow-[0_0_0_1.5px_var(--border)] transition-transform duration-200 group-hover:scale-105"
       />
-      <span className="absolute -bottom-0.5 -right-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent)] text-xs font-bold text-[var(--accent-foreground)] ring-2 ring-[var(--background)]">
+      <span className="absolute -bottom-0.5 -right-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent)] text-xs font-bold text-[var(--accent-foreground)] ring-2 ring-[var(--background)] transition-shadow duration-200 group-hover:ring-[var(--accent)]/50">
         {step}
       </span>
     </div>
@@ -86,7 +86,7 @@ export function StageRow({
   last?: boolean;
 }) {
   return (
-    <div className="flex gap-4">
+    <div className="group flex gap-4">
       <div className="flex flex-shrink-0 flex-col items-center" style={{ width: RAIL_WIDTH }}>
         <PersonNode avatarId={avatarId} step={step} />
         {!last && <RailThread />}
@@ -94,6 +94,7 @@ export function StageRow({
       <Link
         href={href}
         className="card mb-5 flex flex-1 items-center gap-3 px-5 py-4 hover:border-[var(--accent)]/40"
+        style={{ animationDelay: `${step * 60}ms` }}
       >
         <p className="min-w-0 flex-1 truncate text-lg font-semibold">{name}</p>
         <div className="flex shrink-0 flex-col items-end gap-2">
@@ -169,14 +170,14 @@ export function LaneCard({
   return (
     <Link
       href={href}
-      className="card flex flex-col items-center gap-2 px-3 py-4 text-center hover:border-[var(--accent)]/40"
+      className="card group flex flex-col items-center gap-2 px-3 py-4 text-center hover:border-[var(--accent)]/40"
     >
       <div className="relative h-16 w-16 shrink-0">
         <Image
           src={`/employees/${avatarId}.png`}
           alt=""
           fill
-          className="rounded-full object-cover shadow-[0_0_0_1.5px_var(--border)]"
+          className="rounded-full object-cover shadow-[0_0_0_1.5px_var(--border)] transition-transform duration-200 group-hover:scale-105"
         />
       </div>
       <p className="w-full truncate text-sm font-medium">{name}</p>

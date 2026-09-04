@@ -102,6 +102,7 @@ describe("generateVideoChannelContent", () => {
     cta: "行动号召",
     publish_title: "发布标题",
     publish_caption: "发布文案",
+    cover_highlights: [],
     source_references: ["S1"],
     expert_review_notes: [],
   };
@@ -178,6 +179,7 @@ describe("generateXiaohongshuContent", () => {
       cover_title: "封面",
       caption: "正文",
       keywords: ["关键词"],
+      cover_highlights: [],
       source_references: ["S1"],
       expert_review_notes: [],
     });

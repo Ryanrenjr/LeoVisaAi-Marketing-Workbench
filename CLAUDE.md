@@ -93,7 +93,7 @@ default (Boss Mode) presentation: the backend is workflow/agent-based
 human approval), but the user-facing Boss Mode presents that same backend
 as **digital employees** (A 选题策划员 / B 政策研究员 / C-E three
 platform-specific content editors + 图片设计员 / G 合规审核员 / H 终审修改员 /
-I 内容整合员 / J 数据分析员 / K 小红书图文规划员 — see `src/lib/boss-language.ts`
+I 内容整合员 / K 小红书图文规划员 — see `src/lib/boss-language.ts`
 `DIGITAL_EMPLOYEES` for the exact current roster and letters) doing the
 repetitive work, with **Leo** — the human — reviewing only the decisions
 AI cannot responsibly make. Originally exactly four; every employee added
@@ -105,9 +105,11 @@ final look (no generation, no mutation — see
 `src/app/team/integrator/page.tsx`); K 小红书图文规划员 splits off the
 per-page 图文 planning + image generation that used to live inside D 小红书
 标题文案员, so D now only writes the title/caption (see
-`src/app/team/xiaohongshu-image-planner/page.tsx`). Any further employee
-still requires an explicit instruction. An ADMIN can give any employee a
-custom display name
+`src/app/team/xiaohongshu-image-planner/page.tsx`). J 数据分析员 was later
+retired entirely by explicit live user instruction (2026-09) — its route,
+data-access code, `publish_performance` table, and uploaded screenshots
+were all removed, not just hidden. Any further employee still requires an
+explicit instruction. An ADMIN can give any employee a custom display name
 (`employee_names` table); this never changes which employee owns which
 task. See [docs/digital-employee-ux.md](docs/digital-employee-ux.md) for
 the full mapping between employee UI and backend modules.
@@ -193,13 +195,26 @@ Phase boundaries are real — see
 Do not start Topic AI scoring or Research AI unless a later instruction
 explicitly says so.
 
-## Roles
+## Access model
 
-- `ADMIN` — full access, manages staff accounts and roles.
-- `EXPERT` — manages the content pipeline (create topics, advance status).
+Live user instruction (2026-09): "不要分用户登录了，彻底变成一个一次性工具"
+— there are no per-person accounts any more. Access is gated by a single
+shared password (`SITE_PASSWORD`) checked at `/login`
+(`src/app/login/actions.ts`); anyone who knows it is transparently signed
+in as one fixed, pre-existing Supabase Auth account (`OPERATOR_EMAIL`).
+This was a deliberate choice over either extreme — fully public access
+would let anyone who finds the URL trigger real paid AI calls; rewriting
+the whole Supabase Auth/RLS/foreign-key layer (every content table's
+`created_by`/`approved_by`/`decided_by`/... columns reference
+`public.profiles`) for a single-operator tool wasn't worth the risk.
 
-Both are internal-staff-only roles. There is no client-facing account type
-in this application.
+The `ADMIN`/`EXPERT` role field still exists in the data model
+(`profiles.role`, `src/lib/permissions.ts`) purely because the fixed
+operator account happens to be ADMIN — every permission check still
+technically runs, it just always resolves the same way now. It is not a
+choice a person makes any more; do not build UI that asks someone to pick
+a role or manage other accounts (that surface — staff invite, role
+management — was removed from `/admin` along with per-person login).
 
 ## Docs index
 

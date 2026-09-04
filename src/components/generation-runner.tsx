@@ -146,6 +146,11 @@ export function GenerationRunner({
 
         setPercent(100);
         setActiveIndex(STEPS.length);
+        // A beat before navigating away — otherwise the 100% state never
+        // actually gets seen (setPercent/router.push land in the same
+        // tick). Live user instruction: "生产过程有游戏感" — completing the
+        // whole pipeline deserves a visible moment, not an instant cut.
+        await new Promise((resolve) => setTimeout(resolve, 550));
         router.push("/team/integrator");
       } catch (err) {
         setError(err instanceof Error ? err.message : "生成过程中出错了。");
@@ -189,14 +194,18 @@ export function GenerationRunner({
         </p>
       )}
 
-      <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--border)]">
+      <div className={`h-2 w-full overflow-hidden rounded-full bg-[var(--border)] ${percent >= 100 ? "pop-in" : ""}`}>
         <div
-          className={`h-full rounded-full transition-all ${paused ? "bg-[var(--muted)]" : "bg-[var(--accent)]"}`}
+          className={`relative h-full overflow-hidden rounded-full transition-all ${paused ? "bg-[var(--muted)]" : "bg-[var(--accent)]"}`}
           style={{ width: `${percent}%` }}
-        />
+        >
+          {!paused && !allDone && (
+            <div className="absolute inset-y-0 w-1/3 bg-white/30" style={{ animation: "progress-shimmer 1.6s ease-in-out infinite" }} />
+          )}
+        </div>
       </div>
 
-      <ol className="flex flex-col gap-1.5">
+      <ol className="flex flex-col">
         {STEPS.map((s, i) => {
           const status: StepStatus =
             i === 2 && skippedRevision
@@ -206,34 +215,48 @@ export function GenerationRunner({
                 : i === activeIndex
                   ? "active"
                   : "pending";
+          const isLast = i === STEPS.length - 1;
+          const connectorFilled = status === "done" || status === "skipped";
           return (
-            <li key={s.key} className="flex items-center gap-2 text-sm">
-              <span
-                className={
-                  status === "done"
-                    ? "text-green-600 dark:text-green-400"
-                    : status === "active"
-                      ? "font-semibold text-[var(--accent)]"
-                      : "text-[var(--muted)]"
-                }
-              >
-                {status === "done" ? "✓" : status === "active" ? "●" : status === "skipped" ? "—" : "○"}
-              </span>
-              <span
-                className={status === "pending" || status === "skipped" ? "text-[var(--muted)]" : ""}
-              >
+            <li key={s.key} className="flex gap-3">
+              <div className="flex flex-shrink-0 flex-col items-center">
+                <span
+                  className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold transition-colors duration-300 ${
+                    status === "done"
+                      ? "pop-in bg-[var(--accent)] text-[var(--accent-foreground)]"
+                      : status === "active"
+                        ? "thinking-avatar border-2 border-[var(--accent)] text-[var(--accent)]"
+                        : status === "skipped"
+                          ? "bg-[var(--border)] text-[var(--muted)]"
+                          : "border border-[var(--border)] text-[var(--muted)]"
+                  }`}
+                >
+                  {status === "done" ? "✓" : status === "active" ? "●" : status === "skipped" ? "—" : "○"}
+                </span>
+                {!isLast && (
+                  <div
+                    className={`w-0.5 flex-1 transition-colors duration-500 ${connectorFilled ? "bg-[var(--accent)]" : "bg-[var(--border)]"}`}
+                    style={{ minHeight: 14 }}
+                  />
+                )}
+              </div>
+              <div className={`pb-3 text-sm ${status === "pending" || status === "skipped" ? "text-[var(--muted)]" : ""}`}>
                 {s.label}
                 {status === "skipped" && "（审核无问题，跳过）"}
-              </span>
+              </div>
             </li>
           );
         })}
       </ol>
 
       {activeEmployees.length > 0 && (
-        <div className="flex gap-4">
+        // key={activeIndex} forces a remount when the step changes, so the
+        // fade-in-up entrance replays for each new step's employees
+        // instead of only playing once on the runner's first mount —
+        // reads as the next employee(s) "stepping in" to take over.
+        <div key={activeIndex} className="flex gap-4">
           {activeEmployees.map((id) => (
-            <div key={id} className="flex flex-col items-center gap-1">
+            <div key={id} className="flex flex-col items-center gap-1" style={{ animation: "fade-in-up 0.3s ease-out both" }}>
               <Image
                 src={`/employees/${id}.png`}
                 alt=""

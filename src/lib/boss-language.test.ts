@@ -51,8 +51,8 @@ describe("BOSS_CONFIDENCE_LABEL", () => {
 });
 
 describe("DIGITAL_EMPLOYEES", () => {
-  it("defines exactly eleven employees, lettered A-K in order", () => {
-    expect(DIGITAL_EMPLOYEES).toHaveLength(11);
+  it("defines exactly ten employees, lettered A-K in order (J retired with the analyst employee)", () => {
+    expect(DIGITAL_EMPLOYEES).toHaveLength(10);
     expect(DIGITAL_EMPLOYEES.map((e) => e.letter)).toEqual([
       "A",
       "B",
@@ -63,12 +63,11 @@ describe("DIGITAL_EMPLOYEES", () => {
       "G",
       "H",
       "I",
-      "J",
       "K",
     ]);
   });
 
-  it("all eleven are enabled", () => {
+  it("all ten are enabled", () => {
     expect(DIGITAL_EMPLOYEES.every((e) => e.enabled)).toBe(true);
   });
 

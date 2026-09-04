@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveTitleAndContent, mergeEditIntoStructuredContent } from "./content-mapping";
+import { buildWechatBrandFooter, deriveTitleAndContent, mergeEditIntoStructuredContent } from "./content-mapping";
 
 describe("deriveTitleAndContent", () => {
   it("uses title/full_script for VIDEO_CHANNEL", () => {
@@ -26,12 +26,41 @@ describe("deriveTitleAndContent", () => {
     expect(result).toEqual({ title: "图文规划（共 2 页）", content: "第一页\n\n第二页" });
   });
 
-  it("uses title/full_article for a direct-generation WeChat article", () => {
+  it("uses title/full_article for a legacy WeChat full-article asset (no closing_note field)", () => {
     const result = deriveTitleAndContent("WECHAT_OFFICIAL_ACCOUNT", {
       title: "标题",
       full_article: "正文内容",
     });
     expect(result).toEqual({ title: "标题", content: "正文内容" });
+  });
+
+  it("joins full_article + closing_note + brand_footer for a current-shape WeChat article", () => {
+    const result = deriveTitleAndContent("WECHAT_OFFICIAL_ACCOUNT", {
+      title: "标题",
+      full_article: "正文内容",
+      closing_note: "结尾话术",
+      brand_footer: "最后核验：2026-09-03\n\n本文由 Leo Visa Service 整理。",
+    });
+    expect(result).toEqual({
+      title: "标题",
+      content: "正文内容\n\n结尾话术\n\n最后核验：2026-09-03\n\n本文由 Leo Visa Service 整理。",
+    });
+  });
+
+  it("still works for a current-shape WeChat article missing brand_footer (not yet injected)", () => {
+    const result = deriveTitleAndContent("WECHAT_OFFICIAL_ACCOUNT", {
+      title: "标题",
+      full_article: "正文内容",
+      closing_note: "结尾话术",
+    });
+    expect(result).toEqual({ title: "标题", content: "正文内容\n\n结尾话术" });
+  });
+});
+
+describe("buildWechatBrandFooter", () => {
+  it("prefixes the configured wechatFooter with today's 最后核验 date", () => {
+    const footer = buildWechatBrandFooter({ wechatFooter: "本文由 Leo Visa Service 整理。" });
+    expect(footer).toMatch(/^最后核验：\d{4}-\d{2}-\d{2}\n\n本文由 Leo Visa Service 整理。$/);
   });
 });
 

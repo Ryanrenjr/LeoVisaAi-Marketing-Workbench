@@ -4,8 +4,7 @@ import { getCurrentUser } from "@/lib/auth";
 import { getAllProfiles, getRecentStatusEvents, getResearchIntegrityIssues, isDemoMode } from "@/lib/topics";
 import { STATUS_LABEL } from "@/lib/status";
 import { Button } from "@/components/ui/button";
-import { AutoSubmitSelect } from "@/components/auto-submit-select";
-import { inviteStaff, updateEmployeeName, updateUserRole } from "./actions";
+import { updateEmployeeName } from "./actions";
 import { DIGITAL_EMPLOYEES, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
 
@@ -13,8 +12,6 @@ const INTEGRITY_ISSUE_LABEL = {
   missing_research_pack: "状态显示研究已完成，但没有真实的研究成果记录",
   missing_content_asset: "状态显示已生成内容，但没有真实的内容草稿记录",
 };
-
-const ROLE_LABEL = { ADMIN: "管理员", EXPERT: "专员" };
 
 export default async function AdminPage() {
   const demo = await isDemoMode();
@@ -37,12 +34,12 @@ export default async function AdminPage() {
     <div className="flex flex-col gap-10">
       <div>
         <h1 className="text-lg font-semibold">管理</h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">员工账号、AI 模型、审批记录都在这里。</p>
+        <p className="mt-1 text-sm text-[var(--muted)]">AI 模型、员工命名、审批记录都在这里。</p>
       </div>
 
       {demo && (
         <p className="rounded-md border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted)]">
-          当前为演示数据（未连接 Supabase），角色管理与邀请功能已禁用。
+          当前为演示数据（未连接 Supabase），编辑功能已禁用。
         </p>
       )}
 
@@ -58,7 +55,7 @@ export default async function AdminPage() {
 
       <details className="group">
         <summary className="cursor-pointer text-sm font-medium text-[var(--muted)]">
-          更多管理功能（员工账号、改名、记录）
+          更多管理功能（改名、记录）
         </summary>
 
         <div className="mt-6 flex flex-col gap-10">
@@ -100,55 +97,6 @@ export default async function AdminPage() {
                 </li>
               ))}
             </ul>
-          </section>
-
-          <section>
-            <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">员工与角色</h2>
-            <p className="mb-2 text-sm text-[var(--muted)]">改角色一选就生效，不用再点保存。</p>
-            <ul>
-              {profiles.map((profile) => (
-                <li
-                  key={profile.id}
-                  className="flex items-center justify-between gap-4 border-b border-[var(--border)] py-3 last:border-b-0"
-                >
-                  <div>
-                    <p className="font-medium">{profile.display_name}</p>
-                    <p className="text-sm text-[var(--muted)]">{profile.email}</p>
-                  </div>
-                  {demo ? (
-                    <span className="text-sm text-[var(--muted)]">{ROLE_LABEL[profile.role]}</span>
-                  ) : (
-                    <AutoSubmitSelect
-                      action={updateUserRole}
-                      hiddenFields={{ userId: profile.id }}
-                      name="role"
-                      defaultValue={profile.role}
-                      options={[
-                        { value: "EXPERT", label: ROLE_LABEL.EXPERT },
-                        { value: "ADMIN", label: ROLE_LABEL.ADMIN },
-                      ]}
-                    />
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section>
-            <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">邀请新员工</h2>
-            <form action={inviteStaff} className="flex gap-2">
-              <input
-                name="email"
-                type="email"
-                placeholder="邮箱地址"
-                required
-                disabled={demo}
-                className="flex-1 rounded-md border border-[var(--border)] bg-transparent px-3 py-1.5 text-sm disabled:opacity-50"
-              />
-              <Button type="submit" disabled={demo}>
-                发送邀请
-              </Button>
-            </form>
           </section>
 
           {integrityIssues.length > 0 && (

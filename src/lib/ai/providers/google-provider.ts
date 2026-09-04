@@ -1,5 +1,6 @@
 import "server-only";
 import { GoogleGenAI } from "@google/genai";
+import { z } from "zod";
 import type { ZodType } from "zod";
 import {
   RESEARCH_SYSTEM_PROMPT,
@@ -116,6 +117,27 @@ export async function runGoogleResearch(
 }
 
 /**
+ * Best-effort JSON Schema for `responseSchema` (below) — Gemini enforces
+ * this shape server-side instead of only being told the shape via prose
+ * in the prompt, which is what actually let a page-planning call return
+ * `pages` as an array of objects instead of strings (live bug report: K's
+ * 图文规划 failed Zod validation on Google specifically, never on
+ * Anthropic, because only Anthropic's `output_config.format` was ever
+ * schema-enforced at the API level — this closes that gap for Google
+ * too). Wrapped in try/catch: not every Zod schema in this codebase is
+ * guaranteed convertible (`.refine()`, certain unions, ...), and a
+ * conversion failure must fall back to the old prompt-only behavior
+ * rather than break the call outright.
+ */
+function tryBuildResponseSchema(schema: ZodType<unknown>): Record<string, unknown> | undefined {
+  try {
+    return z.toJSONSchema(schema) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Generic structured-content call for Gemini: JSON-mode output, parsed and
  * then re-validated with the caller's Zod schema — the same
  * "never trust the SDK's own shape guarantee, validate everything" rule
@@ -149,6 +171,7 @@ export async function generateGoogleStructured<T>(params: {
       config: {
         systemInstruction: params.systemPrompt,
         responseMimeType: "application/json",
+        responseSchema: tryBuildResponseSchema(params.schema),
       },
     });
 
@@ -235,6 +258,7 @@ export async function generateGoogleStructuredFromImage<T>(params: {
       config: {
         systemInstruction: params.systemPrompt,
         responseMimeType: "application/json",
+        responseSchema: tryBuildResponseSchema(params.schema),
       },
     });
 

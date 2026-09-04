@@ -80,7 +80,13 @@ function WechatFullArticleFields({
   );
 }
 
-function WechatArticleFields({ content, sources }: { content: WechatArticle; sources: ResearchSource[] }) {
+function WechatArticleFields({
+  content,
+  sources,
+}: {
+  content: WechatArticle & { brand_footer?: string };
+  sources: ResearchSource[];
+}) {
   return (
     <div className="flex flex-col gap-4">
       <Field label="标题">{content.title}</Field>
@@ -97,6 +103,13 @@ function WechatArticleFields({ content, sources }: { content: WechatArticle; sou
       </Field>
       <Field label="结尾">
         <MarkdownText text={content.closing_note} />
+      </Field>
+      <Field label="品牌落款（最后核验日期 + 公司信息，自动生成，不是 AI 写的）">
+        {content.brand_footer ? (
+          <MarkdownText text={content.brand_footer} />
+        ) : (
+          <span className="text-[var(--muted)]">这个版本是旧版生成的，没有自动落款——重新生成一次就会补上。</span>
+        )}
       </Field>
       <Field label="金句">
         <ul className="list-disc pl-5">
@@ -134,7 +147,7 @@ export function WechatArticleView({
   brand: BrandConfig;
 }) {
   const [latest, ...older] = history;
-  const latestContent = latest.structured_content as unknown as WechatArticle;
+  const latestContent = latest.structured_content as unknown as WechatArticle & { brand_footer?: string };
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-[var(--muted)]">公众号文章 · 当前版本 v{latest.version}</p>
@@ -148,7 +161,7 @@ export function WechatArticleView({
           </summary>
           <div className="mt-3">
             <WechatArticleFields
-              content={asset.structured_content as unknown as WechatArticle}
+              content={asset.structured_content as unknown as WechatArticle & { brand_footer?: string }}
               sources={sourcesForAsset(asset, sourcesByPackId)}
             />
           </div>

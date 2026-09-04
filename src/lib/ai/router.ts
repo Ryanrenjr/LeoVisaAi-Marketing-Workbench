@@ -7,9 +7,8 @@ import {
   runAnthropicContentTask,
   runAnthropicWechatFullArticle,
   generateAnthropicStructured,
-  generateAnthropicStructuredFromImage,
 } from "./providers/anthropic-provider";
-import { runGoogleResearch, generateGoogleStructured, generateGoogleStructuredFromImage } from "./providers/google-provider";
+import { runGoogleResearch, generateGoogleStructured } from "./providers/google-provider";
 import { generateGroqStructured } from "./providers/groq-provider";
 import { generateOpenRouterStructured } from "./providers/openrouter-provider";
 import { generateOpenAIStructured, generateOpenAIImage, generateOpenAIImageEdit } from "./providers/openai-provider";
@@ -54,12 +53,6 @@ import {
   buildTopicDiscoveryUserPrompt,
 } from "./topic-discovery";
 import type { TopicDiscoveryResult } from "./topic-discovery";
-import {
-  PERFORMANCE_EXTRACTION_SYSTEM_PROMPT,
-  PerformanceMetricsSchema,
-  buildPerformanceExtractionUserPrompt,
-} from "./performance-schemas";
-import type { PerformanceMetrics } from "./performance-schemas";
 import { getEmployeeInstruction } from "../employee-instructions";
 import { appendCustomInstructions } from "./prompt-addendum";
 import { buildSkillPrompt } from "./skills";
@@ -523,40 +516,6 @@ export async function runTopicDiscoveryTask(
 }
 
 /**
- * Employee E (数据分析员) reads the numbers off one post-publish
- * performance screenshot. Only ANTHROPIC/GOOGLE ever resolve here — the
- * registry's supportsVision filter excludes GROQ/OPENROUTER's current
- * text-only free models, so this defensively rejects rather than silently
- * mis-dispatching if that ever changes.
- */
-export async function runPerformanceAnalysisTask(
-  image: { base64: string; mimeType: "image/png" | "image/jpeg" | "image/webp" },
-  platform: string,
-  executionOverride?: ModelRef | null,
-): Promise<RouterResult<PerformanceMetrics>> {
-  const started = Date.now();
-  const resolution = await resolveModelForTask("PERFORMANCE_ANALYSIS", executionOverride);
-  if (!resolution.ok) return resolutionFailure(resolution.error, started);
-
-  const { model } = resolution;
-  const customInstructions = await getEmployeeInstruction("analyst");
-  const params = {
-    systemPrompt: appendCustomInstructions(buildSkillPrompt("analyst", PERFORMANCE_EXTRACTION_SYSTEM_PROMPT), customInstructions),
-    userMessage: buildPerformanceExtractionUserPrompt(platform),
-    schema: PerformanceMetricsSchema,
-    maxTokens: 1000,
-    modelId: model.modelId,
-    imageBase64: image.base64,
-    mimeType: image.mimeType,
-  };
-
-  if (model.provider === "ANTHROPIC") return generateAnthropicStructuredFromImage(params);
-  if (model.provider === "GOOGLE") return generateGoogleStructuredFromImage(params);
-
-  return resolutionFailure("此模型不支持读取截图（缺少视觉能力）。", started);
-}
-
-/**
  * Employee 图片设计员 — generates a cover image from an already
  * human-reviewed 小红书 post draft (never from raw research directly).
  * Only OPENAI currently registers a supportsImageGeneration model — the
@@ -568,6 +527,7 @@ export async function runImageGenerationTask(
   prompt: string,
   executionOverride?: ModelRef | null,
   referenceImages?: { bytes: Buffer; mimeType: string; filename: string }[],
+  size: "1024x1024" | "1024x1536" | "1536x1024" = "1024x1536",
 ): Promise<RouterResult<{ images: string[] }>> {
   const started = Date.now();
   const resolution = await resolveModelForTask("IMAGE_GENERATION", executionOverride);
@@ -578,9 +538,9 @@ export async function runImageGenerationTask(
     return resolutionFailure("此模型不支持图片生成。", started);
   }
   if (referenceImages && referenceImages.length > 0) {
-    return generateOpenAIImageEdit({ prompt, modelId: model.modelId, size: "1024x1536", referenceImages });
+    return generateOpenAIImageEdit({ prompt, modelId: model.modelId, size, referenceImages });
   }
-  return generateOpenAIImage({ prompt, modelId: model.modelId, size: "1024x1536" });
+  return generateOpenAIImage({ prompt, modelId: model.modelId, size });
 }
 
 export { resolveModelForTask };

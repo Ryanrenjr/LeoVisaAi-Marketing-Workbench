@@ -311,7 +311,6 @@ export function listModels(): readonly ModelRegistryEntry[] {
 }
 
 /**
- * PERFORMANCE_ANALYSIS requires reading a screenshot (vision);
  * IMAGE_GENERATION requires the Images endpoint capability; every other
  * task — including RESEARCH — only requires structured output.
  *
@@ -328,7 +327,6 @@ export function listModels(): readonly ModelRegistryEntry[] {
  */
 export function isModelSuitableForTask(model: ModelRegistryEntry, taskType: TaskType): boolean {
   if (!model.enabled) return false;
-  if (taskType === "PERFORMANCE_ANALYSIS") return model.supportsVision && model.supportsStructuredOutput;
   if (taskType === "IMAGE_GENERATION") return model.supportsImageGeneration;
   return model.supportsStructuredOutput;
 }

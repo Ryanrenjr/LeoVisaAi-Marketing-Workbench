@@ -23,6 +23,7 @@ const BRAND_CONFIG_KEYS = [
   "expert_name",
   "video_outro",
   "wechat_footer",
+  "expert_credentials",
 ] as const;
 
 export async function getBrandConfig(): Promise<BrandConfig> {
@@ -43,5 +44,6 @@ export async function getBrandConfig(): Promise<BrandConfig> {
     expertName: overrides.get("expert_name") ?? DEFAULT_BRAND_CONFIG.expertName,
     videoOutro: overrides.get("video_outro") ?? DEFAULT_BRAND_CONFIG.videoOutro,
     wechatFooter: overrides.get("wechat_footer") ?? DEFAULT_BRAND_CONFIG.wechatFooter,
+    expertCredentials: overrides.get("expert_credentials") ?? DEFAULT_BRAND_CONFIG.expertCredentials,
   };
 }

@@ -50,7 +50,6 @@ export type EmployeeId =
   | "compliance"
   | "reviser"
   | "integrator"
-  | "analyst"
   | "xiaohongshu-image-planner";
 
 export interface DigitalEmployee {
@@ -63,7 +62,7 @@ export interface DigitalEmployee {
 }
 
 /**
- * Eleven digital employees. Originally five (planner/researcher/editor/
+ * Ten digital employees. Originally five (planner/researcher/editor/
  * compliance/analyst) — "编辑" (content editor) was split into three
  * platform-specific employees (video-editor/xiaohongshu-editor/
  * wechat-editor) plus a new image-designer, by explicit live user
@@ -164,14 +163,6 @@ export const DIGITAL_EMPLOYEES: readonly DigitalEmployee[] = [
     name: "内容整合员",
     responsibility: "把每个平台改好的文字和配图放在一起，让你一眼看到最终成品，再决定要不要进入拍摄。",
     href: "/team/integrator",
-    enabled: true,
-  },
-  {
-    id: "analyst",
-    letter: "J",
-    name: "数据分析员",
-    responsibility: "看发布后的数据表现，帮你判断下次该往哪个方向选题。",
-    href: "/team/analyst",
     enabled: true,
   },
   {

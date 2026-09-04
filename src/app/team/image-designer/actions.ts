@@ -8,6 +8,7 @@ import { getContentAssets, getTopicById } from "@/lib/topics";
 import { getLatestForLineage } from "@/lib/content-versions";
 import { buildCoverImagePrompt, buildCarouselImagePrompt } from "@/lib/ai/image-generation";
 import { getLatestLeoPortrait } from "@/lib/leo-portraits";
+import { getBrandConfig } from "@/lib/brand-config";
 import { runImageGenerationTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
@@ -24,6 +25,12 @@ import type { ContentAsset } from "@/lib/types";
  * original scope; falls back to 视频号 otherwise). ADMIN-only, same gate
  * as every other content-generation action — produces a real, billable
  * image.
+ *
+ * Saved under BOTH platforms' content_asset_id when both drafts exist
+ * (live bug report: it used to be saved only under whichever platform was
+ * picked as `source`, so the OTHER platform's card always showed "封面：
+ * 待生成" even though a shared cover had genuinely been generated) — see
+ * `additionalAssetIds` on `saveGeneratedContentImage`.
  */
 export async function generateCrossPlatformCover(
   topicId: string,
@@ -42,11 +49,28 @@ export async function generateCrossPlatformCover(
   const source = xhsPost ?? videoScript;
   if (!source) return { ok: false, error: "请先生成小红书文字或视频口播稿，再生成封面。" };
 
+  const other = source === xhsPost ? videoScript : xhsPost;
   const platformLabel = source === xhsPost ? "小红书" : "视频号";
-  return runCoverGeneration(topic, source, platformLabel, user.id, override, includePortrait);
+  return runCoverGeneration(
+    topic,
+    source,
+    platformLabel,
+    user.id,
+    override,
+    includePortrait,
+    other ? [other.id] : undefined,
+  );
 }
 
-/** 公众号封面 — same cover-generation logic, scoped to the WeChat draft (article preferred, falling back to legacy outline/full-article lineages). */
+/**
+ * 公众号封面 — same cover-generation logic, scoped to the WeChat draft
+ * (article preferred, falling back to legacy outline/full-article
+ * lineages). Landscape (1536x1024), not the portrait size used for
+ * 视频号/小红书 — a WeChat article's cover is a wide banner shown above the
+ * title, never a tall vertical card (live bug report: this was generating
+ * at the same 1024x1536 portrait size as every other cover, which is the
+ * wrong aspect ratio here).
+ */
 export async function generateWechatCover(
   topicId: string,
   override?: ModelRef | null,
@@ -64,7 +88,7 @@ export async function generateWechatCover(
   const source = article ?? fullArticle ?? outline;
   if (!source) return { ok: false, error: "请先生成公众号文章，再生成封面。" };
 
-  return runCoverGeneration(topic, source, "公众号", user.id, override);
+  return runCoverGeneration(topic, source, "公众号", user.id, override, false, undefined, "1536x1024", "landscape");
 }
 
 async function runCoverGeneration(
@@ -74,6 +98,9 @@ async function runCoverGeneration(
   userId: string,
   override?: ModelRef | null,
   includePortrait = false,
+  additionalAssetIds?: string[],
+  size: "1024x1024" | "1024x1536" | "1536x1024" = "1024x1536",
+  orientation: "portrait" | "landscape" = "portrait",
 ): Promise<{ ok: boolean; error?: string }> {
   const supabase = await createClient();
 
@@ -89,12 +116,26 @@ async function runCoverGeneration(
     referenceImages = [{ bytes, mimeType: downloaded.type || "image/png", filename: portrait.image_path }];
   }
 
-  const customInstructions = await getEmployeeInstruction("image-designer");
+  const [customInstructions, brandConfig] = await Promise.all([
+    getEmployeeInstruction("image-designer"),
+    getBrandConfig(),
+  ]);
+  const highlights = Array.isArray(source.structured_content?.cover_highlights)
+    ? (source.structured_content.cover_highlights as unknown[]).filter((h): h is string => typeof h === "string")
+    : [];
   const prompt = appendCustomInstructions(
-    buildCoverImagePrompt(topic, { title: source.title, text: source.content }, platformLabel, includePortrait),
+    buildCoverImagePrompt(
+      topic,
+      { title: source.title, text: source.content },
+      platformLabel,
+      includePortrait,
+      highlights,
+      brandConfig.contentBrand,
+      orientation,
+    ),
     customInstructions,
   );
-  const result = await runImageGenerationTask(prompt, override, referenceImages);
+  const result = await runImageGenerationTask(prompt, override, referenceImages, size);
 
   if (isRouterResolutionFailure(result)) return { ok: false, error: result.error };
 
@@ -121,6 +162,7 @@ async function runCoverGeneration(
   const saved = await saveGeneratedContentImage(supabase, {
     topicId: topic.id,
     contentAssetId: source.id,
+    additionalAssetIds,
     prompt,
     imageBase64,
     provider: result.provider,

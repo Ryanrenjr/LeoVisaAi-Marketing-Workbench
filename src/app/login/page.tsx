@@ -14,17 +14,7 @@ export default function LoginPage() {
       <h1 className="text-lg font-semibold">LeoVisaAi 营销工作台</h1>
       <form action={formAction} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-sm">
-          邮箱
-          <input
-            name="email"
-            type="email"
-            required
-            autoComplete="email"
-            className="rounded-md border border-[var(--border)] bg-transparent px-3 py-1.5"
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          密码
+          访问密码
           <input
             name="password"
             type="password"

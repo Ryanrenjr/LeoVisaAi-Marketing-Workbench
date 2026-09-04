@@ -49,13 +49,6 @@ describe("isModelSuitableForTask", () => {
   it("has suitable models for COMPLIANCE — live as of the Digital Employee Expansion milestone", () => {
     expect(listModelsForTask("COMPLIANCE").length).toBeGreaterThan(0);
   });
-
-  it("requires supportsVision for PERFORMANCE_ANALYSIS", () => {
-    const groq = getModel("GROQ", "openai/gpt-oss-120b")!;
-    const google = getModel("GOOGLE", "gemini-3.6-flash")!;
-    expect(isModelSuitableForTask(groq, "PERFORMANCE_ANALYSIS")).toBe(false);
-    expect(isModelSuitableForTask(google, "PERFORMANCE_ANALYSIS")).toBe(true);
-  });
 });
 
 describe("listModelsForTask", () => {

@@ -31,8 +31,7 @@ export type TaskType =
   | "VIDEO_REVISION"
   | "XIAOHONGSHU_REVISION"
   | "XIAOHONGSHU_PAGES_REVISION"
-  | "WECHAT_ARTICLE_REVISION"
-  | "PERFORMANCE_ANALYSIS";
+  | "WECHAT_ARTICLE_REVISION";
 
 export const TASK_TYPES: readonly TaskType[] = [
   "TOPIC_PLANNING",
@@ -50,7 +49,6 @@ export const TASK_TYPES: readonly TaskType[] = [
   "XIAOHONGSHU_REVISION",
   "XIAOHONGSHU_PAGES_REVISION",
   "WECHAT_ARTICLE_REVISION",
-  "PERFORMANCE_ANALYSIS",
 ];
 
 /** Which digital employee each task type belongs to — for grouping in the Admin settings UI. */
@@ -70,7 +68,6 @@ export const TASK_TYPE_EMPLOYEE: Record<TaskType, EmployeeId> = {
   XIAOHONGSHU_REVISION: "reviser",
   XIAOHONGSHU_PAGES_REVISION: "reviser",
   WECHAT_ARTICLE_REVISION: "reviser",
-  PERFORMANCE_ANALYSIS: "analyst",
 };
 
 export const TASK_TYPE_LABEL: Record<TaskType, string> = {
@@ -89,7 +86,6 @@ export const TASK_TYPE_LABEL: Record<TaskType, string> = {
   XIAOHONGSHU_REVISION: "小红书标题文案修改",
   XIAOHONGSHU_PAGES_REVISION: "小红书图文规划修改",
   WECHAT_ARTICLE_REVISION: "公众号文章修改",
-  PERFORMANCE_ANALYSIS: "发布数据分析",
 };
 
 /**
@@ -119,7 +115,7 @@ export interface ModelRegistryEntry {
   supportsStructuredOutput: boolean;
   supportsToolUse: boolean;
   supportsReasoning: boolean;
-  /** Can read an image as input — required for PERFORMANCE_ANALYSIS (screenshot reading). */
+  /** Can read an image as input (e.g. reading a reference photo or screenshot). */
   supportsVision: boolean;
   /** Can generate an image as output — required for IMAGE_GENERATION. Unrelated to supportsVision (reading vs. producing an image). */
   supportsImageGeneration: boolean;

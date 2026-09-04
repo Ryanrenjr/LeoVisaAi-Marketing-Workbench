@@ -6,7 +6,6 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPES } from "@/lib/ai/providers/types";
 import type { AIProviderId, TaskType } from "@/lib/ai/providers/types";
-import type { UserRole } from "@/lib/types";
 import { DIGITAL_EMPLOYEES } from "@/lib/boss-language";
 import type { EmployeeId } from "@/lib/boss-language";
 import { nextInstructionVersion } from "@/lib/employee-instruction-versions";
@@ -18,37 +17,13 @@ const BRAND_CONFIG_FIELDS = [
   ["expertName", "expert_name"],
   ["videoOutro", "video_outro"],
   ["wechatFooter", "wechat_footer"],
+  ["expertCredentials", "expert_credentials"],
 ] as const;
 
 async function requireAdmin() {
   const user = await requireUser();
   if (user.role !== "ADMIN") throw new Error("Forbidden: ADMIN role required");
   return user;
-}
-
-export async function updateUserRole(formData: FormData) {
-  await requireAdmin();
-
-  const userId = String(formData.get("userId") ?? "");
-  const role = String(formData.get("role") ?? "") as UserRole;
-  if (!userId || (role !== "ADMIN" && role !== "EXPERT")) return;
-
-  const admin = createAdminClient();
-  await admin.from("profiles").update({ role }).eq("id", userId);
-
-  revalidatePath("/admin");
-}
-
-export async function inviteStaff(formData: FormData) {
-  await requireAdmin();
-
-  const email = String(formData.get("email") ?? "").trim();
-  if (!email) return;
-
-  const admin = createAdminClient();
-  await admin.auth.admin.inviteUserByEmail(email);
-
-  revalidatePath("/admin");
 }
 
 /**
@@ -121,7 +96,6 @@ export async function updateEmployeeName(formData: FormData) {
   revalidatePath("/team/image-designer");
   revalidatePath("/team/wechat-editor");
   revalidatePath("/team/compliance");
-  revalidatePath("/team/analyst");
 }
 
 /**

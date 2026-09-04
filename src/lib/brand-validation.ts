@@ -52,9 +52,21 @@ export function validateXiaohongshuPagesPlan(
   return issues;
 }
 
-export function validateWechatArticle(content: Pick<WechatFullArticle, "full_article">, brand: BrandConfig): string[] {
+/**
+ * The current WeChat article shape has `brand_footer` injected
+ * deterministically at generation/revision time (see
+ * `buildWechatBrandFooter`, content-mapping.ts) — never AI-written. When
+ * it's present, that single field is authoritative for company name/最后
+ * 核验/footer all at once; when it's absent (a legacy `wechat_full_article`
+ * asset, or a current-shape one generated before this existed), fall back
+ * to scanning `full_article` itself, same as before.
+ */
+export function validateWechatArticle(
+  content: Pick<WechatFullArticle, "full_article"> & { brand_footer?: string },
+  brand: BrandConfig,
+): string[] {
+  const text = content.brand_footer ? `${content.full_article}\n\n${content.brand_footer}` : content.full_article;
   const issues: string[] = [];
-  const text = content.full_article;
 
   const hasCompanyName =
     (brand.companyNameEn && text.includes(brand.companyNameEn)) ||

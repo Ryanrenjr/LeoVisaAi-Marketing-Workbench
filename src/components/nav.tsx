@@ -29,14 +29,7 @@ export function Nav({ user }: { user: CurrentUser | null }) {
             </Link>
           )}
         </div>
-        {user && (
-          <div className="flex items-center gap-3 text-sm text-[var(--muted)]">
-            <span className="rounded-full border border-[var(--border)] px-3 py-1">
-              {user.displayName} · {user.role === "ADMIN" ? "管理员" : "专员"}
-            </span>
-            <LogoutButton />
-          </div>
-        )}
+        {user && <LogoutButton />}
       </div>
     </header>
   );

@@ -99,8 +99,60 @@ select option {
   border: 1px solid var(--border);
   box-shadow: var(--shadow-card);
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  animation: fade-in-up 0.28s ease-out both;
 }
 a.card:hover,
 button.card:hover {
   box-shadow: var(--shadow-card-hover);
+}
+
+/* Restrained "more interactive" pass (live user instruction: "整体UI再做的
+   更加交互一点，生产过程有游戏感" — animations/micro-interactions only, no
+   points/badges/levels — see CLAUDE.md "no gamified virtual office").
+   `.card`'s entrance above uses this; `.pop-in` is the shared "this just
+   completed" beat (a checkmark landing, a progress bar reaching 100%);
+   `progress-shimmer` is used only by GenerationRunner's active progress
+   bar. All under ~350ms, no bounce/spin — matches the existing restrained
+   `thinking-pulse` treatment, not a flashier new visual language. */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes progress-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+.pop-in {
+  animation: pop-in 0.32s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .pop-in,
+  .thinking-avatar {
+    animation: none !important;
+  }
 }
