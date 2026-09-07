@@ -31,6 +31,7 @@ import { CONTENT_PLATFORM_LABEL, TOPIC_ACTIVITY_LABEL } from "@/lib/status";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { PlatformChoiceRadios } from "@/components/platform-choice-radios";
 import { RunActionButton } from "@/components/ai/run-action-button";
 import { getEmployee } from "@/lib/boss-language";
 import { ResearchPackView } from "@/components/research-pack-view";
@@ -378,8 +379,9 @@ export default async function TopicDetailPage({
                     淘汰
                   </PendingSubmitButton>
                 </form>
-                <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex-1">
-                  <PendingSubmitButton className="w-full">通过，一键生成全部</PendingSubmitButton>
+                <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex flex-[2] flex-col gap-2">
+                  <PlatformChoiceRadios />
+                  <PendingSubmitButton className="w-full">通过，开始生成</PendingSubmitButton>
                 </form>
               </div>
             )}

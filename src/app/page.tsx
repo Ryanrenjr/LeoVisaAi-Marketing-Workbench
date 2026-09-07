@@ -4,6 +4,9 @@ import { getEmployeeNames } from "@/lib/employee-names";
 import { LaneCard, LaneGroup, StageRow } from "@/components/pipeline-flow";
 import { GenerationRunner } from "@/components/generation-runner";
 import Link from "next/link";
+import type { ContentPlatform } from "@/lib/types";
+
+const ALL_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];
 
 function DemoNotice() {
   return (
@@ -13,7 +16,15 @@ function DemoNotice() {
   );
 }
 
-async function BossHome({ demo, generatingTopicId }: { demo: boolean; generatingTopicId: string | null }) {
+async function BossHome({
+  demo,
+  generatingTopicId,
+  generatingPlatforms,
+}: {
+  demo: boolean;
+  generatingTopicId: string | null;
+  generatingPlatforms: ContentPlatform[];
+}) {
   const employeeNames = await getEmployeeNames();
 
   const greeting = timeBasedGreeting(new Date().getHours());
@@ -35,7 +46,9 @@ async function BossHome({ demo, generatingTopicId }: { demo: boolean; generating
         </Link>
       </section>
 
-      {generatingTopicId && <GenerationRunner topicId={generatingTopicId} employeeNames={employeeNames} />}
+      {generatingTopicId && (
+        <GenerationRunner topicId={generatingTopicId} employeeNames={employeeNames} platforms={generatingPlatforms} />
+      )}
 
       <section className="flex flex-col gap-1">
         <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 7 步</h2>
@@ -120,8 +133,11 @@ async function BossHome({ demo, generatingTopicId }: { demo: boolean; generating
 export default async function HomePage({
   searchParams,
 }: {
-  searchParams: Promise<{ generating?: string }>;
+  searchParams: Promise<{ generating?: string; platforms?: string }>;
 }) {
-  const [demo, { generating }] = await Promise.all([isDemoMode(), searchParams]);
-  return <BossHome demo={demo} generatingTopicId={generating ?? null} />;
+  const [demo, { generating, platforms }] = await Promise.all([isDemoMode(), searchParams]);
+  const generatingPlatforms = ALL_PLATFORMS.includes(platforms as ContentPlatform)
+    ? [platforms as ContentPlatform]
+    : ALL_PLATFORMS;
+  return <BossHome demo={demo} generatingTopicId={generating ?? null} generatingPlatforms={generatingPlatforms} />;
 }

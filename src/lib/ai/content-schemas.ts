@@ -235,7 +235,7 @@ C. Something that would make the content more useful but is NOT covered by the R
 
 Never state a new immigration rule, policy detail, deadline, or number that isn't traceable to the Research Pack above. Never write a caveat, a "需要确认" / "需要人工确认" marker, or any other meta-commentary about your own uncertainty inside the actual content fields (full_script, pages, detailed_outline, full_article, etc.) — those fields are the finished, publishable text itself, and a reader or presenter should never see your internal notes. Deciding whether something needs a second look is a human's job, not something the content itself should announce.
 
-When you rely on a specific source, reference it by its exact label from the manifest below (e.g. "S1") in source_references. Never invent a source, a URL, or reference a label that isn't in the manifest.
+When you rely on a specific source, reference it by its exact label from the manifest below (e.g. "S1") ONLY in the separate source_references array — never invent a source, a URL, or reference a label that isn't in the manifest. Citation labels like "(S1)", "S1", "[S1]", or "S1；S2" must NEVER appear inline inside the actual reader-facing content fields (full_script, caption, full_article, pages, closing_note, etc.) — a reader has no idea what "S1" means and it reads as a broken citation, not a source note. If you want to signal that a claim is grounded, do it in plain language within the sentence itself (e.g. "根据 GOV.UK 的说明……") or simply state it as fact — never with a bracketed source code.
 
 Avoid fear-based or hype language such as "英国彻底变天" / "重磅" / "赶紧申请" / "窗口马上关闭" / "错过就没机会" or similar, unless the approved Research Pack genuinely supports urgent timing (e.g. an actual stated deadline).
 

@@ -48,36 +48,43 @@ async function latestGeneratedAssets(topicId: string): Promise<ContentAsset[]> {
     .filter((asset): asset is ContentAsset => asset !== null);
 }
 
-/** Step 1 — C/D/E generate all three platforms' text at once (existing "生成内容" batch, unchanged). */
-export async function runContentGenerationStep(topicId: string): Promise<void> {
-  await generateContent(topicId);
+/** Step 1 — C/D/E generate the selected platforms' text at once (existing "生成内容" batch, now scoped to whichever platforms the operator picked — see PlatformChoiceRadios). */
+export async function runContentGenerationStep(topicId: string, platforms: ContentPlatform[]): Promise<void> {
+  await generateContent(topicId, platforms);
 }
 
-/** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. */
+/** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. Only ever called when 小红书 is among the selected platforms (see generation-runner.tsx's buildSteps). */
 export async function runImagePlanningStep(topicId: string): Promise<void> {
   await generatePagesPlan(topicId);
 }
 
 /**
- * Step 3 — F generates every image this topic needs: the shared 视频号/
- * 小红书 cover, the 公众号 cover, and the 小红书图文 carousel (one image per
- * page of step 2's plan). Runs in parallel — three independent images,
- * same "isolate the failure" principle as every other step: one image
- * failing (e.g. step 2's plan came back empty) never blocks the other
- * two. Includes Leo's portrait in the shared cover automatically when
- * one has been uploaded (live bug report: this automated chain used to
- * hardcode `includePortrait: false`, silently skipping it every run even
- * when a portrait existed — manual runs from 图片设理员's own page still
- * default to no portrait, since there it's a deliberate per-click choice
- * with its own checkbox).
+ * Step 3 — F generates whichever images the selected platforms actually
+ * need: the shared 视频号/小红书 cover (only if either of those two is
+ * selected), the 公众号 cover (only if selected), and the 小红书图文
+ * carousel (only if 小红书 selected — needs step 2's plan). Runs in
+ * parallel — independent images, same "isolate the failure" principle as
+ * every other step: one image failing never blocks the others. Includes
+ * Leo's portrait in the shared cover automatically when one has been
+ * uploaded (live bug report: this automated chain used to hardcode
+ * `includePortrait: false`, silently skipping it every run even when a
+ * portrait existed — manual runs from 图片设理员's own page still default
+ * to no portrait, since there it's a deliberate per-click choice with its
+ * own checkbox).
  */
-export async function runImageGenerationStep(topicId: string): Promise<void> {
+export async function runImageGenerationStep(topicId: string, platforms: ContentPlatform[]): Promise<void> {
   const portrait = await getLatestLeoPortrait();
-  await Promise.allSettled([
-    generateCrossPlatformCover(topicId, portrait !== null),
-    generateWechatCover(topicId),
-    generateXiaohongshuCarousel(topicId),
-  ]);
+  const tasks: Promise<unknown>[] = [];
+  if (platforms.includes("VIDEO_CHANNEL") || platforms.includes("XIAOHONGSHU")) {
+    tasks.push(generateCrossPlatformCover(topicId, portrait !== null));
+  }
+  if (platforms.includes("WECHAT_OFFICIAL_ACCOUNT")) {
+    tasks.push(generateWechatCover(topicId));
+  }
+  if (platforms.includes("XIAOHONGSHU")) {
+    tasks.push(generateXiaohongshuCarousel(topicId));
+  }
+  await Promise.allSettled(tasks);
 }
 
 /** Step 4 — G runs compliance on every platform's latest draft. Returns whether anything came back non-LOW, so the client knows whether a revision step follows. */
@@ -126,18 +133,29 @@ export async function runRevisionStep(topicId: string): Promise<void> {
   revalidatePath("/team/integrator");
 }
 
+const SELECTABLE_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];
+
 /**
- * Bound to both "通过" buttons (研究审阅页 + 选题详情页里嵌的那个). Approves
- * research (`approveResearchOnly` — no redirect of its own, see its doc
- * comment) and lands on the home page with `?generating=<topicId>`, where
- * `GenerationRunner` picks up and runs the three steps above client-side,
+ * Bound to both "通过" buttons (研究审阅页 + 选题详情页里嵌的那个), each
+ * paired with `<PlatformChoiceRadios />` in the same `<form>` — Next.js
+ * passes the submitted FormData as the final argument to a bound Server
+ * Action automatically. Approves research (`approveResearchOnly` — no
+ * redirect of its own, see its doc comment) and lands on the home page
+ * with `?generating=<topicId>` (plus `&platforms=<ContentPlatform>` when
+ * the operator picked a single platform instead of "一键全出" — omitted
+ * for "ALL" so the URL/behavior for the default case is unchanged), where
+ * `GenerationRunner` picks up and runs the steps above client-side,
  * showing progress. Since a topic is now always alone in the system
  * (nothing survives next to it — see CLAUDE.md rule 4), there's nothing
  * ambiguous about "which topic is generating."
  */
-export async function approveAndGoHome(topicId: string, researchPackId: string) {
+export async function approveAndGoHome(topicId: string, researchPackId: string, formData: FormData) {
   const approved = await approveResearchOnly(topicId, researchPackId);
   if (!approved) return;
 
-  redirect(`/?generating=${topicId}`);
+  const choice = String(formData.get("platforms") ?? "ALL");
+  const platformSuffix =
+    choice !== "ALL" && SELECTABLE_PLATFORMS.includes(choice as ContentPlatform) ? `&platforms=${choice}` : "";
+
+  redirect(`/?generating=${topicId}${platformSuffix}`);
 }

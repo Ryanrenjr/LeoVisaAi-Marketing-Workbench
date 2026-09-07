@@ -6,6 +6,7 @@ import { canApproveResearch } from "@/lib/permissions";
 import { canApproveResearchFromStatus } from "@/lib/research-workflow";
 import { ResearchPackView } from "@/components/research-pack-view";
 import { PendingSubmitButton } from "@/components/pending-submit-button";
+import { PlatformChoiceRadios } from "@/components/platform-choice-radios";
 import { discardTopic } from "../../../actions";
 import { approveAndGoHome } from "../../../pipeline-actions";
 
@@ -61,8 +62,9 @@ export default async function ReviewResearchPage({ params }: { params: Promise<{
               淘汰
             </PendingSubmitButton>
           </form>
-          <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex-1">
-            <PendingSubmitButton className="w-full">通过，一键生成全部</PendingSubmitButton>
+          <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex flex-[2] flex-col gap-2">
+            <PlatformChoiceRadios />
+            <PendingSubmitButton className="w-full">通过，开始生成</PendingSubmitButton>
           </form>
         </div>
       ) : (

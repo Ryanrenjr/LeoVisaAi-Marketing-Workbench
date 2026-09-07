@@ -45,6 +45,8 @@ const PLATFORM_TASK_TYPE: Record<ContentPlatform, GenericContentTaskType> = {
   WECHAT_OFFICIAL_ACCOUNT: "WECHAT_ARTICLE_WRITING",
 };
 
+const ALL_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];
+
 /**
  * Generates one platform's content via the Model Router, saves it as a new
  * version, and logs both the AI usage and the activity — regardless of
@@ -187,8 +189,16 @@ async function loadGenerationContext(topicId: string) {
   return { user, topic, researchPack, sources };
 }
 
-/** "生成内容" — the initial "One Research → Three Outputs" batch. Each platform routes independently, so a per-platform override doesn't make sense here — see regeneratePlatformContent for single-platform override. */
-export async function generateContent(topicId: string) {
+/**
+ * "生成内容" — the initial "One Research → Three Outputs" batch, or a
+ * subset of it when the operator picked specific platforms at the "通过"
+ * step (live user instruction: "一键出选题的时候，可以有一个选择... 出小
+ * 红书图文/出视频号口播/出公众号文字/一键全出" — see PlatformChoiceRadios
+ * and approveAndGoHome in pipeline-actions.ts). Each platform routes
+ * independently, so a per-platform override doesn't make sense here — see
+ * regeneratePlatformContent for single-platform override.
+ */
+export async function generateContent(topicId: string, platforms: ContentPlatform[] = ALL_PLATFORMS) {
   const { user, topic, researchPack, sources } = await loadGenerationContext(topicId);
   const supabase = await createClient();
 
@@ -196,14 +206,12 @@ export async function generateContent(topicId: string) {
     topic_id: topicId,
     activity_type: "content_generation_started",
     actor_id: user.id,
-    detail: { platforms: ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"] },
+    detail: { platforms },
   });
 
-  await Promise.allSettled([
-    generateAndPersistPlatform(supabase, topic, researchPack, sources, "VIDEO_CHANNEL", user),
-    generateAndPersistPlatform(supabase, topic, researchPack, sources, "XIAOHONGSHU", user),
-    generateAndPersistPlatform(supabase, topic, researchPack, sources, "WECHAT_OFFICIAL_ACCOUNT", user),
-  ]);
+  await Promise.allSettled(
+    platforms.map((platform) => generateAndPersistPlatform(supabase, topic, researchPack, sources, platform, user)),
+  );
 
   await maybeAdvanceToContentDraft(supabase, topicId, user);
 

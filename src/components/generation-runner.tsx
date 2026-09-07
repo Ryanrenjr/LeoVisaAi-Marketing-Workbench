@@ -11,8 +11,10 @@ import {
   runRevisionStep,
 } from "@/app/topics/pipeline-actions";
 import { resolveEmployeeDisplayName } from "@/lib/boss-language";
+import { CONTENT_PLATFORM_LABEL } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import type { EmployeeId } from "@/lib/boss-language";
+import type { ContentPlatform } from "@/lib/types";
 
 type StepKey = "content" | "compliance" | "revision" | "planning" | "images";
 type StepStatus = "pending" | "active" | "done" | "skipped";
@@ -25,6 +27,21 @@ interface StepDef {
   ceiling: number;
 }
 
+const PLATFORM_WRITER: Record<ContentPlatform, EmployeeId> = {
+  VIDEO_CHANNEL: "video-editor",
+  XIAOHONGSHU: "xiaohongshu-editor",
+  WECHAT_OFFICIAL_ACCOUNT: "wechat-editor",
+};
+
+/**
+ * Relative weight per step, renormalized to 100 over whichever steps are
+ * actually included for this run (live user instruction: "可以有一个选择
+ * ...出小红书图文/出视频号口播/出公众号文字/一键全出" — when 小红书 isn't
+ * picked, the "planning" step (K's page plan) doesn't apply at all, so the
+ * step list itself varies, not just which platforms get generated).
+ */
+const STEP_WEIGHT: Record<StepKey, number> = { content: 20, compliance: 20, revision: 20, planning: 15, images: 25 };
+
 /**
  * Order matters here, and it's not arbitrary: text has to be reviewed and
  * (if flagged) revised — which inserts a NEW `content_assets` version,
@@ -36,44 +53,71 @@ interface StepDef {
  * attached to a version nothing shows anymore. Text has to be final
  * before anything gets drawn.
  */
-const STEPS: StepDef[] = [
-  { key: "content", label: "生成三平台文案", employees: ["video-editor", "xiaohongshu-editor", "wechat-editor"], ceiling: 20 },
-  { key: "compliance", label: "合规审核", employees: ["compliance"], ceiling: 40 },
-  { key: "revision", label: "按审核意见校对修改", employees: ["reviser"], ceiling: 60 },
-  { key: "planning", label: "小红书图文规划", employees: ["xiaohongshu-image-planner"], ceiling: 75 },
-  { key: "images", label: "生成配图（封面 + 图文）", employees: ["image-designer"], ceiling: 100 },
-];
+function buildSteps(platforms: ContentPlatform[]): StepDef[] {
+  const keys: StepKey[] = platforms.includes("XIAOHONGSHU")
+    ? ["content", "compliance", "revision", "planning", "images"]
+    : ["content", "compliance", "revision", "images"];
+
+  const totalWeight = keys.reduce((sum, key) => sum + STEP_WEIGHT[key], 0);
+  const contentLabel =
+    platforms.length === 3 ? "生成三平台文案" : `生成${platforms.map((p) => CONTENT_PLATFORM_LABEL[p]).join("/")}文案`;
+  const LABEL: Record<StepKey, string> = {
+    content: contentLabel,
+    compliance: "合规审核",
+    revision: "按审核意见校对修改",
+    planning: "小红书图文规划",
+    images: "生成配图（封面 + 图文）",
+  };
+  const EMPLOYEES: Record<StepKey, EmployeeId[]> = {
+    content: platforms.map((p) => PLATFORM_WRITER[p]),
+    compliance: ["compliance"],
+    revision: ["reviser"],
+    planning: ["xiaohongshu-image-planner"],
+    images: ["image-designer"],
+  };
+
+  let cumulative = 0;
+  return keys.map((key) => {
+    cumulative += STEP_WEIGHT[key];
+    return { key, label: LABEL[key], employees: EMPLOYEES[key], ceiling: Math.round((cumulative / totalWeight) * 100) };
+  });
+}
 
 /**
  * "选题确认之后，直接从内容到最后一步整合" + "工作的时候要加上百分比，最好
  * 再首页加上每个员工工作的样子" + "这个过程要把流程也写上，先哪个后哪个，
- * 然后进度。图文规划也要加进去，生图也要加上，封面所有的" (live user
+ * 然后进度。图文规划也要加进去，生图也要加上，封面所有的" + "可以有一个选择
+ * ...出小红书图文/出视频号口播/出公众号文字/一键全出" (live user
  * instructions) — mounted on the home page whenever `?generating=<topicId>`
  * is present (see `approveAndGoHome` in pipeline-actions.ts), this runs
- * all five generation steps client-side, one at a time, showing the full
- * step sequence (done/active/pending), which digital employee is
- * currently working, and a percentage that climbs toward each step's
- * ceiling the same "decelerating estimate" way `ThinkingRow` already does
- * (there's no real progress signal from a single AI call), then jumps to
- * that step's real completion value once the step's server action
- * actually resolves.
+ * every generation step for the selected platform(s) client-side, one at a
+ * time, showing the full step sequence (done/active/pending), which
+ * digital employee is currently working, and a percentage that climbs
+ * toward each step's ceiling the same "decelerating estimate" way
+ * `ThinkingRow` already does (there's no real progress signal from a
+ * single AI call), then jumps to that step's real completion value once
+ * the step's server action actually resolves.
  */
 export function GenerationRunner({
   topicId,
   employeeNames,
+  platforms,
 }: {
   topicId: string;
   employeeNames: Partial<Record<EmployeeId, string>>;
+  platforms: ContentPlatform[];
 }) {
   const router = useRouter();
+  const steps = buildSteps(platforms);
   const [activeIndex, setActiveIndex] = useState(0);
   const [skippedRevision, setSkippedRevision] = useState(false);
   const [percent, setPercent] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
-  const ceilingRef = useRef(STEPS[0].ceiling);
+  const ceilingRef = useRef(steps[0].ceiling);
   const startedRef = useRef(false);
   const pausedRef = useRef(false);
+  const anyFlaggedRef = useRef(false);
 
   /** Can only take effect between steps — a Server Action already in flight can't be interrupted mid-call, so "暂停" means "finish the step that's running, then wait" rather than freezing instantly. */
   function waitIfPaused(): Promise<void> {
@@ -110,42 +154,35 @@ export function GenerationRunner({
     if (startedRef.current) return;
     startedRef.current = true;
 
+    const executors: Record<StepKey, () => Promise<void>> = {
+      content: () => runContentGenerationStep(topicId, platforms),
+      compliance: async () => {
+        const { anyFlagged } = await runComplianceStep(topicId);
+        anyFlaggedRef.current = anyFlagged;
+      },
+      revision: async () => {
+        if (!anyFlaggedRef.current) {
+          setSkippedRevision(true);
+          return;
+        }
+        await runRevisionStep(topicId);
+      },
+      planning: () => runImagePlanningStep(topicId),
+      images: () => runImageGenerationStep(topicId, platforms),
+    };
+
     async function run() {
       try {
-        setActiveIndex(0);
-        ceilingRef.current = STEPS[0].ceiling;
-        await runContentGenerationStep(topicId);
-        setPercent(STEPS[0].ceiling);
-        await waitIfPaused();
-
-        setActiveIndex(1);
-        ceilingRef.current = STEPS[1].ceiling;
-        const { anyFlagged } = await runComplianceStep(topicId);
-        setPercent(STEPS[1].ceiling);
-        await waitIfPaused();
-
-        if (anyFlagged) {
-          setActiveIndex(2);
-          ceilingRef.current = STEPS[2].ceiling;
-          await runRevisionStep(topicId);
-          setPercent(STEPS[2].ceiling);
-        } else {
-          setSkippedRevision(true);
+        for (let i = 0; i < steps.length; i++) {
+          setActiveIndex(i);
+          ceilingRef.current = steps[i].ceiling;
+          await executors[steps[i].key]();
+          setPercent(steps[i].ceiling);
+          await waitIfPaused();
         }
-        await waitIfPaused();
-
-        setActiveIndex(3);
-        ceilingRef.current = STEPS[3].ceiling;
-        await runImagePlanningStep(topicId);
-        setPercent(STEPS[3].ceiling);
-        await waitIfPaused();
-
-        setActiveIndex(4);
-        ceilingRef.current = STEPS[4].ceiling;
-        await runImageGenerationStep(topicId);
 
         setPercent(100);
-        setActiveIndex(STEPS.length);
+        setActiveIndex(steps.length);
         // A beat before navigating away — otherwise the 100% state never
         // actually gets seen (setPercent/router.push land in the same
         // tick). Live user instruction: "生产过程有游戏感" — completing the
@@ -158,7 +195,7 @@ export function GenerationRunner({
     }
 
     run();
-  }, [topicId, router]);
+  }, [topicId, router, platforms, steps]);
 
   if (error) {
     return (
@@ -169,14 +206,15 @@ export function GenerationRunner({
     );
   }
 
-  const allDone = activeIndex >= STEPS.length;
-  const activeEmployees = allDone ? [] : STEPS[activeIndex].employees;
+  const allDone = activeIndex >= steps.length;
+  const activeEmployees = allDone ? [] : steps[activeIndex].employees;
+  const revisionIndex = steps.findIndex((s) => s.key === "revision");
 
   return (
     <div className="card flex flex-col gap-4 px-5 py-4">
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-sm font-medium">
-          {allDone ? "完成，正在跳转…" : paused ? "已暂停…" : STEPS[activeIndex].label + "…"}
+          {allDone ? "完成，正在跳转…" : paused ? "已暂停…" : steps[activeIndex].label + "…"}
         </p>
         <div className="flex items-center gap-3">
           <span className="text-lg font-semibold text-[var(--accent)]">{percent}%</span>
@@ -206,16 +244,16 @@ export function GenerationRunner({
       </div>
 
       <ol className="flex flex-col">
-        {STEPS.map((s, i) => {
+        {steps.map((s, i) => {
           const status: StepStatus =
-            i === 2 && skippedRevision
+            i === revisionIndex && skippedRevision
               ? "skipped"
               : i < activeIndex || allDone
                 ? "done"
                 : i === activeIndex
                   ? "active"
                   : "pending";
-          const isLast = i === STEPS.length - 1;
+          const isLast = i === steps.length - 1;
           const connectorFilled = status === "done" || status === "skipped";
           return (
             <li key={s.key} className="flex gap-3">
