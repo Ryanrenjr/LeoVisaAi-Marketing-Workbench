@@ -28,10 +28,24 @@ import type { ModelRef } from "@/lib/ai/providers/types";
  * writes title/caption — see docs/digital-employee-skills.md "K｜小红书图文规划员".
  */
 
-/** "生成图文规划" — writes the P1–Pn page plan (xiaohongshu_pages), independent of D's title/caption draft. */
+/**
+ * "生成图文规划" — writes the P1–Pn page plan (xiaohongshu_pages), independent
+ * of D's title/caption draft.
+ *
+ * `since` (a generation_runs.created_at timestamp — same convention as
+ * generateContent/generateCrossPlatformCover/etc.) makes a retry
+ * idempotent: if this run already produced an xiaohongshu_pages version
+ * (e.g. planning succeeded but markGenerationRunStep then failed, and the
+ * whole step got retried), skip calling the AI again rather than
+ * re-billing it. The existence check itself is fail-closed (live audit
+ * finding, round 5) — a DB error while checking is NOT the same as
+ * "nothing exists yet", and must stop here rather than fall through to
+ * another paid call.
+ */
 export async function generatePagesPlan(
   topicId: string,
   override?: ModelRef | null,
+  since?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -42,11 +56,26 @@ export async function generatePagesPlan(
     return { ok: false, error: "无法生成内容：研究尚未批准（需要状态为 RESEARCH_APPROVED 或之后）。" };
   }
 
+  const supabase = await createClient();
+
+  if (since) {
+    const { data: existing, error: existingError } = await supabase
+      .from("content_assets")
+      .select("id")
+      .eq("topic_id", topicId)
+      .eq("platform", "XIAOHONGSHU")
+      .eq("content_type", "xiaohongshu_pages")
+      .gte("created_at", since)
+      .limit(1)
+      .maybeSingle();
+    if (existingError) return { ok: false, error: `检查图文规划是否已生成失败，请重试：${existingError.message}` };
+    if (existing) return { ok: true };
+  }
+
   const researchPack = await getLatestResearchPack(topicId);
   if (!researchPack) return { ok: false, error: "未找到已批准的研究成果，无法生成内容。" };
   const sources = await getResearchSources(researchPack.id);
 
-  const supabase = await createClient();
   const result = await runContentTask("XIAOHONGSHU_PAGES_PLANNING", { topic, researchPack, sources }, override);
 
   if (isRouterResolutionFailure(result)) {

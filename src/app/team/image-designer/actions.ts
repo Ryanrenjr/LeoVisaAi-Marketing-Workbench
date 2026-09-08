@@ -50,7 +50,11 @@ export async function generateCrossPlatformCover(
   const source = xhsPost ?? videoScript;
   if (!source) return { ok: false, error: "请先生成小红书文字或视频口播稿，再生成封面。" };
 
-  if (since && (await hasExistingImage(source.id, "cover", since))) return { ok: true };
+  if (since) {
+    const check = await hasExistingImage(source.id, "cover", since);
+    if (check.error) return { ok: false, error: `检查封面是否已生成失败，请重试：${check.error}` };
+    if (check.exists) return { ok: true };
+  }
 
   const other = source === xhsPost ? videoScript : xhsPost;
   const platformLabel = source === xhsPost ? "小红书" : "视频号";
@@ -92,15 +96,36 @@ export async function generateWechatCover(
   const source = article ?? fullArticle ?? outline;
   if (!source) return { ok: false, error: "请先生成公众号文章，再生成封面。" };
 
-  if (since && (await hasExistingImage(source.id, "cover", since))) return { ok: true };
+  if (since) {
+    const check = await hasExistingImage(source.id, "cover", since);
+    if (check.error) return { ok: false, error: `检查封面是否已生成失败，请重试：${check.error}` };
+    if (check.exists) return { ok: true };
+  }
 
   return runCoverGeneration(topic, source, "公众号", user.id, override, false, undefined, "1536x1024", "landscape");
 }
 
-/** Idempotency check for retries (live audit finding: without this, retrying a failed step re-generates images that already succeeded, re-billing the image model). Checks the actual content_images table — the real source of truth — rather than a separate progress ledger that could drift from it. */
-async function hasExistingImage(contentAssetId: string, imageKind: "cover" | "carousel", since: string): Promise<boolean> {
+/**
+ * Idempotency check for retries (live audit finding: without this,
+ * retrying a failed step re-generates images that already succeeded,
+ * re-billing the image model). Checks the actual content_images table —
+ * the real source of truth — rather than a separate progress ledger that
+ * could drift from it.
+ *
+ * Fail-closed (live audit finding, round 5): a DB error here used to be
+ * indistinguishable from "no image exists yet" (`const { data } = ...`
+ * silently discarded any `error`), so a transient query failure looked
+ * exactly like "not generated" and triggered another paid image call. The
+ * caller must be able to tell "confirmed missing" apart from "couldn't
+ * check" and stop in the latter case.
+ */
+async function hasExistingImage(
+  contentAssetId: string,
+  imageKind: "cover" | "carousel",
+  since: string,
+): Promise<{ exists: boolean; error?: string }> {
   const supabase = await createClient();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("content_images")
     .select("id")
     .eq("content_asset_id", contentAssetId)
@@ -108,7 +133,8 @@ async function hasExistingImage(contentAssetId: string, imageKind: "cover" | "ca
     .gte("created_at", since)
     .limit(1)
     .maybeSingle();
-  return data !== null;
+  if (error) return { exists: false, error: error.message };
+  return { exists: data !== null };
 }
 
 async function runCoverGeneration(
@@ -232,14 +258,23 @@ export async function generateXiaohongshuCarousel(
   // generated successfully in this run and page 4 failed, a retry should
   // only redo page 4 onward — not re-bill for the pages that already
   // exist. `pageIndex` is 1-based (see saveGeneratedContentImage below).
+  //
+  // Fail-closed (live audit finding, round 5): a query error here used to
+  // be silently discarded (`const { data: existingImages } = ...`), so a
+  // transient DB failure looked exactly like "no pages generated yet" and
+  // the whole carousel got re-billed. Stop before calling the paid model
+  // at all if we can't actually confirm what's already done.
   let alreadyDonePages = new Set<number>();
   if (since) {
-    const { data: existingImages } = await supabase
+    const { data: existingImages, error: existingImagesError } = await supabase
       .from("content_images")
       .select("page_index")
       .eq("content_asset_id", plan.id)
       .eq("image_kind", "carousel")
       .gte("created_at", since);
+    if (existingImagesError) {
+      return { ok: false, error: `检查图文是否已生成失败，请重试：${existingImagesError.message}` };
+    }
     alreadyDonePages = new Set((existingImages ?? []).map((img) => img.page_index).filter((p): p is number => p !== null));
   }
 

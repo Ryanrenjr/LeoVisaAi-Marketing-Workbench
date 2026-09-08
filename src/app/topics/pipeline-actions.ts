@@ -57,9 +57,9 @@ export async function runContentGenerationStep(topicId: string, platforms: Conte
   await generateContent(topicId, platforms, since);
 }
 
-/** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. Only ever called when 小红书 is among the selected platforms (see generation-runner.tsx's buildSteps). */
-export async function runImagePlanningStep(topicId: string): Promise<void> {
-  const result = await generatePagesPlan(topicId);
+/** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. Only ever called when 小红书 is among the selected platforms (see generation-runner.tsx's buildSteps). `since` (this run's created_at) makes a retry skip planning if this run already produced a plan — see generatePagesPlan's doc comment. */
+export async function runImagePlanningStep(topicId: string, since?: string): Promise<void> {
+  const result = await generatePagesPlan(topicId, undefined, since);
   if (!result.ok) throw new Error(result.error ?? "图文规划生成失败。");
 }
 

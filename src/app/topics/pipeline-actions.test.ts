@@ -9,7 +9,8 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({}) }));
 vi.mock("@/lib/leo-portraits", () => ({ getLatestLeoPortrait: vi.fn().mockResolvedValue(null) }));
 vi.mock("./content-actions", () => ({ generateContent: vi.fn() }));
 vi.mock("./research-actions", () => ({ approveResearchOnly: vi.fn() }));
-vi.mock("../team/xiaohongshu-image-planner/actions", () => ({ generatePagesPlan: vi.fn() }));
+const generatePagesPlanMock = vi.fn();
+vi.mock("../team/xiaohongshu-image-planner/actions", () => ({ generatePagesPlan: (...args: unknown[]) => generatePagesPlanMock(...args) }));
 const generateCrossPlatformCoverMock = vi.fn();
 const generateWechatCoverMock = vi.fn();
 const generateXiaohongshuCarouselMock = vi.fn();
@@ -32,7 +33,7 @@ vi.mock("./compliance-actions", () => ({ runComplianceReview: (...args: unknown[
 const reviseContentAssetMock = vi.fn();
 vi.mock("./revision-actions", () => ({ reviseContentAsset: (...args: unknown[]) => reviseContentAssetMock(...args) }));
 
-import { runComplianceStep, runRevisionStep, runImageGenerationStep } from "./pipeline-actions";
+import { runComplianceStep, runRevisionStep, runImageGenerationStep, runImagePlanningStep } from "./pipeline-actions";
 
 function asset(platform: ContentAsset["platform"], contentType: ContentAsset["content_type"], version = 1): ContentAsset {
   return { id: `${platform}-${contentType}`, platform, content_type: contentType, version } as ContentAsset;
@@ -158,5 +159,23 @@ describe("runImageGenerationStep — fail closed on a partial carousel", () => {
     generateXiaohongshuCarouselMock.mockResolvedValue({ ok: true, generated: 3 });
 
     await expect(runImageGenerationStep("topic-1", ["XIAOHONGSHU"])).resolves.toBeUndefined();
+  });
+});
+
+describe("runImagePlanningStep — threads `since` through for retry idempotency", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("passes since through to generatePagesPlan as the third argument", async () => {
+    generatePagesPlanMock.mockResolvedValue({ ok: true });
+
+    await runImagePlanningStep("topic-1", "2026-01-01T00:00:00Z");
+
+    expect(generatePagesPlanMock).toHaveBeenCalledWith("topic-1", undefined, "2026-01-01T00:00:00Z");
+  });
+
+  it("throws when generatePagesPlan reports failure (e.g. its own fail-closed idempotency check errored)", async () => {
+    generatePagesPlanMock.mockResolvedValue({ ok: false, error: "检查图文规划是否已生成失败，请重试：connection reset" });
+
+    await expect(runImagePlanningStep("topic-1", "2026-01-01T00:00:00Z")).rejects.toThrow(/检查图文规划是否已生成失败/);
   });
 });

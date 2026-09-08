@@ -249,7 +249,7 @@ export function GenerationRunner({
         const { skipped } = await runRevisionStep(topicId);
         if (skipped) setSkippedRevision(true);
       },
-      planning: () => runImagePlanningStep(topicId),
+      planning: () => runImagePlanningStep(topicId, since),
       images: () => runImageGenerationStep(topicId, run.platforms, since),
     };
 
