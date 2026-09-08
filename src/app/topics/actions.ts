@@ -210,7 +210,9 @@ export async function discardTopic(topicId: string) {
     .eq("topic_id", topicId);
   if (imagesError) throw new Error(`读取选题图片失败，请重试：${imagesError.message}`);
 
-  const paths = (images ?? []).map((img) => img.image_path).filter((p): p is string => Boolean(p));
+  // A shared cover (视频号/小红书) is one Storage object referenced by two
+  // content_images rows — dedupe so remove() isn't handed the same path twice.
+  const paths = [...new Set((images ?? []).map((img) => img.image_path).filter((p): p is string => Boolean(p)))];
   if (paths.length > 0) {
     const { error: removeError } = await supabase.storage.from("content-images").remove(paths);
     if (removeError) {

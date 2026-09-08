@@ -128,11 +128,12 @@ export async function runResearch(topicId: string, override?: ModelRef | null) {
   if (!result.data) return;
   const resultPack = result.data;
 
-  await supabase
-    .from("research_runs")
-    .update({ status: "completed", completed_at: new Date().toISOString() })
-    .eq("id", run.id);
-
+  // Fail-closed evidence chain: a topic must never reach RESEARCH_READY
+  // unless the pack AND its sources are both confirmed persisted. No
+  // multi-statement DB transaction here (Supabase JS doesn't support one
+  // without a new RPC function) — instead, each write is checked in order,
+  // and a pack that ends up without its sources is compensating-deleted
+  // rather than left behind looking like complete evidence.
   const { data: pack, error: packInsertError } = await supabase
     .from("research_packs")
     .insert({
@@ -148,8 +149,27 @@ export async function runResearch(topicId: string, override?: ModelRef | null) {
     .select("id")
     .single();
 
-  if (!packInsertError && pack && resultPack.sources.length > 0) {
-    await supabase.from("research_sources").insert(
+  if (packInsertError || !pack) {
+    await supabase
+      .from("research_runs")
+      .update({
+        status: "failed",
+        completed_at: new Date().toISOString(),
+        error: `保存研究结果失败：${packInsertError?.message ?? ""}`,
+      })
+      .eq("id", run.id);
+    await supabase.from("topic_activity_log").insert({
+      topic_id: topicId,
+      activity_type: "research_run_failed",
+      actor_id: user.id,
+      detail: { error: packInsertError?.message, stage: "research_packs" },
+    });
+    revalidatePath(`/topics/${topicId}`);
+    return;
+  }
+
+  if (resultPack.sources.length > 0) {
+    const { error: sourcesInsertError } = await supabase.from("research_sources").insert(
       resultPack.sources.map((s) => ({
         research_pack_id: pack.id,
         title: s.title,
@@ -158,22 +178,54 @@ export async function runResearch(topicId: string, override?: ModelRef | null) {
         page_age: s.pageAge,
       })),
     );
+
+    if (sourcesInsertError) {
+      // Compensating rollback — a pack with no sources looks like complete
+      // evidence but isn't; don't leave it behind for a human to trust.
+      await supabase.from("research_packs").delete().eq("id", pack.id);
+      await supabase
+        .from("research_runs")
+        .update({
+          status: "failed",
+          completed_at: new Date().toISOString(),
+          error: `保存研究来源失败：${sourcesInsertError.message}`,
+        })
+        .eq("id", run.id);
+      await supabase.from("topic_activity_log").insert({
+        topic_id: topicId,
+        activity_type: "research_run_failed",
+        actor_id: user.id,
+        detail: { error: sourcesInsertError.message, stage: "research_sources" },
+      });
+      revalidatePath(`/topics/${topicId}`);
+      return;
+    }
   }
 
+  await supabase
+    .from("research_runs")
+    .update({ status: "completed", completed_at: new Date().toISOString() })
+    .eq("id", run.id);
+
   const toStatus: TopicStatus = "RESEARCH_READY";
+  let statusAdvanceFailed: string | undefined;
   if (fromStatus !== toStatus) {
-    await supabase
+    const { error: statusUpdateError } = await supabase
       .from("topics")
       .update({ status: toStatus })
       .eq("id", topicId)
       .eq("status", fromStatus);
 
-    await supabase.from("topic_status_events").insert({
-      topic_id: topicId,
-      from_status: fromStatus,
-      to_status: toStatus,
-      approved_by: user.id,
-    });
+    if (statusUpdateError) {
+      statusAdvanceFailed = statusUpdateError.message;
+    } else {
+      await supabase.from("topic_status_events").insert({
+        topic_id: topicId,
+        from_status: fromStatus,
+        to_status: toStatus,
+        approved_by: user.id,
+      });
+    }
   }
 
   await supabase.from("topic_activity_log").insert({
@@ -186,6 +238,7 @@ export async function runResearch(topicId: string, override?: ModelRef | null) {
       scoreTotal: resultPack.scoreTotal,
       latencyMs: Date.now() - started,
       ...(usageLogFailed ? { usageLogFailed: true } : {}),
+      ...(statusAdvanceFailed ? { statusAdvanceFailed } : {}),
     },
   });
 

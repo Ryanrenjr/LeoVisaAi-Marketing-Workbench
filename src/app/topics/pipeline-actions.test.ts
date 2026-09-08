@@ -10,10 +10,13 @@ vi.mock("@/lib/leo-portraits", () => ({ getLatestLeoPortrait: vi.fn().mockResolv
 vi.mock("./content-actions", () => ({ generateContent: vi.fn() }));
 vi.mock("./research-actions", () => ({ approveResearchOnly: vi.fn() }));
 vi.mock("../team/xiaohongshu-image-planner/actions", () => ({ generatePagesPlan: vi.fn() }));
+const generateCrossPlatformCoverMock = vi.fn();
+const generateWechatCoverMock = vi.fn();
+const generateXiaohongshuCarouselMock = vi.fn();
 vi.mock("../team/image-designer/actions", () => ({
-  generateCrossPlatformCover: vi.fn(),
-  generateWechatCover: vi.fn(),
-  generateXiaohongshuCarousel: vi.fn(),
+  generateCrossPlatformCover: (...args: unknown[]) => generateCrossPlatformCoverMock(...args),
+  generateWechatCover: (...args: unknown[]) => generateWechatCoverMock(...args),
+  generateXiaohongshuCarousel: (...args: unknown[]) => generateXiaohongshuCarouselMock(...args),
 }));
 
 const getContentAssetsMock = vi.fn();
@@ -29,7 +32,7 @@ vi.mock("./compliance-actions", () => ({ runComplianceReview: (...args: unknown[
 const reviseContentAssetMock = vi.fn();
 vi.mock("./revision-actions", () => ({ reviseContentAsset: (...args: unknown[]) => reviseContentAssetMock(...args) }));
 
-import { runComplianceStep, runRevisionStep } from "./pipeline-actions";
+import { runComplianceStep, runRevisionStep, runImageGenerationStep } from "./pipeline-actions";
 
 function asset(platform: ContentAsset["platform"], contentType: ContentAsset["content_type"], version = 1): ContentAsset {
   return { id: `${platform}-${contentType}`, platform, content_type: contentType, version } as ContentAsset;
@@ -131,5 +134,29 @@ describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed
     reviseContentAssetMock.mockResolvedValue({ ok: false, error: "model refused" });
 
     await expect(runRevisionStep("topic-1")).rejects.toThrow(/校对修改失败/);
+  });
+});
+
+describe("runImageGenerationStep — fail closed on a partial carousel", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    generateCrossPlatformCoverMock.mockResolvedValue({ ok: true });
+    generateWechatCoverMock.mockResolvedValue({ ok: true });
+  });
+
+  it("throws when generateXiaohongshuCarousel reports ok:false, even though some pages generated", async () => {
+    // Live audit finding (P0, round 3): the carousel generator used to
+    // report ok:(generated > 0), which meant a partial failure (e.g. 1 of 3
+    // pages) looked like success here — this step's !result.value.ok check
+    // only works if the generator itself is honest about partial failure.
+    generateXiaohongshuCarouselMock.mockResolvedValue({ ok: false, error: "page 2 failed", generated: 1 });
+
+    await expect(runImageGenerationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/配图生成失败/);
+  });
+
+  it("succeeds when every task genuinely reports ok:true", async () => {
+    generateXiaohongshuCarouselMock.mockResolvedValue({ ok: true, generated: 3 });
+
+    await expect(runImageGenerationStep("topic-1", ["XIAOHONGSHU"])).resolves.toBeUndefined();
   });
 });

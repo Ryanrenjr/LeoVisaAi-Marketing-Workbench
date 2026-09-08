@@ -81,4 +81,15 @@ describe("discardTopic fail-safety", () => {
     expect(storageRemoveMock).toHaveBeenCalledWith(["a.png"]);
     expect(deleteEqMock).toHaveBeenCalledWith("id", "topic-1");
   });
+
+  it("dedupes Storage paths before removing — a shared 视频号/小红书 cover is one Storage object referenced by two content_images rows", async () => {
+    selectEqMock.mockResolvedValue({
+      data: [{ image_path: "shared-cover.png" }, { image_path: "shared-cover.png" }, { image_path: "b.png" }],
+      error: null,
+    });
+    storageRemoveMock.mockResolvedValue({ error: null });
+
+    await expect(discardTopic("topic-1")).resolves.toBeUndefined();
+    expect(storageRemoveMock).toHaveBeenCalledWith(["shared-cover.png", "b.png"]);
+  });
 });

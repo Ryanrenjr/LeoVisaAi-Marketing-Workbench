@@ -259,7 +259,11 @@ export async function generateXiaohongshuCarousel(
     const result = await runImageGenerationTask(prompt, override);
 
     if (isRouterResolutionFailure(result)) {
-      return { ok: generated > 0, error: result.error, generated };
+      // `generated` still reflects how many pages made it — used by the
+      // idempotency check above on a retry — but a partial carousel must
+      // never report ok:true, or the pipeline treats it as a finished step
+      // and moves straight on to compliance/integration with pages missing.
+      return { ok: false, error: result.error, generated };
     }
 
     const model = getModel(result.provider, result.modelId);
@@ -280,7 +284,7 @@ export async function generateXiaohongshuCarousel(
     });
 
     if (!result.ok || !result.data) {
-      return { ok: generated > 0, error: result.error ?? "生成失败。", generated };
+      return { ok: false, error: result.error ?? "生成失败。", generated };
     }
 
     const [imageBase64] = result.data.images;
@@ -295,7 +299,7 @@ export async function generateXiaohongshuCarousel(
       imageKind: "carousel",
       pageIndex: i + 1,
     });
-    if (!saved.ok) return { ok: generated > 0, error: saved.error, generated };
+    if (!saved.ok) return { ok: false, error: saved.error, generated };
     generated++;
   }
 

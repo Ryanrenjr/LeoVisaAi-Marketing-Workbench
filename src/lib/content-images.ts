@@ -108,6 +108,15 @@ export async function saveGeneratedContentImage(
       page_index: params.pageIndex,
     })),
   );
-  if (insertError) return { ok: false, error: "图片已生成，但记录保存失败，请重试。" };
+  if (insertError) {
+    // The file already landed in Storage but nothing in content_images
+    // points at it — left alone, it's an orphan discardTopic() can never
+    // find and delete, which breaks the "nothing survives a topic's
+    // session" guarantee. Best-effort compensating delete before
+    // surfacing the error.
+    const { error: cleanupError } = await supabase.storage.from("content-images").remove([path]);
+    const suffix = cleanupError ? "，清理临时文件也失败，请联系管理员处理" : "";
+    return { ok: false, error: `图片已生成，但记录保存失败，请重试${suffix}。` };
+  }
   return { ok: true };
 }
