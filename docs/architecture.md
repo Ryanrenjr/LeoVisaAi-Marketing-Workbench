@@ -9,17 +9,51 @@
   minimal.
 - **Backend**: Supabase (Postgres + Auth). No separate backend service —
   authorization is enforced at the database layer via Row Level Security
-  (RLS), and privileged operations (role changes) run through Next.js
-  Server Actions using the Supabase service-role key, which never leaves
-  the server.
+  (RLS), and privileged operations run through Next.js Server Actions
+  using the Supabase service-role key, which never leaves the server.
+  Several safety-critical sequences (atomic subtask claims, the login
+  rate limiter, research approval) are implemented as Postgres functions
+  called via `.rpc()` rather than sequential JS calls, specifically so the
+  whole sequence is one transaction — see "Request flow" below.
+- **Access model**: no per-person accounts. A single shared
+  `SITE_PASSWORD` (rate-limited per-IP, atomically, via the
+  `record_login_attempt()` Postgres function) transparently signs anyone
+  who knows it in as one fixed, pre-existing `OPERATOR_EMAIL` Supabase
+  Auth account (`src/app/login/actions.ts`). The `ADMIN`/`EXPERT` role
+  field still exists in the data model purely because that fixed account
+  happens to be `ADMIN` — see CLAUDE.md "Access model".
 - **AI**: multi-provider via the Model Router (`src/lib/ai/router.ts`) —
   Anthropic (`@anthropic-ai/sdk`), Google Gemini (`@google/genai`), Groq
-  (`groq-sdk`), and OpenRouter (raw HTTP). No business logic calls a
-  provider SDK directly; everything routes through task-type-based
-  selection. Structured output validated with Zod regardless of provider.
-  See "AI architecture" below, `docs/model-router.md`,
-  `docs/phase-3-plan.md`, and `docs/phase-4-plan.md`.
-- **Testing**: Vitest + React Testing Library.
+  (`groq-sdk`), OpenRouter (raw HTTP), and OpenAI (raw HTTP). No business
+  logic calls a provider SDK directly; everything routes through
+  task-type-based selection. Structured output validated with Zod
+  regardless of provider. Research additionally routes through the Search
+  Router (`src/lib/search/router.ts`) first — Tavily/Brave retrieve real
+  sources, then the resolved AI model (any provider, including one with
+  no native web-search capability of its own, like OpenAI) analyses them.
+  See "AI architecture" below, `docs/model-router.md`, and
+  `docs/search-router.md`.
+- **The one-click generation pipeline** (`GenerationRunner`, mounted on
+  the home page): content → compliance → revision (if flagged) → final
+  verification (if revised) → 小红书图文规划 (if selected) → images →
+  manual 打包下载, resumable across refreshes/crashes and safe against two
+  concurrent requests double-billing the same AI call. Backed by
+  `generation_runs` (one row per topic, tracks which steps completed) and
+  `generation_run_tasks` (one row per billable subtask, an atomic Postgres
+  `claim_generation_run_task()` function is the actual mutual-exclusion
+  mechanism) — see `src/app/topics/pipeline-actions.ts`,
+  `src/components/generation-runner.tsx`,
+  `supabase/migrations/0025_generation_runs.sql` and
+  `0028_generation_run_tasks.sql`.
+- **One-shot data lifecycle**: there is no retained pipeline/audit history
+  as a product feature. A topic is deleted (`discardTopic()`) the moment
+  its session ends, whether it was rejected at any step or reached a
+  final download — every child table cascades away with it. See CLAUDE.md
+  rule 4 and `docs/data-model.md`.
+- **Testing**: Vitest + React Testing Library. Every test mocks external
+  providers/Supabase — no test suite makes a real network call, which is
+  what lets `.github/workflows/ci.yml` run the full suite with no API
+  keys configured.
 
 ## Why this stack
 
@@ -34,30 +68,64 @@ standing up and operating a separate API service for no benefit.
 src/
   app/                    route segments (App Router)
     layout.tsx            root layout: minimal chrome, nav
-    page.tsx              dashboard: stage counts, links into the library
-    actions.ts            server actions for the legacy pipeline stages
-    login/                public route
-    topics/                the Topic Library (选题库)
+    page.tsx              home page — the numbered 9-step employee rail
+                           (src/components/pipeline-flow.tsx) plus
+                           GenerationRunner when ?generating=<topicId> is
+                           present
+    login/                public route — single shared-password gate
+    topics/                the Topic Library (选题库) and the pipeline
+                            Server Actions that drive a topic through it
       page.tsx             list of active (IDEA/RESEARCHING) topics
       new/page.tsx          create form
-      actions.ts            create/update/rescore/start-research/archive
-      research-actions.ts   run research, edit pack, approve, request changes
+      actions.ts            create/update/rescore/start-research/archive/
+                             discardTopic (the one-shot hard-delete)
+      research-actions.ts   run research, edit pack, approveResearchOnly
+                             (delegates to the approve_research() RPC —
+                             one atomic transaction, see
+                             supabase/migrations/0029_approve_research_rpc.sql)
       content-actions.ts     generate/regenerate/edit content drafts, full article
+      pipeline-actions.ts     the one-click generation pipeline's granular
+                               steps (content/compliance/revision/final
+                               verification/planning/images) plus
+                               generation_runs bookkeeping — what
+                               GenerationRunner actually calls
+      compliance-actions.ts / revision-actions.ts   Employee G/H, each
+                               subtask wrapped in an atomic claim (see
+                               src/lib/generation-run-tasks.ts) when
+                               called from the orchestrated pipeline
       [id]/page.tsx          Topic Detail: tabs — 研究包/视频号/小红书/公众号/合规/记录
       [id]/edit/page.tsx     edit topic fields
       [id]/research/edit/    edit a research pack's narrative fields (ADMIN)
       [id]/content/[assetId]/edit/  edit a content draft (ADMIN, creates a new version)
-    research-completed/   pipeline stage view (status RESEARCH_APPROVED)
-    ready-to-shoot/        pipeline stage view
-    published/             pipeline stage view, scoped to the current week
-    admin/                 ADMIN-only: manage staff roles, view approval log
+    research-completed/   pipeline-stage list view (status RESEARCH_APPROVED) —
+                            no entry point from the home page any more, see
+                            CLAUDE.md
+    ready-to-shoot/        pipeline-stage list view, same caveat
+    published/             pipeline-stage list view, same caveat, scoped to
+                            the current week
+    admin/                 ADMIN-only: AI model configuration only — no
+                            staff/role management UI (there's only ever
+                            one account, see "Access model" above)
       ai-models/page.tsx     AI 模型配置 — per-task-type model default selection,
                               provider connection status, dev-mode indicator
   components/              presentational + small interactive components
+    generation-runner.tsx    the one-click generation pipeline's client-side
+                              driver — two-phase mount (fetch-or-create the
+                              persisted generation_runs row, then run
+                              whichever steps aren't done yet), auto-retry
+                              with backoff, "重试当前步骤"/"结束并清空" on a
+                              real failure
+    pipeline-flow.tsx         the home page's numbered employee rail —
+                               StageRow/LaneGroup/LaneCard, real pipeline
+                               order, "conditional" steps chip-labeled
     ui/                     generic primitives (button, etc.)
     content/                 platform-specific content views, tabs, shared bits
                               (expert-review-notes, content-sources, field)
   lib/
+    generation-run-tasks.ts  the atomic per-subtask claim (see the
+                              generation_run_tasks paragraph above) —
+                              claimGenerationRunTask/
+                              completeGenerationRunTask/failGenerationRunTask
     supabase/
       client.ts             browser Supabase client (anon key)
       server.ts              server Supabase client (anon key, cookie-bound session)
@@ -147,18 +215,30 @@ docs/                       this documentation set
 
 1. `src/proxy.ts` runs on every request, refreshes the Supabase session
    from cookies, and redirects unauthenticated requests to `/login` (except
-   `/login` itself and static assets).
+   `/login` itself and static assets). On Vercel with Supabase
+   unconfigured it fails closed (503), and it checks the signed-in
+   session's email actually matches `OPERATOR_EMAIL` before allowing
+   access through.
 2. Server Components (page.tsx files) read data directly from Supabase
    using the server client, which carries the caller's session — so every
-   read is subject to that user's RLS policies, not a service role.
+   read is subject to that user's RLS policies (tightened to `ADMIN`-only
+   on nearly every table, see `docs/security-boundaries.md`), not a
+   service role.
 3. Mutations (create/edit a topic, advance status, run research, approve
-   research, change a user's role) go through Server Actions in colocated
-   `actions.ts` files. Actions re-check the caller's session/role before
-   doing anything privileged; RLS is the backstop, not the only check.
-4. Only `src/app/admin/actions.ts` touches the Supabase service-role
-   client (`src/lib/supabase/admin.ts`), and only after confirming the
-   caller is `ADMIN`. That file is the single place in the codebase
-   allowed to import the service-role key.
+   research, generate/review/revise content) go through Server Actions in
+   colocated `actions.ts` files. Actions re-check the caller's
+   session/role before doing anything privileged; RLS is the backstop,
+   not the only check. Several safety-critical sequences call a Postgres
+   function via `.rpc()` instead of separate JS calls, so the whole
+   sequence is one transaction: `approve_research()` (research approval),
+   `claim_generation_run_task()` (per-subtask billing exclusivity),
+   `record_login_attempt()` (rate limiting).
+4. `src/app/admin/actions.ts` (AI model config) and
+   `src/app/login/actions.ts` (the shared-password gate — needs the
+   service-role client to sign the caller in as `OPERATOR_EMAIL` and to
+   read/write `login_attempts`, which has RLS enabled with zero policies)
+   are the only files that touch the Supabase service-role client
+   (`src/lib/supabase/admin.ts`).
 
 ## AI architecture
 
@@ -210,8 +290,22 @@ every other provider).
 
 **Groq / OpenRouter** (`groq-provider.ts` / `openrouter-provider.ts`) —
 JSON-mode structured generation only; neither has a registered
-web-search-capable model, so the Router never selects them for `RESEARCH`
-(enforced by `isModelSuitableForTask`, not by convention).
+web-search-capable model, and neither participates in the Search Router
+path either, so the Router never selects them for `RESEARCH` (enforced by
+`isModelSuitableForTask`, not by convention).
+
+**OpenAI** (raw HTTP, Chat Completions JSON mode — no dedicated
+`openai-provider.ts`-style SDK wrapper needed) — no native web-search or
+vision capability of its own, so it can never satisfy the native-grounding
+research path or `PERFORMANCE_ANALYSIS`. It **can** be selected for
+`RESEARCH`, but only via the Search Router path (a Search Provider
+retrieves real sources first, OpenAI only analyses them via structured
+output) — see `docs/search-router.md` and
+`src/lib/ai/providers/registry.ts`'s OpenAI section for the exact split.
+No free tier; every OpenAI model is registered `PAID` and not
+`developmentRecommended`, so Development Mode's free-first routing never
+auto-selects one — an ADMIN must explicitly set it as the default in
+`/admin/ai-models`.
 
 **The result, every provider**: logged to `ai_usage_log` unconditionally
 (now including `provider`/`task_type`/`digital_employee`/

@@ -24,7 +24,7 @@ import Link from "next/link";
  * "你先上传数据" on the one step that needs your input first.
  */
 
-export type StageKind = "auto" | "gate" | "input";
+export type StageKind = "auto" | "gate" | "input" | "conditional";
 
 const CHIP_LABEL: Partial<Record<StageKind, string>> = {
   gate: "⏸ 需要你看一眼",
@@ -34,10 +34,18 @@ const CHIP_LABEL: Partial<Record<StageKind, string>> = {
 const CHIP_CLASS: Partial<Record<StageKind, string>> = {
   gate: "bg-[var(--muted)]/10 text-[var(--foreground)]",
   input: "bg-[var(--muted)]/10 text-[var(--foreground)]",
+  conditional: "bg-[var(--muted)]/10 text-[var(--muted)]",
 };
 
-function StageChip({ kind }: { kind: StageKind }) {
-  const label = CHIP_LABEL[kind];
+/**
+ * A step whose real chip text varies per occurrence (round 8 home page
+ * fix: "终审修改"/"最终复审"/"小红书图文规划" are each conditional for a
+ * different reason — flagged content, a revised draft, or platform choice
+ * — so a single fixed CHIP_LABEL string per StageKind doesn't fit; the
+ * caller passes its own text via `conditionalText` instead.
+ */
+function StageChip({ kind, conditionalText }: { kind: StageKind; conditionalText?: string }) {
+  const label = kind === "conditional" ? conditionalText : CHIP_LABEL[kind];
   if (!label) return null;
   return (
     <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${CHIP_CLASS[kind]}`}>{label}</span>
@@ -75,6 +83,7 @@ export function StageRow({
   actionLabel,
   href,
   kind,
+  conditionalText,
   last = false,
 }: {
   avatarId: string;
@@ -83,6 +92,8 @@ export function StageRow({
   actionLabel: string;
   href: string;
   kind: StageKind;
+  /** Required when `kind === "conditional"` — see StageChip's doc comment. */
+  conditionalText?: string;
   last?: boolean;
 }) {
   return (
@@ -98,7 +109,7 @@ export function StageRow({
       >
         <p className="min-w-0 flex-1 truncate text-lg font-semibold">{name}</p>
         <div className="flex shrink-0 flex-col items-end gap-2">
-          <StageChip kind={kind} />
+          <StageChip kind={kind} conditionalText={conditionalText} />
           <span className="text-sm font-semibold text-[var(--accent)]">{actionLabel} →</span>
         </div>
       </Link>

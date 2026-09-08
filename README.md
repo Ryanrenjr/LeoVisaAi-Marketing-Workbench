@@ -14,8 +14,11 @@ npm run dev
 
 The app runs immediately with demo data — no Supabase project required to
 click through it. To connect real data, copy `.env.example` to
-`.env.local` and follow "First-run setup" in
-[docs/phase-1-plan.md](docs/phase-1-plan.md).
+`.env.local` and fill in a Supabase project's values (each variable is
+documented inline in that file); apply the schema with
+`npm run db:migrate` (`npm run db:migrate:dry-run` first to preview). See
+[docs/architecture.md](docs/architecture.md) for how the pieces fit
+together.
 
 ```bash
 npm run lint       # eslint

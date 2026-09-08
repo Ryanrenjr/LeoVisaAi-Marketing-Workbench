@@ -1,3 +1,7 @@
+> **HISTORICAL** — describes an earlier phase of this project's build-out
+> and may not reflect current behavior. See CLAUDE.md and
+> [docs/architecture.md](architecture.md) for the current source of truth.
+
 # Phase 2 plan — Topic Library (选题库)
 
 This milestone builds the real topic model on top of the Phase 1

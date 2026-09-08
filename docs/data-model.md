@@ -1,30 +1,32 @@
 # Data model
 
-Schema lives in
-[`supabase/migrations/0001_init.sql`](../supabase/migrations/0001_init.sql),
-[`0002_topic_library.sql`](../supabase/migrations/0002_topic_library.sql),
-[`0003_research_agent.sql`](../supabase/migrations/0003_research_agent.sql),
-[`0004_research_workflow_hardening.sql`](../supabase/migrations/0004_research_workflow_hardening.sql), and
-[`0005_content_agent.sql`](../supabase/migrations/0005_content_agent.sql).
-Demo rows live in [`supabase/seed.sql`](../supabase/seed.sql).
+Schema lives across every file in
+[`supabase/migrations/`](../supabase/migrations/), one migration per
+milestone, applied in filename order (`0001_init.sql` through whatever the
+highest-numbered file is — this doc doesn't try to enumerate all of them,
+since the list only grows; read the directory for the authoritative,
+current set). Demo rows live in [`supabase/seed.sql`](../supabase/seed.sql).
 
 **Data lifecycle note (2026-09, "工具化"):** the schema below still uses
 `topics` as the anchor row for everything a session touches, and the
 audit/versioning tables described below (`topic_status_events`,
 `topic_activity_log`, `research_approvals`, `content_assets` version
-history) still get written to internally while a session is in progress.
-But none of it is a retained product feature any more — when a session
-ends, whether the topic was discarded partway through or the final
-content was downloaded, `discardTopic()`
+history, `generation_runs`/`generation_run_tasks` — the one-click
+pipeline's resumability/idempotency bookkeeping, see
+`supabase/migrations/0025_generation_runs.sql` and
+`0028_generation_run_tasks.sql`) still get written to internally while a
+session is in progress. But none of it is a retained product feature any
+more — when a session ends, whether the topic was discarded partway
+through or the final content was downloaded, `discardTopic()`
 ([`src/app/topics/actions.ts`](../src/app/topics/actions.ts)) deletes the
 `topics` row, and every table below with `topic_id … on delete cascade`
-disappears with it. See CLAUDE.md rule 4. The one exception is `publish_performance` (J｜数据分析员's uploaded
-post-performance screenshots): it decoupled from `topics` entirely for
-exactly this reason — `topic_id` is now nullable, and a `topic_title` +
-`content_pillar` snapshot (`supabase/migrations/0022_tool_mode_discard_and_performance_snapshot.sql`,
-`0023_publish_performance_pillar_snapshot.sql`) is taken at upload time
-instead, since the topic a published post came from is long gone by the
-time its performance is uploaded (days/weeks later).
+disappears with it. See CLAUDE.md rule 4. There is no exception any
+more — an earlier one existed for `publish_performance` (J｜数据分析员's
+uploaded post-performance screenshots, deliberately decoupled from
+`topics` since a published post's performance is uploaded long after its
+topic is gone), but that whole employee and table were retired by
+explicit live user instruction
+(`supabase/migrations/0024_remove_analyst_employee.sql`).
 
 ## Tables
 
@@ -42,8 +44,11 @@ One row per internal staff member, keyed to `auth.users`.
 
 A row is created automatically (via an `on_auth_user_created` trigger) the
 moment a Supabase Auth user is created, defaulted to `EXPERT`. Promoting the
-first `ADMIN` is a manual one-time SQL step — see
-[phase-1-plan.md](phase-1-plan.md).
+first `ADMIN` is a manual one-time SQL step (`update public.profiles set
+role = 'ADMIN' where email = '...'`) — already done for the one fixed
+`OPERATOR_EMAIL` account this whole app now runs as (see CLAUDE.md "Access
+model"); there's no UI for it since there's no ongoing need to promote
+anyone else.
 
 ### `topics` — the Topic Library (选题库)
 

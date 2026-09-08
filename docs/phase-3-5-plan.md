@@ -1,3 +1,7 @@
+> **HISTORICAL** — describes an earlier phase of this project's build-out
+> and may not reflect current behavior. See CLAUDE.md and
+> [docs/architecture.md](architecture.md) for the current source of truth.
+
 # Phase 3.5 — Research Agent acceptance & hardening
 
 This round doesn't add a new milestone's worth of features. It closes

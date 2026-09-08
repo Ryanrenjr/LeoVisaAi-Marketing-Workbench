@@ -1,3 +1,8 @@
+> **HISTORICAL** — a point-in-time record of an earlier manual smoke test;
+> may not reflect current provider/model configuration. See
+> [docs/model-router.md](model-router.md) and `/admin/ai-models` for
+> current status.
+
 # Provider smoke test — status and results
 
 This document records the "make the Model Router / Search Router

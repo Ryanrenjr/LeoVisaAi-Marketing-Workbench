@@ -1,0 +1,33 @@
+name: CI
+
+# Live user instruction (round 8): "从现在开始，不允许一个 commit 进入 main
+# 时没人知道 build 到底是不是绿的。" Every push and pull request runs the
+# same four checks a human would run locally before reporting work done —
+# see CLAUDE.md "Working agreement for this repo".
+#
+# No secrets/API keys are configured or needed: every vitest suite in this
+# repo mocks external providers/Supabase (no test hits a real network
+# call), and `npm run build` succeeds on its own with zero env vars set —
+# the app's demo-data fallback (src/lib/demo-data.ts) is exactly what
+# lets `next build` prerender every page without a live Supabase project.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build

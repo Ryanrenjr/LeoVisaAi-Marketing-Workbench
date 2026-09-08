@@ -7,22 +7,13 @@ vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("next/headers", () => ({ headers: vi.fn() }));
 vi.mock("@/lib/supabase/config", () => ({ isSupabaseConfigured: () => true }));
 
-const maybeSingleMock = vi.fn();
-const upsertMock = vi.fn().mockResolvedValue({ error: null });
-const deleteEqMock = vi.fn().mockResolvedValue({ error: null });
+const rpcMock = vi.fn();
 const generateLinkMock = vi.fn();
 const verifyOtpMock = vi.fn().mockResolvedValue({ error: null });
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
-    from: (table: string) => {
-      if (table !== "login_attempts") throw new Error(`unexpected table: ${table}`);
-      return {
-        select: () => ({ eq: () => ({ maybeSingle: maybeSingleMock }) }),
-        upsert: upsertMock,
-        delete: () => ({ eq: deleteEqMock }),
-      };
-    },
+    rpc: rpcMock,
     auth: { admin: { generateLink: generateLinkMock } },
   }),
 }));
@@ -36,11 +27,20 @@ vi.mock("@/lib/supabase/server", () => ({
 import { headers } from "next/headers";
 import { login } from "./actions";
 
-/** Only the rate-limiting behavior is under test here — this is the one genuinely new, security-relevant piece of logic added for the P0 fix, not a re-test of the existing generateLink/verifyOtp sign-in flow. */
-describe("login rate limiting", () => {
+/**
+ * Live audit finding (P0, round 8): rate limiting used to be
+ * "SELECT fail_count -> JS +1 -> UPSERT", a lost-update race for
+ * concurrent wrong-password requests, and none of its three DB calls
+ * checked their own error — a transient failure silently looked like "no
+ * failure record" and let the attempt through. Delegated to the atomic
+ * record_login_attempt() RPC (0031_login_rate_limit_rpc.sql); these tests
+ * cover the TS-level orchestration around it — real concurrent-request
+ * atomicity is verified live against the actual Postgres function
+ * separately, not provable by a mocked unit test.
+ */
+describe("login rate limiting — delegates atomically to record_login_attempt", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    maybeSingleMock.mockResolvedValue({ data: null });
     generateLinkMock.mockResolvedValue({
       data: { properties: { hashed_token: "token" } },
       error: null,
@@ -56,50 +56,56 @@ describe("login rate limiting", () => {
     return fd;
   }
 
-  it("rejects a wrong password and records a failed attempt for that IP", async () => {
-    maybeSingleMock.mockResolvedValueOnce({ data: null });
-    const state = await login({ error: null }, formDataWith("wrong"));
-    expect(state.error).toBe("密码不正确。");
-    expect(upsertMock).toHaveBeenCalledWith(
-      expect.objectContaining({ ip: "203.0.113.5", fail_count: 1, locked_until: null }),
-    );
-  });
+  it("rejects a wrong password, passing p_success:false to the RPC", async () => {
+    rpcMock.mockResolvedValue({ data: [{ locked: false, locked_until: null, fail_count: 1 }], error: null });
 
-  it("locks the IP out after the 5th consecutive failure", async () => {
-    maybeSingleMock.mockResolvedValueOnce({ data: { fail_count: 4, locked_until: null } });
     const state = await login({ error: null }, formDataWith("wrong"));
-    expect(state.error).toBe("密码不正确。");
-    const upsertArg = upsertMock.mock.calls[0][0];
-    expect(upsertArg.fail_count).toBe(5);
-    expect(upsertArg.locked_until).not.toBeNull();
-  });
 
-  it("refuses to even check the password while locked out", async () => {
-    const lockedUntil = new Date(Date.now() + 5 * 60_000).toISOString();
-    maybeSingleMock.mockResolvedValueOnce({ data: { fail_count: 5, locked_until: lockedUntil } });
-    const state = await login({ error: null }, formDataWith("correct-password"));
-    expect(state.error).toMatch(/尝试次数过多/);
-    // The correct password must not have been evaluated at all — generateLink (the actual sign-in step) never gets called.
+    expect(state.error).toBe("密码不正确。");
+    expect(rpcMock).toHaveBeenCalledWith("record_login_attempt", {
+      p_ip: "203.0.113.5",
+      p_success: false,
+      p_max_attempts: 5,
+      p_lockout_seconds: 900,
+    });
     expect(generateLinkMock).not.toHaveBeenCalled();
   });
 
-  it("allows login again once the lockout has expired", async () => {
-    const lockedUntil = new Date(Date.now() - 60_000).toISOString(); // already in the past
-    maybeSingleMock.mockResolvedValueOnce({ data: { fail_count: 5, locked_until: lockedUntil } });
-    await login({ error: null }, formDataWith("correct-password"));
-    expect(generateLinkMock).toHaveBeenCalled();
+  it("shows the lockout message (and never evaluates generateLink) when the RPC reports locked, even with the correct password", async () => {
+    const lockedUntil = new Date(Date.now() + 5 * 60_000).toISOString();
+    rpcMock.mockResolvedValue({ data: [{ locked: true, locked_until: lockedUntil, fail_count: 5 }], error: null });
+
+    const state = await login({ error: null }, formDataWith("correct-password"));
+
+    expect(state.error).toMatch(/尝试次数过多/);
+    expect(generateLinkMock).not.toHaveBeenCalled();
   });
 
-  it("clears the attempt history for that IP on a correct password", async () => {
-    maybeSingleMock.mockResolvedValueOnce({ data: { fail_count: 3, locked_until: null } });
+  it("fails closed — refuses login without ever calling generateLink — when the RPC call itself errors, even with the correct password", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: { message: "connection reset" } });
+
+    const state = await login({ error: null }, formDataWith("correct-password"));
+
+    expect(state.error).toMatch(/服务暂时不可用/);
+    expect(generateLinkMock).not.toHaveBeenCalled();
+  });
+
+  it("proceeds to generateLink/verifyOtp on a correct password when not locked", async () => {
+    rpcMock.mockResolvedValue({ data: [{ locked: false, locked_until: null, fail_count: 0 }], error: null });
+
     await login({ error: null }, formDataWith("correct-password"));
-    expect(deleteEqMock).toHaveBeenCalledWith("ip", "203.0.113.5");
+
+    expect(rpcMock).toHaveBeenCalledWith("record_login_attempt", expect.objectContaining({ p_success: true }));
+    expect(generateLinkMock).toHaveBeenCalled();
+    expect(verifyOtpMock).toHaveBeenCalled();
   });
 
   it("falls back to a shared bucket when no IP header is present", async () => {
     vi.mocked(headers).mockResolvedValue(new Headers() as unknown as Awaited<ReturnType<typeof headers>>);
-    maybeSingleMock.mockResolvedValueOnce({ data: null });
+    rpcMock.mockResolvedValue({ data: [{ locked: false, locked_until: null, fail_count: 1 }], error: null });
+
     await login({ error: null }, formDataWith("wrong"));
-    expect(upsertMock).toHaveBeenCalledWith(expect.objectContaining({ ip: "unknown" }));
+
+    expect(rpcMock).toHaveBeenCalledWith("record_login_attempt", expect.objectContaining({ p_ip: "unknown" }));
   });
 });

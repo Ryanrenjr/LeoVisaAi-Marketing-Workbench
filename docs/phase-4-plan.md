@@ -1,3 +1,7 @@
+> **HISTORICAL** — describes an earlier phase of this project's build-out
+> and may not reflect current behavior. See CLAUDE.md and
+> [docs/architecture.md](architecture.md) for the current source of truth.
+
 # Phase 4 — Content Agent
 
 "One Research → Three Outputs." Given an approved Research Pack, generate

@@ -23,13 +23,17 @@ same way: the underlying data is gone (see rule 4 below). See the
 reasoning behind this shift — it deliberately replaces the earlier
 "track a fixed content pipeline" model this file used to describe.
 
-**Migration note:** this is the *target* model. As of 2026-09 the UI is
-mid-migration from the old persistent-pipeline design (9 independent
-"queue" pages, one per digital employee, each listing every topic
-currently at that stage) to the single-task wizard described above — see
-the active plan for the phase breakdown. Where a page still shows a
-multi-topic queue, that is leftover from the old model, not a sanctioned
-pattern to extend.
+**This is the live model, not a migration target.** The single-click
+generation flow (`GenerationRunner`, mounted on the home page) is the
+default, real path: approve research → the pipeline runs
+content → compliance → revision (if flagged) → final verification (if
+revised) → 小红书图文规划 (if selected) → images → 打包下载, resumable and
+concurrency-safe end to end (see `src/app/topics/pipeline-actions.ts`,
+`supabase/migrations/0025_generation_runs.sql`,
+`0028_generation_run_tasks.sql`). The old per-employee "queue" list pages
+(选题库/可进入拍摄/本周已发布/内容资产库) still exist as routes but have no
+entry point from the home page any more — leftover from the earlier
+persistent-pipeline design, not a pattern to extend.
 
 ## What this is explicitly NOT
 
@@ -220,16 +224,16 @@ management — was removed from `/admin` along with per-person login).
 
 - [docs/architecture.md](docs/architecture.md) — system architecture and tech stack
 - [docs/data-model.md](docs/data-model.md) — database schema and rationale
-- [docs/phase-1-plan.md](docs/phase-1-plan.md) — what is and isn't in Phase 1
-- [docs/phase-2-plan.md](docs/phase-2-plan.md) — Topic Library (选题库) milestone: scope, assumptions, what's still mocked
-- [docs/phase-3-plan.md](docs/phase-3-plan.md) — Research Agent milestone: AI architecture, anti-hallucination design, approval workflow
-- [docs/phase-3-5-plan.md](docs/phase-3-5-plan.md) — Research Agent hardening: RESEARCH_READY, confidence handling, full Phase 1 status model, expanded test coverage
-- [docs/phase-4-plan.md](docs/phase-4-plan.md) — Content Agent: one research → three platform drafts, evidence boundary, source traceability, versioning
+- [docs/phase-1-plan.md](docs/phase-1-plan.md) *(historical)* — what is and isn't in Phase 1
+- [docs/phase-2-plan.md](docs/phase-2-plan.md) *(historical)* — Topic Library (选题库) milestone: scope, assumptions, what's still mocked
+- [docs/phase-3-plan.md](docs/phase-3-plan.md) *(historical)* — Research Agent milestone: AI architecture, anti-hallucination design, approval workflow
+- [docs/phase-3-5-plan.md](docs/phase-3-5-plan.md) *(historical)* — Research Agent hardening: RESEARCH_READY, confidence handling, full Phase 1 status model, expanded test coverage
+- [docs/phase-4-plan.md](docs/phase-4-plan.md) *(historical)* — Content Agent: one research → three platform drafts, evidence boundary, source traceability, versioning
 - [docs/digital-employee-ux.md](docs/digital-employee-ux.md) — the digital-employee presentation layer and its mapping to backend modules
 - [docs/model-router.md](docs/model-router.md) — the multi-provider AI Model Router: task routing, the Model Registry, free-first Development Mode, paid-model warnings, provider/model override
 - [docs/search-router.md](docs/search-router.md) — the Search Router: Search Provider ≠ AI Model, Tavily Search → analysis-model handoff, source-manifest grounding, free-first/no-fallback rule
 - [docs/ai-workflows.md](docs/ai-workflows.md) — Research + Content generation walked through end to end, from an ADMIN's perspective
-- [docs/provider-smoke-test.md](docs/provider-smoke-test.md) — real end-to-end verification results: migration status, provider connectivity, live smoke-test findings
+- [docs/provider-smoke-test.md](docs/provider-smoke-test.md) *(historical)* — a point-in-time record of an earlier manual smoke test
 - [docs/security-boundaries.md](docs/security-boundaries.md) — the data boundary and key-handling rules
 
 @AGENTS.md

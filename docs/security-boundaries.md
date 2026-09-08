@@ -27,50 +27,18 @@ If a future instruction asks for something that would require storing any
 of the above, treat that as a conflict with this document and flag it
 before implementing.
 
-### Post-publish performance data — the first narrow upload exception
+### Leo's reference photos — the one narrow upload exception
 
-**"No document upload feature anywhere in this app" had exactly one
-exception carved out, by explicit live user instruction** (Digital
-Employee Expansion milestone — see CLAUDE.md history): Employee E (数据分析员,
-`/team/analyst`) accepts a screenshot upload, and ONLY this:
+**"No document upload feature anywhere in this app" has exactly one
+exception, by explicit live user instruction:** `/team/image-designer`
+accepts a photo upload of Leo himself, and ONLY this.
 
-- **What it's for:** a screenshot of a platform's OWN public
-  post-performance dashboard for a post LeoVisaAi itself published
-  (views/likes/comments/saves/shares) — never anything else.
-- **What it must never become:** a general document upload. Never accept
-  or extract passport data, DOB, addresses, bank info, refusal letters,
-  case numbers, or any client document — the boundary at the top of this
-  file still applies in full. If a future request asks to upload
-  anything other than a post's own performance screenshot through this
-  or any other surface, treat that as a conflict with this document and
-  flag it before implementing.
-- **Storage:** a private Supabase Storage bucket (`publish-screenshots`,
-  `public: false`), readable/writable only by authenticated staff via
-  RLS-equivalent storage policies — never a public URL. Read access from
-  the app always goes through a short-lived signed URL
-  (`getScreenshotSignedUrl()` in `src/lib/analytics.ts`), never a direct
-  public link.
-- **Processing:** the screenshot is sent to a vision-capable model
-  (`runPerformanceAnalysisTask()` in `src/lib/ai/router.ts`) with a
-  system prompt that explicitly instructs it to read only the visible
-  aggregate counters and ignore any names/avatars/comment text in the
-  image (`src/lib/ai/performance-schemas.ts`). The extracted numbers are
-  stored in `publish_performance.extracted_metrics` — never the comment
-  text or any personal detail from the screenshot.
-- **Validation:** `uploadPerformanceScreenshot()`
-  (`src/app/team/analyst/actions.ts`) rejects anything that isn't
-  `image/png`, `image/jpeg`, or `image/webp`, and anything over 8MB.
-- **No AI-generated "insight" copy:** the "哪类选题表现更好" view
-  (`/team/analyst`) is a deterministic average over real extracted
-  numbers (`computePillarPerformance()` in
-  `src/lib/performance-analytics.ts`) — not another LLM call summarizing
-  the data, so it can never fabricate a trend that isn't in the real
-  numbers.
-
-### Leo's reference photos — the second narrow upload exception
-
-Also by explicit live user instruction: `/team/image-designer` accepts a
-photo upload of Leo himself, and ONLY this:
+(An earlier exception existed for J｜数据分析员's post-performance
+screenshot upload — that whole employee, its `publish_performance` table,
+and its `publish-screenshots` storage bucket were retired by explicit live
+user instruction, see `supabase/migrations/0024_remove_analyst_employee.sql`.
+It is gone, not just hidden — do not resurrect `/team/analyst` or a
+screenshot-upload surface from an old plan doc.)
 
 - **What it's for:** an image-generation model can't reliably render a
   specific real person's likeness from a text prompt alone, and shouldn't
@@ -124,7 +92,7 @@ photo upload of Leo himself, and ONLY this:
     role in application code; RLS bypass is not a substitute for that
     check, it's why the check is mandatory.
 - **AI provider keys** (`ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY`,
-  `GROQ_API_KEY`, `OPENROUTER_API_KEY`): same rules as the service role
+  `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`): same rules as the service role
   key. Never prefix with `NEXT_PUBLIC_`. Each is only read inside its
   matching `src/lib/ai/providers/*-provider.ts` file (or, for Anthropic,
   `research-agent.ts`/`content-agent.ts`), all `"server-only"`. No
@@ -205,9 +173,15 @@ provider added later:
   match one actually given is dropped before resolving to a real
   `research_sources.id` (`groundContentSources` /
   `applyGroundingAndSafety`). All code-level guarantees with test
-  coverage, not prompting requests. A provider/model that doesn't have
-  real web-search capability is structurally rejected for `RESEARCH` by
-  the Router (`isModelSuitableForTask`) — it can't reach this stage.
+  coverage, not prompting requests. Grounding is enforced the same way
+  regardless of *how* a model got its sources: either it has native
+  web-search capability itself (Anthropic `web_search`, Google
+  `googleSearch`), or the Search Router (see `docs/search-router.md`)
+  retrieves real sources first and hands them to a model with no
+  web-search capability of its own (e.g. OpenAI) for analysis only — a
+  model is never allowed to reach `RESEARCH` with neither its own
+  web-search nor a Search Router result behind it
+  (`isModelSuitableForTask`).
 - **Every model call is logged**, success or failure, to `ai_usage_log`
   (`workflow_type`, `model_alias`, `topic_id`, `platform` for content
   calls, token counts, latency, success/failure, timestamp, plus
@@ -268,12 +242,33 @@ triggers the call, and success/failure of that specific call is what
 
 ## Authentication & sessions
 
-- Supabase Auth (email/password) issues sessions stored in httpOnly
+Live user instruction (2026-09): "不要分用户登录了，彻底变成一个一次性工具"
+— there are no per-person accounts. Access is gated by a single shared
+password (`SITE_PASSWORD`, checked in `src/app/login/actions.ts`, rate
+limited per-IP via the atomic `record_login_attempt()` Postgres function —
+see `supabase/migrations/0031_login_rate_limit_rpc.sql`); anyone who knows
+it is transparently signed in as one fixed, pre-existing Supabase Auth
+account (`OPERATOR_EMAIL`) via `admin.auth.admin.generateLink()` +
+`supabase.auth.verifyOtp()`, never that account's real password.
+
+- Sessions are still real Supabase Auth sessions, stored in httpOnly
   cookies via `@supabase/ssr`; no tokens are stored in `localStorage`.
 - `src/proxy.ts` refreshes the session on every request and redirects
-  unauthenticated requests away from protected routes.
-- There is no client-facing account type — every authenticated user is
-  internal staff (`ADMIN` or `EXPERT`).
+  unauthenticated requests away from protected routes; it also fails
+  closed (503, not silent demo mode) if Supabase isn't configured but the
+  app is running on Vercel, and checks the signed-in session's email
+  actually matches `OPERATOR_EMAIL` before allowing access.
+- Supabase Auth signup is disabled at the config level
+  (`supabase/config.toml`'s `[auth]`/`[auth.email]` `enable_signup =
+  false`) — this repo setting does not by itself confirm the hosted
+  Supabase Dashboard's Auth settings match; that needs separate,
+  independent verification against the live project.
+- The `ADMIN`/`EXPERT` role field still exists in the data model
+  (`profiles.role`, `src/lib/permissions.ts`) purely because the fixed
+  operator account happens to be `ADMIN` — every permission/RLS check
+  still technically runs, it just always resolves the same way now. There
+  is no client-facing account type; the only authenticated identity
+  possible is that one internal-staff account.
 
 ## Reviewing changes against this document
 

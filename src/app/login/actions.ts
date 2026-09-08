@@ -63,31 +63,43 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
   // (only ever touched via the service-role client below, never exposed
   // to any client) rather than in-memory, since serverless function
   // instances don't share memory across invocations.
+  //
+  // Atomic (live audit finding): this used to be "SELECT fail_count -> JS
+  // +1 -> UPSERT" — a lost-update race where concurrent wrong-password
+  // requests for the same IP could read the same count and each write
+  // back count+1, losing attempts instead of accumulating them — and none
+  // of the three calls checked their own error, so a transient DB failure
+  // silently looked like "no failure record" and let the attempt through
+  // uncounted. record_login_attempt() (0031_login_rate_limit_rpc.sql) does
+  // the whole "check lock, then record this attempt" sequence as one
+  // atomic DB call; see its own comment for why. A failure calling it
+  // fails CLOSED — this function returns an error rather than falling
+  // through to generateLink/verifyOtp, even if the password was correct.
   const admin = createAdminClient();
   const ip = await getClientIp();
+  const password = String(formData.get("password") ?? "");
+  const passwordCorrect = safeEqual(password, sitePassword);
 
-  const { data: attempt } = await admin
-    .from("login_attempts")
-    .select("fail_count, locked_until")
-    .eq("ip", ip)
-    .maybeSingle();
-  if (attempt?.locked_until && new Date(attempt.locked_until) > new Date()) {
-    const minutesLeft = Math.ceil((new Date(attempt.locked_until).getTime() - Date.now()) / 60_000);
+  const { data: attemptRows, error: attemptError } = await admin.rpc("record_login_attempt", {
+    p_ip: ip,
+    p_success: passwordCorrect,
+    p_max_attempts: MAX_LOGIN_ATTEMPTS,
+    p_lockout_seconds: LOCKOUT_MS / 1000,
+  });
+  if (attemptError || !attemptRows || attemptRows.length === 0) {
+    return { error: "服务暂时不可用，请稍后重试。" };
+  }
+  const attempt = attemptRows[0] as { locked: boolean; locked_until: string | null; fail_count: number };
+
+  if (attempt.locked) {
+    const minutesLeft = attempt.locked_until
+      ? Math.ceil((new Date(attempt.locked_until).getTime() - Date.now()) / 60_000)
+      : Math.ceil(LOCKOUT_MS / 60_000);
     return { error: `尝试次数过多，请 ${minutesLeft} 分钟后再试。` };
   }
-
-  const password = String(formData.get("password") ?? "");
-  if (!safeEqual(password, sitePassword)) {
-    const failCount = (attempt?.fail_count ?? 0) + 1;
-    const lockedUntil = failCount >= MAX_LOGIN_ATTEMPTS ? new Date(Date.now() + LOCKOUT_MS).toISOString() : null;
-    await admin
-      .from("login_attempts")
-      .upsert({ ip, fail_count: failCount, locked_until: lockedUntil, updated_at: new Date().toISOString() });
+  if (!passwordCorrect) {
     return { error: "密码不正确。" };
   }
-
-  // Correct password — clear this IP's attempt history.
-  await admin.from("login_attempts").delete().eq("ip", ip);
 
   const { data, error: linkError } = await admin.auth.admin.generateLink({
     type: "magiclink",

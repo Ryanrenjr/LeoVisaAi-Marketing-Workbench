@@ -51,7 +51,7 @@ async function BossHome({
       )}
 
       <section className="flex flex-col gap-1">
-        <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 7 步</h2>
+        <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 9 步</h2>
 
         <StageRow
           avatarId="planner"
@@ -69,7 +69,7 @@ async function BossHome({
           href="/team/researcher"
           kind="auto"
         />
-        <LaneGroup step={3} label="研究确认后，四路一起写文案">
+        <LaneGroup step={3} label="研究确认后，按选定平台一起写文案">
           <LaneCard
             avatarId="video-editor"
             name={resolveEmployeeDisplayName("video-editor", employeeNames)}
@@ -81,11 +81,6 @@ async function BossHome({
             href="/team/xiaohongshu-editor"
           />
           <LaneCard
-            avatarId="xiaohongshu-image-planner"
-            name={resolveEmployeeDisplayName("xiaohongshu-image-planner", employeeNames)}
-            href="/team/xiaohongshu-image-planner"
-          />
-          <LaneCard
             avatarId="wechat-editor"
             name={resolveEmployeeDisplayName("wechat-editor", employeeNames)}
             href="/team/wechat-editor"
@@ -93,16 +88,8 @@ async function BossHome({
         </LaneGroup>
 
         <StageRow
-          avatarId="image-designer"
-          step={4}
-          name={resolveEmployeeDisplayName("image-designer", employeeNames)}
-          actionLabel="查看配图"
-          href="/team/image-designer"
-          kind="auto"
-        />
-        <StageRow
           avatarId="compliance"
-          step={5}
+          step={4}
           name={resolveEmployeeDisplayName("compliance", employeeNames)}
           actionLabel="查看合规"
           href="/team/compliance"
@@ -110,15 +97,42 @@ async function BossHome({
         />
         <StageRow
           avatarId="reviser"
-          step={6}
+          step={5}
           name={resolveEmployeeDisplayName("reviser", employeeNames)}
           actionLabel="查看修改"
           href="/team/reviser"
+          kind="conditional"
+          conditionalText="有问题才执行"
+        />
+        <StageRow
+          avatarId="compliance"
+          step={6}
+          name={`${resolveEmployeeDisplayName("compliance", employeeNames)}（终审复核）`}
+          actionLabel="查看复核"
+          href="/team/compliance"
+          kind="conditional"
+          conditionalText="改过才复核"
+        />
+        <StageRow
+          avatarId="xiaohongshu-image-planner"
+          step={7}
+          name={resolveEmployeeDisplayName("xiaohongshu-image-planner", employeeNames)}
+          actionLabel="查看规划"
+          href="/team/xiaohongshu-image-planner"
+          kind="conditional"
+          conditionalText="仅选小红书时执行"
+        />
+        <StageRow
+          avatarId="image-designer"
+          step={8}
+          name={resolveEmployeeDisplayName("image-designer", employeeNames)}
+          actionLabel="查看配图"
+          href="/team/image-designer"
           kind="auto"
         />
         <StageRow
           avatarId="integrator"
-          step={7}
+          step={9}
           name={resolveEmployeeDisplayName("integrator", employeeNames)}
           actionLabel="查看整合"
           href="/team/integrator"

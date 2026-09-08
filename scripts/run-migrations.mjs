@@ -43,6 +43,33 @@ async function main() {
     const { rows } = await client.query("select version from public._schema_migrations");
     const applied = new Set(rows.map((r) => r.version));
 
+    // Legacy-database guard (live audit finding): if _schema_migrations is
+    // empty, this script would otherwise assume it's talking to a brand
+    // new, empty database and run every migration from 0001 — including
+    // `create table` statements for tables that may already exist because
+    // this database predates migration tracking (was set up by hand via
+    // the Supabase SQL Editor before this script existed). Running those
+    // would fail loudly at best, or silently diverge from what's actually
+    // there at worst. Never guess which migrations "must have" already run
+    // — abort and require a human to baseline it first.
+    if (applied.size === 0) {
+      const { rows: coreTables } = await client.query(`
+        select
+          to_regclass('public.topics') is not null as topics,
+          to_regclass('public.research_packs') is not null as research_packs,
+          to_regclass('public.content_assets') is not null as content_assets
+      `);
+      const { topics, research_packs, content_assets } = coreTables[0];
+      if (topics && research_packs && content_assets) {
+        console.error("Legacy database detected; baseline migration history before continuing.");
+        console.error(
+          "public._schema_migrations is empty, but core tables (topics, research_packs, content_assets) already exist — this looks like a database that predates migration tracking, not a fresh one. Running migrations from 0001 would try to re-create tables that already exist. This script will not guess which migrations already applied: manually insert the filenames of the migrations you know are already reflected in this database into public._schema_migrations, then re-run.",
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
+
     const files = readdirSync(migrationsDir)
       .filter((f) => f.endsWith(".sql"))
       .sort();
