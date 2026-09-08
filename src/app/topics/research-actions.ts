@@ -331,6 +331,21 @@ export async function editResearchPack(
  * generation right after this and redirect somewhere else entirely; a
  * function that redirects can't safely be called as a sub-step of
  * another action, since `redirect()` aborts the caller immediately.
+ *
+ * Atomic (live audit finding, round 7): this used to insert
+ * research_approvals, then update topics.status WITHOUT checking the
+ * error or affected-row count, then unconditionally insert a
+ * topic_status_events row and return true — a concurrent status change
+ * (or a transient error on just that one statement) could leave a fake
+ * "approved" status event on record while the topic's real status never
+ * moved, and the caller would still redirect straight into content
+ * generation believing approval succeeded. Delegated to
+ * `approve_research()` (see supabase/migrations/0029_approve_research_rpc.sql),
+ * which does the whole sequence — lock the topic row, assert its status,
+ * verify the pack belongs to it, insert the approval, advance the status
+ * (confirming exactly one row changed), record the status event — as one
+ * Postgres transaction. Any failure rolls back everything; this function
+ * only returns true once that transaction has actually committed.
  */
 export async function approveResearchOnly(topicId: string, researchPackId: string): Promise<boolean> {
   const user = await requireUser();
@@ -341,26 +356,12 @@ export async function approveResearchOnly(topicId: string, researchPackId: strin
 
   const supabase = await createClient();
 
-  const { error: approvalError } = await supabase.from("research_approvals").insert({
-    topic_id: topicId,
-    research_pack_id: researchPackId,
-    decision: "approved",
-    decided_by: user.id,
+  const { error } = await supabase.rpc("approve_research", {
+    p_topic_id: topicId,
+    p_research_pack_id: researchPackId,
+    p_decided_by: user.id,
   });
-  if (approvalError) return false;
-
-  await supabase
-    .from("topics")
-    .update({ status: "RESEARCH_APPROVED" })
-    .eq("id", topicId)
-    .eq("status", "RESEARCH_READY");
-
-  await supabase.from("topic_status_events").insert({
-    topic_id: topicId,
-    from_status: "RESEARCH_READY",
-    to_status: "RESEARCH_APPROVED",
-    approved_by: user.id,
-  });
+  if (error) return false;
 
   await supabase.from("topic_activity_log").insert({
     topic_id: topicId,

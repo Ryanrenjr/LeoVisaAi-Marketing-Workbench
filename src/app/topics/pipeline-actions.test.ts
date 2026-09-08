@@ -5,7 +5,22 @@ vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requireUser: vi.fn().mockResolvedValue({ id: "operator-1", role: "ADMIN" }) }));
 vi.mock("@/lib/permissions", () => ({ canManageContentAssets: () => true }));
-vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({}) }));
+/** Controls what `runFinalVerificationStep`'s fail-closed re-check of compliance_reviews sees — set per test via `freshReviewsResult`. */
+let freshReviewsResult: { data: { content_asset_id: string; overall_risk: string }[] | null; error: { message: string } | null } = {
+  data: [],
+  error: null,
+};
+function complianceReviewsChainable() {
+  const builder: Record<string, unknown> = {
+    select: () => builder,
+    in: () => builder,
+    order: () => Promise.resolve(freshReviewsResult),
+  };
+  return builder;
+}
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: async () => ({ from: (table: string) => (table === "compliance_reviews" ? complianceReviewsChainable() : {}) }),
+}));
 vi.mock("@/lib/leo-portraits", () => ({ getLatestLeoPortrait: vi.fn().mockResolvedValue(null) }));
 vi.mock("./content-actions", () => ({ generateContent: vi.fn() }));
 vi.mock("./research-actions", () => ({ approveResearchOnly: vi.fn() }));
@@ -33,7 +48,16 @@ vi.mock("./compliance-actions", () => ({ runComplianceReview: (...args: unknown[
 const reviseContentAssetMock = vi.fn();
 vi.mock("./revision-actions", () => ({ reviseContentAsset: (...args: unknown[]) => reviseContentAssetMock(...args) }));
 
-import { runComplianceStep, runRevisionStep, runImageGenerationStep, runImagePlanningStep } from "./pipeline-actions";
+import {
+  runComplianceStep,
+  runRevisionStep,
+  runFinalVerificationStep,
+  runImageGenerationStep,
+  runImagePlanningStep,
+} from "./pipeline-actions";
+import type { ContentPlatform } from "@/lib/types";
+
+const ALL_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];
 
 function asset(platform: ContentAsset["platform"], contentType: ContentAsset["content_type"], version = 1): ContentAsset {
   return { id: `${platform}-${contentType}`, platform, content_type: contentType, version } as ContentAsset;
@@ -60,7 +84,7 @@ describe("runComplianceStep — fail closed", () => {
     });
     getComplianceReviewsMock.mockResolvedValue([]); // the failed call never wrote a row
 
-    await expect(runComplianceStep("topic-1")).rejects.toThrow(/合规审核未能完成/);
+    await expect(runComplianceStep("topic-1", ALL_PLATFORMS)).rejects.toThrow(/合规审核未能完成/);
   });
 
   it("also stops when a review call rejects outright (not just returns ok:false)", async () => {
@@ -70,7 +94,7 @@ describe("runComplianceStep — fail closed", () => {
     });
     getComplianceReviewsMock.mockResolvedValue([]);
 
-    await expect(runComplianceStep("topic-1")).rejects.toThrow(/合规审核未能完成/);
+    await expect(runComplianceStep("topic-1", ALL_PLATFORMS)).rejects.toThrow(/合规审核未能完成/);
   });
 
   it("succeeds and reports anyFlagged correctly when every review genuinely runs", async () => {
@@ -81,7 +105,7 @@ describe("runComplianceStep — fail closed", () => {
       review(WECHAT_ASSET.id, "LOW"),
     ]);
 
-    const { anyFlagged } = await runComplianceStep("topic-1");
+    const { anyFlagged } = await runComplianceStep("topic-1", ALL_PLATFORMS);
     expect(anyFlagged).toBe(true);
   });
 
@@ -91,7 +115,7 @@ describe("runComplianceStep — fail closed", () => {
     runComplianceReviewMock.mockResolvedValue({ ok: true });
     getComplianceReviewsMock.mockResolvedValue([review(VIDEO_ASSET.id, "LOW"), review(WECHAT_ASSET.id, "LOW")]);
 
-    await runComplianceStep("topic-1");
+    await runComplianceStep("topic-1", ALL_PLATFORMS);
 
     expect(runComplianceReviewMock).toHaveBeenCalledTimes(1);
     expect(runComplianceReviewMock).toHaveBeenCalledWith(XHS_ASSET.id, undefined, undefined);
@@ -111,7 +135,7 @@ describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed
       review(WECHAT_ASSET.id, "LOW"),
     ]);
 
-    const result = await runRevisionStep("topic-1");
+    const result = await runRevisionStep("topic-1", ALL_PLATFORMS);
     expect(result).toEqual({ skipped: true });
     expect(reviseContentAssetMock).not.toHaveBeenCalled();
   });
@@ -124,7 +148,7 @@ describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed
     ]);
     reviseContentAssetMock.mockResolvedValue({ ok: true });
 
-    const result = await runRevisionStep("topic-1");
+    const result = await runRevisionStep("topic-1", ALL_PLATFORMS);
     expect(result).toEqual({ skipped: false });
     expect(reviseContentAssetMock).toHaveBeenCalledTimes(1);
     expect(reviseContentAssetMock).toHaveBeenCalledWith(XHS_ASSET.id, undefined, undefined);
@@ -134,7 +158,7 @@ describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed
     getComplianceReviewsMock.mockResolvedValue([review(XHS_ASSET.id, "HIGH")]);
     reviseContentAssetMock.mockResolvedValue({ ok: false, error: "model refused" });
 
-    await expect(runRevisionStep("topic-1")).rejects.toThrow(/校对修改失败/);
+    await expect(runRevisionStep("topic-1", ALL_PLATFORMS)).rejects.toThrow(/校对修改失败/);
   });
 });
 
@@ -177,5 +201,111 @@ describe("runImagePlanningStep — threads `since`/`runId` through for retry ide
     generatePagesPlanMock.mockResolvedValue({ ok: false, error: "检查图文规划是否已生成失败，请重试：connection reset" });
 
     await expect(runImagePlanningStep("topic-1", "2026-01-01T00:00:00Z")).rejects.toThrow(/检查图文规划是否已生成失败/);
+  });
+});
+
+function assetWithId(id: string, platform: ContentAsset["platform"], contentType: ContentAsset["content_type"], version: number): ContentAsset {
+  return { id, platform, content_type: contentType, version } as ContentAsset;
+}
+
+/**
+ * Live audit finding (round 7): a revised draft (H's output) never got a
+ * second look before moving on to planning/images/packaging. These tests
+ * cover the new final-verification step: it must only ever review assets
+ * this run actually produced a new version of, must never call
+ * reviseContentAsset itself (that's exactly how a compliance -> revision
+ * -> compliance -> revision loop would happen), and must stop the whole
+ * pipeline — not silently continue — when the revised version is still
+ * flagged.
+ */
+describe("runFinalVerificationStep — reviews only newly revised assets, never auto-revises", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    freshReviewsResult = { data: [], error: null };
+  });
+
+  it("continues without throwing when the revised version's review comes back LOW", async () => {
+    const revised = assetWithId("xhs-v2", "XIAOHONGSHU", "xiaohongshu_post", 2);
+    getContentAssetsMock.mockResolvedValue([revised]);
+    getComplianceReviewsMock.mockResolvedValue([]); // the new version has no review yet — pending
+    runComplianceReviewMock.mockResolvedValue({ ok: true });
+    freshReviewsResult = { data: [{ content_asset_id: "xhs-v2", overall_risk: "LOW" }], error: null };
+
+    const result = await runFinalVerificationStep("topic-1", ["XIAOHONGSHU"]);
+
+    expect(result).toEqual({ skipped: false });
+    expect(runComplianceReviewMock).toHaveBeenCalledTimes(1);
+    expect(runComplianceReviewMock).toHaveBeenCalledWith("xhs-v2", undefined, undefined);
+    expect(reviseContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it("stops the pipeline (throws) instead of continuing when the revised version is still MEDIUM/HIGH, and never auto-revises again", async () => {
+    const revised = assetWithId("xhs-v2", "XIAOHONGSHU", "xiaohongshu_post", 2);
+    getContentAssetsMock.mockResolvedValue([revised]);
+    getComplianceReviewsMock.mockResolvedValue([]);
+    runComplianceReviewMock.mockResolvedValue({ ok: true });
+    freshReviewsResult = { data: [{ content_asset_id: "xhs-v2", overall_risk: "HIGH" }], error: null };
+
+    await expect(runFinalVerificationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/终审复核发现问题仍未解决/);
+    expect(reviseContentAssetMock).not.toHaveBeenCalled();
+  });
+
+  it("does nothing (no AI call) when revision never ran — the original asset already has its LOW review", async () => {
+    const original = asset("XIAOHONGSHU", "xiaohongshu_post"); // id "XIAOHONGSHU-xiaohongshu_post", version 1
+    getContentAssetsMock.mockResolvedValue([original]);
+    getComplianceReviewsMock.mockResolvedValue([review(original.id, "LOW")]); // already reviewed, nothing pending
+    freshReviewsResult = { data: [{ content_asset_id: original.id, overall_risk: "LOW" }], error: null };
+
+    const result = await runFinalVerificationStep("topic-1", ["XIAOHONGSHU"]);
+
+    expect(result).toEqual({ skipped: true });
+    expect(runComplianceReviewMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed (throws) when the fresh compliance_reviews re-check itself errors, instead of assuming everything is clean", async () => {
+    const original = asset("XIAOHONGSHU", "xiaohongshu_post");
+    getContentAssetsMock.mockResolvedValue([original]);
+    getComplianceReviewsMock.mockResolvedValue([review(original.id, "LOW")]);
+    freshReviewsResult = { data: null, error: { message: "connection reset" } };
+
+    await expect(runFinalVerificationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/终审复核结果读取失败/);
+  });
+});
+
+/**
+ * Live audit finding (round 7): compliance/revision used to hard-code all
+ * three platforms — a run that only selected VIDEO_CHANNEL would still
+ * pull in whatever XIAOHONGSHU/WECHAT drafts happened to already exist in
+ * content_assets. These confirm the `platforms` parameter genuinely scopes
+ * which assets get touched, not just which ones get generated.
+ */
+describe("selected-platform isolation — compliance/revision never touch platforms outside the run's selection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getContentAssetsMock.mockResolvedValue([VIDEO_ASSET, XHS_ASSET, WECHAT_ASSET]);
+  });
+
+  it("runComplianceStep only reviews VIDEO_CHANNEL's asset when only VIDEO_CHANNEL is selected, even though XHS/WeChat drafts exist", async () => {
+    runComplianceReviewMock.mockResolvedValue({ ok: true });
+    getComplianceReviewsMock.mockResolvedValue([]);
+
+    await runComplianceStep("topic-1", ["VIDEO_CHANNEL"]);
+
+    expect(runComplianceReviewMock).toHaveBeenCalledTimes(1);
+    expect(runComplianceReviewMock).toHaveBeenCalledWith(VIDEO_ASSET.id, undefined, undefined);
+  });
+
+  it("runRevisionStep never revises XHS/WeChat when only VIDEO_CHANNEL is selected, even if their reviews are flagged", async () => {
+    getComplianceReviewsMock.mockResolvedValue([
+      review(VIDEO_ASSET.id, "HIGH"),
+      review(XHS_ASSET.id, "HIGH"),
+      review(WECHAT_ASSET.id, "HIGH"),
+    ]);
+    reviseContentAssetMock.mockResolvedValue({ ok: true });
+
+    await runRevisionStep("topic-1", ["VIDEO_CHANNEL"]);
+
+    expect(reviseContentAssetMock).toHaveBeenCalledTimes(1);
+    expect(reviseContentAssetMock).toHaveBeenCalledWith(VIDEO_ASSET.id, undefined, undefined);
   });
 });

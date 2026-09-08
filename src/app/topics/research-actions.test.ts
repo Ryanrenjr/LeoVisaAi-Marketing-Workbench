@@ -64,9 +64,10 @@ const fromMock = vi.fn((table: string) => {
   const results = tableResults[table] ?? [];
   return chainable(table, results[idx] ?? { data: null, error: null });
 });
-vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: fromMock }) }));
+const rpcMock = vi.fn();
+vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: fromMock, rpc: rpcMock }) }));
 
-import { runResearch } from "./research-actions";
+import { runResearch, approveResearchOnly } from "./research-actions";
 
 const RESEARCH_PACK_RESULT = {
   ok: true,
@@ -230,5 +231,48 @@ describe("runResearch — zero grounded sources is a hard fail, not a silent pas
     expect(topicsCalls).toHaveLength(0);
     const packsCalls = fromMock.mock.calls.filter(([table]) => table === "research_packs");
     expect(packsCalls).toHaveLength(2); // insert + compensating delete
+  });
+});
+
+/**
+ * Live audit finding (P0, round 7): approveResearchOnly() used to insert
+ * research_approvals, then update topics.status WITHOUT checking the error
+ * or affected-row count, then unconditionally insert a topic_status_events
+ * row and return true — a concurrent status change (or a transient error
+ * on just that one statement) could leave a fake "approved" status event
+ * on record while the topic's real status never moved. Delegated to the
+ * approve_research() Postgres function (0029_approve_research_rpc.sql),
+ * which does the whole sequence as one transaction; this function now only
+ * returns true once that RPC call has actually succeeded. True atomicity
+ * (the DB-level rollback-on-failure guarantee) can't be proven by a mocked
+ * unit test — see the live verification script used for that separately.
+ */
+describe("approveResearchOnly — delegates atomically to the approve_research RPC", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getTopicByIdMock.mockResolvedValue({ id: "topic-1", status: "RESEARCH_READY" });
+  });
+
+  it("returns false, and never logs a success activity, when the RPC call fails", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: { message: "topic is not RESEARCH_READY" } });
+
+    const approved = await approveResearchOnly("topic-1", "pack-1");
+
+    expect(approved).toBe(false);
+    const activityCalls = fromMock.mock.calls.filter(([table]) => table === "topic_activity_log");
+    expect(activityCalls).toHaveLength(0);
+  });
+
+  it("returns true and calls the RPC with the right parameters when it succeeds", async () => {
+    rpcMock.mockResolvedValue({ data: [{ topic_id: "topic-1" }], error: null });
+
+    const approved = await approveResearchOnly("topic-1", "pack-1");
+
+    expect(approved).toBe(true);
+    expect(rpcMock).toHaveBeenCalledWith("approve_research", {
+      p_topic_id: "topic-1",
+      p_research_pack_id: "pack-1",
+      p_decided_by: "operator-1",
+    });
   });
 });

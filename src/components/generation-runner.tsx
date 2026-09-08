@@ -9,6 +9,7 @@ import {
   runImageGenerationStep,
   runComplianceStep,
   runRevisionStep,
+  runFinalVerificationStep,
   getOrCreateGenerationRun,
   markGenerationRunStep,
   completeGenerationRun,
@@ -39,7 +40,7 @@ async function withStepRetry(run: () => Promise<void>): Promise<void> {
   }
 }
 
-type StepKey = "content" | "compliance" | "revision" | "planning" | "images";
+type StepKey = "content" | "compliance" | "revision" | "finalVerification" | "planning" | "images";
 type StepStatus = "pending" | "active" | "done" | "skipped";
 
 interface StepDef {
@@ -63,7 +64,14 @@ const PLATFORM_WRITER: Record<ContentPlatform, EmployeeId> = {
  * picked, the "planning" step (K's page plan) doesn't apply at all, so the
  * step list itself varies, not just which platforms get generated).
  */
-const STEP_WEIGHT: Record<StepKey, number> = { content: 20, compliance: 20, revision: 20, planning: 15, images: 25 };
+const STEP_WEIGHT: Record<StepKey, number> = {
+  content: 20,
+  compliance: 15,
+  revision: 15,
+  finalVerification: 10,
+  planning: 15,
+  images: 25,
+};
 
 /**
  * Order matters here, and it's not arbitrary: text has to be reviewed and
@@ -78,8 +86,8 @@ const STEP_WEIGHT: Record<StepKey, number> = { content: 20, compliance: 20, revi
  */
 function buildSteps(platforms: ContentPlatform[]): StepDef[] {
   const keys: StepKey[] = platforms.includes("XIAOHONGSHU")
-    ? ["content", "compliance", "revision", "planning", "images"]
-    : ["content", "compliance", "revision", "images"];
+    ? ["content", "compliance", "revision", "finalVerification", "planning", "images"]
+    : ["content", "compliance", "revision", "finalVerification", "images"];
 
   const totalWeight = keys.reduce((sum, key) => sum + STEP_WEIGHT[key], 0);
   const contentLabel =
@@ -88,6 +96,7 @@ function buildSteps(platforms: ContentPlatform[]): StepDef[] {
     content: contentLabel,
     compliance: "合规审核",
     revision: "按审核意见校对修改",
+    finalVerification: "终审复核",
     planning: "小红书图文规划",
     images: "生成配图（封面 + 图文）",
   };
@@ -95,6 +104,7 @@ function buildSteps(platforms: ContentPlatform[]): StepDef[] {
     content: platforms.map((p) => PLATFORM_WRITER[p]),
     compliance: ["compliance"],
     revision: ["reviser"],
+    finalVerification: ["compliance"],
     planning: ["xiaohongshu-image-planner"],
     images: ["image-designer"],
   };
@@ -137,7 +147,7 @@ export function GenerationRunner({
   const router = useRouter();
   const [run, setRun] = useState<GenerationRun | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
-  const [skippedRevision, setSkippedRevision] = useState(false);
+  const [skippedSteps, setSkippedSteps] = useState<Partial<Record<StepKey, boolean>>>({});
   const [percent, setPercent] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
@@ -244,14 +254,22 @@ export function GenerationRunner({
     const executors: Record<StepKey, () => Promise<void>> = {
       content: () => runContentGenerationStep(topicId, run.platforms, since, runId),
       compliance: async () => {
-        await runComplianceStep(topicId, runId);
+        await runComplianceStep(topicId, run.platforms, runId);
       },
       // Determined fresh from the DB every time (see runRevisionStep's doc
       // comment) — correct whether this is a normal run or a resume that
       // landed exactly between compliance finishing and revision starting.
       revision: async () => {
-        const { skipped } = await runRevisionStep(topicId, runId);
-        if (skipped) setSkippedRevision(true);
+        const { skipped } = await runRevisionStep(topicId, run.platforms, runId);
+        setSkippedSteps((prev) => ({ ...prev, revision: skipped }));
+      },
+      // G looks once more at whatever H just revised (see
+      // runFinalVerificationStep's doc comment) — a still-flagged result
+      // here throws and stops the whole pipeline rather than looping back
+      // into another automatic revision.
+      finalVerification: async () => {
+        const { skipped } = await runFinalVerificationStep(topicId, run.platforms, runId);
+        setSkippedSteps((prev) => ({ ...prev, finalVerification: skipped }));
       },
       planning: () => runImagePlanningStep(topicId, since, runId),
       images: () => runImageGenerationStep(topicId, run.platforms, since, runId),
@@ -329,7 +347,6 @@ export function GenerationRunner({
   const steps = buildSteps(run.platforms);
   const allDone = activeIndex >= steps.length;
   const activeEmployees = allDone ? [] : steps[activeIndex].employees;
-  const revisionIndex = steps.findIndex((s) => s.key === "revision");
 
   return (
     <div className="card flex flex-col gap-4 px-5 py-4">
@@ -367,7 +384,7 @@ export function GenerationRunner({
       <ol className="flex flex-col">
         {steps.map((s, i) => {
           const status: StepStatus =
-            i === revisionIndex && skippedRevision
+            skippedSteps[s.key]
               ? "skipped"
               : i < activeIndex || allDone
                 ? "done"

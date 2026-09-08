@@ -52,7 +52,15 @@ async function addPlatformToZip(
 
   for (const { contentType, label } of contentTypes) {
     const asset = getLatestForLineage(assets, platform, contentType);
-    if (!asset) continue;
+    if (!asset) {
+      // Live audit finding (round 7): a whole missing asset used to be a
+      // silent `continue` — an expected content type this platform is
+      // supposed to have (e.g. XIAOHONGSHU's xiaohongshu_pages plan) that
+      // simply never got generated produced a "successful" zip missing an
+      // entire piece, instead of failing closed like a missing image does.
+      problems.push(`${folderPrefix}${label}：内容不存在`);
+      continue;
+    }
     foundAny = true;
 
     const { data: images, error: imagesError } = await supabase
@@ -76,6 +84,7 @@ async function addPlatformToZip(
     zip.file(`${folderPrefix}${subfolder}${label}.html`, renderContentAsHtml(asset.title, asset.content));
 
     let carouselDownloaded = 0;
+    let hasCover = false;
     for (const image of images ?? []) {
       const { data: downloaded, error: downloadError } = await supabase.storage
         .from("content-images")
@@ -93,17 +102,24 @@ async function addPlatformToZip(
           : `${folderPrefix}${subfolder}封面.${ext}`;
       zip.file(filename, bytes);
       if (image.image_kind === "carousel") carouselDownloaded++;
+      if (image.image_kind === "cover") hasCover = true;
     }
 
-    // xiaohongshu_pages declares how many pages the plan has; cross-check
-    // against how many carousel images actually made it into the zip —
-    // catches "plan says 6 pages, only 4 got generated/downloaded" instead
-    // of shipping a silently-incomplete carousel.
     if (contentType === "xiaohongshu_pages") {
+      // xiaohongshu_pages declares how many pages the plan has; cross-check
+      // against how many carousel images actually made it into the zip —
+      // catches "plan says 6 pages, only 4 got generated/downloaded" instead
+      // of shipping a silently-incomplete carousel.
       const declaredPages = (asset.structured_content as { pages?: unknown[] } | null)?.pages?.length ?? 0;
       if (declaredPages > 0 && carouselDownloaded !== declaredPages) {
         problems.push(`${folderPrefix}${label}：规划共 ${declaredPages} 页，实际打包 ${carouselDownloaded} 页`);
       }
+    } else if (!hasCover) {
+      // Every other content type (video_script / xiaohongshu_post /
+      // wechat_article) is the lineage the shared/WeChat cover gets saved
+      // against (see generateCrossPlatformCover/generateWechatCover) — a
+      // package for this platform is incomplete without one.
+      problems.push(`${folderPrefix}${label}：封面缺失`);
     }
   }
 
@@ -130,7 +146,24 @@ export async function GET(request: Request) {
   const problems: string[] = [];
 
   if (!platformParam || platformParam === "all") {
-    for (const platform of ALL_PLATFORMS) {
+    // Scoped to what this generation run actually selected (live audit
+    // finding, round 7) — not "whatever happens to exist in
+    // content_assets". A topic generated with only VIDEO_CHANNEL selected
+    // must never have "打包下载全部平台" silently sweep in older/manually-
+    // generated XIAOHONGSHU or WECHAT content that was never part of this
+    // run's scope. Falls back to every platform when no run exists at all
+    // (e.g. content was produced entirely by hand from each employee's own
+    // page, never through "一键生成") — same "有什么打什么" behavior as
+    // before for that path.
+    const { data: run, error: runError } = await supabase
+      .from("generation_runs")
+      .select("platforms")
+      .eq("topic_id", topicId)
+      .maybeSingle();
+    if (runError) return new Response(`读取生成范围失败，请重试：${runError.message}`, { status: 500 });
+    const expectedPlatforms = (run?.platforms as ContentPlatform[] | undefined) ?? ALL_PLATFORMS;
+
+    for (const platform of expectedPlatforms) {
       const result = await addPlatformToZip(zip, supabase, assets, platform, `${CONTENT_PLATFORM_LABEL[platform]}/`);
       foundAny = foundAny || result.foundAny;
       problems.push(...result.problems);
@@ -147,15 +180,16 @@ export async function GET(request: Request) {
     filenameSuffix = CONTENT_PLATFORM_LABEL[platform];
   }
 
-  if (!foundAny) return new Response("No content for this topic yet.", { status: 404 });
-
   // Fail closed: a partial zip (missing image, unreadable record, page
-  // count mismatch) is worse than no zip — the operator could otherwise
-  // download an incomplete package and then hit "完成，清空这条选题",
-  // permanently losing the only copy of what didn't make it in.
+  // count mismatch, or now a whole missing asset) is worse than no zip —
+  // the operator could otherwise download an incomplete package and then
+  // hit "完成，清空这条选题", permanently losing the only copy of what
+  // didn't make it in. Checked before the generic "nothing found" 404 so a
+  // concrete reason always wins over a vague one.
   if (problems.length > 0) {
     return new Response(`打包未完成，以下内容缺失：\n${problems.join("\n")}`, { status: 500 });
   }
+  if (!foundAny) return new Response("No content for this topic yet.", { status: 404 });
 
   const zipBytes = await zip.generateAsync({ type: "uint8array" });
   const filename = `${topic.title}-${filenameSuffix}`.replace(/[\\/:*?"<>|]/g, "_");

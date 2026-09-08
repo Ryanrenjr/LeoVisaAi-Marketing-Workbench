@@ -44,9 +44,17 @@ const PLATFORM_CONTENT_TYPE: Record<
   WECHAT_OFFICIAL_ACCOUNT: "wechat_article",
 };
 
-async function latestGeneratedAssets(topicId: string): Promise<ContentAsset[]> {
+/**
+ * Scoped to `platforms` (live audit finding, round 7): this used to hard-
+ * code all three platforms, so a "只选 VIDEO_CHANNEL" run's compliance/
+ * revision steps would still touch whatever XIAOHONGSHU/WECHAT drafts
+ * happened to already exist in content_assets — a stale platform never
+ * selected for this run could still get reviewed, revised, or blocked on.
+ * `platforms` should always be `run.platforms` (see generation-runner.tsx),
+ * the one source of truth for what this generation run actually selected.
+ */
+async function latestGeneratedAssets(topicId: string, platforms: ContentPlatform[]): Promise<ContentAsset[]> {
   const assets = await getContentAssets(topicId);
-  const platforms: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];
   return platforms
     .map((platform) => getLatestForLineage(assets, platform, PLATFORM_CONTENT_TYPE[platform]))
     .filter((asset): asset is ContentAsset => asset !== null);
@@ -113,8 +121,8 @@ export async function runImageGenerationStep(topicId: string, platforms: Content
  * handed down from a sibling step — see runRevisionStep's doc comment for
  * why that mattered).
  */
-async function computeAnyFlagged(topicId: string): Promise<boolean> {
-  const latestAssets = await latestGeneratedAssets(topicId);
+async function computeAnyFlagged(topicId: string, platforms: ContentPlatform[]): Promise<boolean> {
+  const latestAssets = await latestGeneratedAssets(topicId, platforms);
   const reviews = await getComplianceReviews(topicId);
   const latestReviewByAssetId = new Map<string, (typeof reviews)[number]>();
   for (const review of reviews) {
@@ -136,8 +144,12 @@ async function computeAnyFlagged(topicId: string): Promise<boolean> {
  * which is indistinguishable from "reviewed and genuinely clean". Fail
  * closed instead: never LOW, never skip, just stop.
  */
-export async function runComplianceStep(topicId: string, runId?: string): Promise<{ anyFlagged: boolean }> {
-  const latestAssets = await latestGeneratedAssets(topicId);
+export async function runComplianceStep(
+  topicId: string,
+  platforms: ContentPlatform[],
+  runId?: string,
+): Promise<{ anyFlagged: boolean }> {
+  const latestAssets = await latestGeneratedAssets(topicId, platforms);
   const reviews = await getComplianceReviews(topicId);
   const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
   const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
@@ -157,7 +169,7 @@ export async function runComplianceStep(topicId: string, runId?: string): Promis
     throw new Error(`合规审核未能完成，已停止：${detail}`);
   }
 
-  const anyFlagged = await computeAnyFlagged(topicId);
+  const anyFlagged = await computeAnyFlagged(topicId, platforms);
 
   revalidatePath(`/topics/${topicId}`);
   revalidatePath("/team/compliance");
@@ -176,11 +188,15 @@ export async function runComplianceStep(topicId: string, runId?: string): Promis
  * same browser session. Returns whether it actually had nothing to do, so
  * the UI can show "skipped" instead of guessing.
  */
-export async function runRevisionStep(topicId: string, runId?: string): Promise<{ skipped: boolean }> {
-  const anyFlagged = await computeAnyFlagged(topicId);
+export async function runRevisionStep(
+  topicId: string,
+  platforms: ContentPlatform[],
+  runId?: string,
+): Promise<{ skipped: boolean }> {
+  const anyFlagged = await computeAnyFlagged(topicId, platforms);
   if (!anyFlagged) return { skipped: true };
 
-  const latestAssets = await latestGeneratedAssets(topicId);
+  const latestAssets = await latestGeneratedAssets(topicId, platforms);
   const reviews = await getComplianceReviews(topicId);
   const latestReviewByAssetId = new Map<string, (typeof reviews)[number]>();
   for (const review of reviews) {
@@ -212,6 +228,95 @@ export async function runRevisionStep(topicId: string, runId?: string): Promise<
   revalidatePath("/team/reviser");
   revalidatePath("/team/integrator");
   return { skipped: false };
+}
+
+/**
+ * Step 6 — G looks once more at whatever H just revised, before anything
+ * moves on to planning/images/packaging (live user instruction: a revised
+ * draft used to go straight into the rest of the pipeline with no one
+ * checking whether the revision actually fixed the flagged issue). Only
+ * ever reviews assets this run actually produced a NEW version of —
+ * `content_assets`/`compliance_reviews` are the source of truth, not a
+ * separate "did I already verify this" flag: a revised asset is a brand
+ * new row with no review yet, so it's naturally selected by the same
+ * "latest asset with no compliance_reviews row" filter runComplianceStep
+ * uses; an asset revision never touched still has its original (already
+ * LOW, or revision would have run) review and is naturally excluded. This
+ * means a run where nothing was ever flagged does zero extra work here,
+ * and a retry after this step already ran once doesn't re-review assets
+ * it already reviewed.
+ *
+ * Stop rule: this NEVER calls reviseContentAsset again — a still-flagged
+ * result after revision means a human needs to look, not another automatic
+ * revision pass (that's exactly how compliance → revision → compliance →
+ * revision loops happen). The final MEDIUM/HIGH check re-reads
+ * compliance_reviews directly (not via the existing fail-open
+ * getComplianceReviews helper — this is the one thing standing between
+ * "pipeline says success" and "genuinely unresolved compliance risk", so a
+ * read failure here must throw, not be silently swallowed into "looks
+ * clean"). Checking every in-scope asset's CURRENT review (not just the
+ * ones reviewed in this call) means a retry after a stop here re-derives
+ * the same stop from the DB instead of silently passing once nothing is
+ * newly "pending".
+ */
+export async function runFinalVerificationStep(
+  topicId: string,
+  platforms: ContentPlatform[],
+  runId?: string,
+): Promise<{ skipped: boolean }> {
+  const latestAssets = await latestGeneratedAssets(topicId, platforms);
+  const reviews = await getComplianceReviews(topicId);
+  const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
+  const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
+
+  if (pendingAssets.length > 0) {
+    const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id, undefined, runId)));
+    const failures = settled
+      .map((result, i) => ({ asset: pendingAssets[i], result }))
+      .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+    if (failures.length > 0) {
+      const detail = failures
+        .map(
+          ({ asset, result }) =>
+            `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "复核失败")}`,
+        )
+        .join("；");
+      throw new Error(`终审复核未能完成，已停止：${detail}`);
+    }
+  }
+
+  if (latestAssets.length > 0) {
+    const supabase = await createClient();
+    const { data: freshReviews, error: freshReviewsError } = await supabase
+      .from("compliance_reviews")
+      .select("content_asset_id, overall_risk")
+      .in(
+        "content_asset_id",
+        latestAssets.map((asset) => asset.id),
+      )
+      .order("created_at", { ascending: false });
+    if (freshReviewsError) throw new Error(`终审复核结果读取失败，已停止：${freshReviewsError.message}`);
+
+    const latestRiskByAssetId = new Map<string, string>();
+    for (const review of freshReviews ?? []) {
+      if (!latestRiskByAssetId.has(review.content_asset_id)) {
+        latestRiskByAssetId.set(review.content_asset_id, review.overall_risk);
+      }
+    }
+
+    const stillFlagged = latestAssets.filter((asset) => {
+      const risk = latestRiskByAssetId.get(asset.id);
+      return risk !== undefined && risk !== "LOW";
+    });
+    if (stillFlagged.length > 0) {
+      const detail = stillFlagged.map((asset) => CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform).join("、");
+      throw new Error(`终审复核发现问题仍未解决（${detail}），需要人工检查，已停止自动流程。`);
+    }
+  }
+
+  revalidatePath(`/topics/${topicId}`);
+  revalidatePath("/team/compliance");
+  return { skipped: pendingAssets.length === 0 };
 }
 
 const SELECTABLE_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];
