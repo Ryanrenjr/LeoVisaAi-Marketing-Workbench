@@ -37,11 +37,19 @@ const tableCallIndex: Record<string, number> = {};
 function queue(table: string, result: { data?: unknown; error?: unknown }) {
   (tableResults[table] ??= []).push(result);
 }
-function chainable(result: { data?: unknown; error?: unknown }) {
+/** Every insert()/update() payload actually passed, in call order — lets tests assert on the real status/error text written, not just "this table got touched N times". */
+let writes: { table: string; method: "insert" | "update"; payload: unknown }[] = [];
+function chainable(table: string, result: { data?: unknown; error?: unknown }) {
   const builder: Record<string, unknown> = {
     eq: () => builder,
-    insert: () => builder,
-    update: () => builder,
+    insert: (payload: unknown) => {
+      writes.push({ table, method: "insert", payload });
+      return builder;
+    },
+    update: (payload: unknown) => {
+      writes.push({ table, method: "update", payload });
+      return builder;
+    },
     delete: () => builder,
     select: () => builder,
     single: () => Promise.resolve(result),
@@ -54,7 +62,7 @@ const fromMock = vi.fn((table: string) => {
   const idx = tableCallIndex[table] ?? 0;
   tableCallIndex[table] = idx + 1;
   const results = tableResults[table] ?? [];
-  return chainable(results[idx] ?? { data: null, error: null });
+  return chainable(table, results[idx] ?? { data: null, error: null });
 });
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: fromMock }) }));
 
@@ -90,6 +98,7 @@ describe("runResearch — evidence chain is fail-closed", () => {
     vi.clearAllMocks();
     for (const key of Object.keys(tableResults)) delete tableResults[key];
     for (const key of Object.keys(tableCallIndex)) delete tableCallIndex[key];
+    writes = [];
     getTopicByIdMock.mockResolvedValue({ id: "topic-1", status: "RESEARCHING" });
     runResearchTaskMock.mockResolvedValue({ result: RESEARCH_PACK_RESULT, searchMeta: null });
     // The bootstrap research_runs row every call needs before reaching our
@@ -143,5 +152,83 @@ describe("runResearch — evidence chain is fail-closed", () => {
 
     const statusEventsCalls = fromMock.mock.calls.filter(([table]) => table === "topic_status_events");
     expect(statusEventsCalls).toHaveLength(0);
+  });
+});
+
+/**
+ * Live audit finding (P0, round 4): groundSources() (research-pack.ts) can
+ * legitimately drop every claimed source — the model cited a URL the
+ * search tool never actually returned — leaving resultPack.sources empty
+ * even though the AI call itself succeeded (result.ok === true). The old
+ * code only guarded against research_packs/research_sources insert
+ * *errors*; a clean save of a pack with zero sources sailed straight
+ * through to RESEARCH_READY, breaking the "every piece of content is
+ * grounded in a real source" guarantee this product depends on.
+ */
+describe("runResearch — zero grounded sources is a hard fail, not a silent pass", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const key of Object.keys(tableResults)) delete tableResults[key];
+    for (const key of Object.keys(tableCallIndex)) delete tableCallIndex[key];
+    writes = [];
+    getTopicByIdMock.mockResolvedValue({ id: "topic-1", status: "RESEARCHING" });
+    queue("research_runs", { data: { id: "run-1" }, error: null });
+  });
+
+  it("A: fails the run and never reaches research_packs/RESEARCH_READY when grounding drops every source", async () => {
+    runResearchTaskMock.mockResolvedValue({
+      result: { ...RESEARCH_PACK_RESULT, data: { ...RESEARCH_PACK_RESULT.data, sources: [] } },
+      searchMeta: null,
+    });
+
+    await runResearch("topic-1");
+
+    const packsCalls = fromMock.mock.calls.filter(([table]) => table === "research_packs");
+    expect(packsCalls).toHaveLength(0); // never even attempted — nothing to compensating-delete
+    const sourcesCalls = fromMock.mock.calls.filter(([table]) => table === "research_sources");
+    expect(sourcesCalls).toHaveLength(0);
+    const topicsCalls = fromMock.mock.calls.filter(([table]) => table === "topics");
+    expect(topicsCalls).toHaveLength(0);
+
+    const runFailureWrite = writes.find(
+      (w) => w.table === "research_runs" && w.method === "update" && (w.payload as { status?: string }).status === "failed",
+    );
+    expect(runFailureWrite).toBeDefined();
+    expect((runFailureWrite!.payload as { error: string }).error).toMatch(/没有任何经过真实搜索验证的来源/);
+
+    const activityWrite = writes.find(
+      (w) => w.table === "topic_activity_log" && (w.payload as { activity_type?: string }).activity_type === "research_run_failed",
+    );
+    expect(activityWrite).toBeDefined();
+    expect((activityWrite!.payload as { detail: { error: string } }).detail.error).toMatch(/没有任何经过真实搜索验证的来源/);
+  });
+
+  it("B: a single grounded source is enough to save normally and proceed toward RESEARCH_READY", async () => {
+    runResearchTaskMock.mockResolvedValue({ result: RESEARCH_PACK_RESULT, searchMeta: null }); // 1 source, from the shared fixture
+    queue("research_packs", { data: { id: "pack-1" }, error: null });
+    queue("research_sources", { data: null, error: null });
+    queue("topics", { data: null, error: null });
+
+    await runResearch("topic-1");
+
+    const packsCalls = fromMock.mock.calls.filter(([table]) => table === "research_packs");
+    expect(packsCalls).toHaveLength(1);
+    const sourcesCalls = fromMock.mock.calls.filter(([table]) => table === "research_sources");
+    expect(sourcesCalls).toHaveLength(1);
+    const topicsCalls = fromMock.mock.calls.filter(([table]) => table === "topics");
+    expect(topicsCalls).toHaveLength(1);
+  });
+
+  it("C: a DB error inserting research_sources (1+ sources, not a zero-source pack) still fails closed as before", async () => {
+    runResearchTaskMock.mockResolvedValue({ result: RESEARCH_PACK_RESULT, searchMeta: null });
+    queue("research_packs", { data: { id: "pack-1" }, error: null });
+    queue("research_sources", { data: null, error: { message: "sources insert failed" } });
+
+    await runResearch("topic-1");
+
+    const topicsCalls = fromMock.mock.calls.filter(([table]) => table === "topics");
+    expect(topicsCalls).toHaveLength(0);
+    const packsCalls = fromMock.mock.calls.filter(([table]) => table === "research_packs");
+    expect(packsCalls).toHaveLength(2); // insert + compensating delete
   });
 });

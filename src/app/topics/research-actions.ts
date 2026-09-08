@@ -128,6 +128,32 @@ export async function runResearch(topicId: string, override?: ModelRef | null) {
   if (!result.data) return;
   const resultPack = result.data;
 
+  // Hard gate: RESEARCH_READY must mean "at least one real, grounded
+  // source exists" — groundSources() (research-pack.ts) can legitimately
+  // drop every claimed source (the model cited a URL the search tool never
+  // actually returned), leaving resultPack.sources empty even though the
+  // AI call itself succeeded. Checked before research_packs is ever
+  // inserted, so there's nothing to compensating-delete — the simplest way
+  // to guarantee no half-state pack is left behind.
+  if (resultPack.sources.length === 0) {
+    await supabase
+      .from("research_runs")
+      .update({
+        status: "failed",
+        completed_at: new Date().toISOString(),
+        error: "研究结果没有任何经过真实搜索验证的来源，无法进入审核阶段。",
+      })
+      .eq("id", run.id);
+    await supabase.from("topic_activity_log").insert({
+      topic_id: topicId,
+      activity_type: "research_run_failed",
+      actor_id: user.id,
+      detail: { error: "研究结果没有任何经过真实搜索验证的来源，无法进入审核阶段。", stage: "grounding" },
+    });
+    revalidatePath(`/topics/${topicId}`);
+    return;
+  }
+
   // Fail-closed evidence chain: a topic must never reach RESEARCH_READY
   // unless the pack AND its sources are both confirmed persisted. No
   // multi-statement DB transaction here (Supabase JS doesn't support one
