@@ -54,6 +54,15 @@ vi.mock("@/lib/ai/router", () => ({
 const saveGeneratedContentImageMock = vi.fn();
 vi.mock("@/lib/content-images", () => ({ saveGeneratedContentImage: (...args: unknown[]) => saveGeneratedContentImageMock(...args) }));
 
+const claimGenerationRunTaskMock = vi.fn();
+const completeGenerationRunTaskMock = vi.fn();
+const failGenerationRunTaskMock = vi.fn();
+vi.mock("@/lib/generation-run-tasks", () => ({
+  claimGenerationRunTask: (...args: unknown[]) => claimGenerationRunTaskMock(...args),
+  completeGenerationRunTask: (...args: unknown[]) => completeGenerationRunTaskMock(...args),
+  failGenerationRunTask: (...args: unknown[]) => failGenerationRunTaskMock(...args),
+}));
+
 import { generateXiaohongshuCarousel, generateCrossPlatformCover, generateWechatCover } from "./actions";
 
 function plan(pages: string[]): ContentAsset {
@@ -235,5 +244,71 @@ describe("Xiaohongshu carousel idempotency check fails closed on a DB error", ()
 
     expect(result).toEqual({ ok: true, generated: 2 });
     expect(runImageGenerationTaskMock).toHaveBeenCalledTimes(1); // only page 2, page 1 already existed
+  });
+});
+
+/**
+ * Live audit finding (P0, round 6): the since-based checks above close the
+ * retry-level race, but not the concurrent-request-level one — two
+ * requests can both pass the since check before either writes. These
+ * tests verify the atomic-claim wiring itself: only engaged when a runId
+ * is supplied (the orchestrated pipeline), and an "already_completed" or
+ * "timed_out" claim outcome must never let a paid call through.
+ */
+describe("atomic claim wiring (runId provided) — image-designer", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    contentImagesResults.length = 0;
+    getTopicByIdMock.mockResolvedValue({ id: "topic-1", title: "标题", business: "UK_VISA" });
+  });
+
+  it("generateCrossPlatformCover: does not call the image model when the claim reports already_completed", async () => {
+    getContentAssetsMock.mockResolvedValue([xhsPostAsset()]);
+    claimGenerationRunTaskMock.mockResolvedValue({ outcome: "already_completed" });
+
+    const result = await generateCrossPlatformCover("topic-1", false, undefined, undefined, "run-1");
+
+    expect(result).toEqual({ ok: true });
+    expect(runImageGenerationTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("generateCrossPlatformCover: does not call the image model when the claim times out, and surfaces the timeout error", async () => {
+    getContentAssetsMock.mockResolvedValue([xhsPostAsset()]);
+    claimGenerationRunTaskMock.mockResolvedValue({ outcome: "timed_out", error: "另一个请求仍在处理这一项，等待超时，请稍后重试。" });
+
+    const result = await generateCrossPlatformCover("topic-1", false, undefined, undefined, "run-1");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/等待超时/);
+    expect(runImageGenerationTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("generateCrossPlatformCover: acquires the claim, calls the model, and marks the task completed on success", async () => {
+    getContentAssetsMock.mockResolvedValue([xhsPostAsset()]);
+    claimGenerationRunTaskMock.mockResolvedValue({ outcome: "acquired" });
+    runImageGenerationTaskMock.mockResolvedValue(resolvedResult());
+    saveGeneratedContentImageMock.mockResolvedValue({ ok: true });
+
+    const result = await generateCrossPlatformCover("topic-1", false, undefined, undefined, "run-1");
+
+    expect(result).toEqual({ ok: true });
+    expect(runImageGenerationTaskMock).toHaveBeenCalledTimes(1);
+    expect(completeGenerationRunTaskMock).toHaveBeenCalledWith("run-1", "image:shared_cover");
+    expect(failGenerationRunTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("generateXiaohongshuCarousel: claims each page independently, skipping only the page the claim reports already_completed", async () => {
+    getContentAssetsMock.mockResolvedValue([plan(["P1 文案", "P2 文案"])]);
+    claimGenerationRunTaskMock.mockImplementation(async (_runId: string, taskKey: string) =>
+      taskKey === "carousel:1" ? { outcome: "already_completed" } : { outcome: "acquired" },
+    );
+    runImageGenerationTaskMock.mockResolvedValue(resolvedResult());
+    saveGeneratedContentImageMock.mockResolvedValue({ ok: true });
+
+    const result = await generateXiaohongshuCarousel("topic-1", undefined, undefined, "run-1");
+
+    expect(result).toEqual({ ok: true, generated: 2 });
+    expect(runImageGenerationTaskMock).toHaveBeenCalledTimes(1); // only page 2 actually called the model
+    expect(completeGenerationRunTaskMock).toHaveBeenCalledWith("run-1", "carousel:2");
   });
 });

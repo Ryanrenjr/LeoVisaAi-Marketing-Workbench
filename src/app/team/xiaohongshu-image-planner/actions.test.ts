@@ -26,6 +26,15 @@ vi.mock("@/lib/ai/router", () => ({
   isRouterResolutionFailure: (result: { provider: unknown }) => result.provider === null,
 }));
 
+const claimGenerationRunTaskMock = vi.fn();
+const completeGenerationRunTaskMock = vi.fn();
+const failGenerationRunTaskMock = vi.fn();
+vi.mock("@/lib/generation-run-tasks", () => ({
+  claimGenerationRunTask: (...args: unknown[]) => claimGenerationRunTaskMock(...args),
+  completeGenerationRunTask: (...args: unknown[]) => completeGenerationRunTaskMock(...args),
+  failGenerationRunTask: (...args: unknown[]) => failGenerationRunTaskMock(...args),
+}));
+
 /** Chainable + thenable Supabase query-builder stub, keyed per table (same pattern as research-actions.test.ts / generation-runs.test.ts). */
 const tableResults: Record<string, { data?: unknown; error?: unknown }[]> = {};
 const tableCallIndex: Record<string, number> = {};
@@ -121,5 +130,54 @@ describe("generatePagesPlan — since-based idempotency, fail-closed on a DB err
 
     expect(result).toEqual({ ok: true });
     expect(runContentTaskMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Live audit finding (P0, round 6): the since check above closes the
+ * retry-level race but not the concurrent-request-level one. These tests
+ * cover the atomic-claim wiring itself, only engaged when runId is given.
+ */
+describe("generatePagesPlan — atomic claim wiring (runId provided)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const key of Object.keys(tableResults)) delete tableResults[key];
+    for (const key of Object.keys(tableCallIndex)) delete tableCallIndex[key];
+    getTopicByIdMock.mockResolvedValue({ id: "topic-1", status: "RESEARCH_APPROVED" });
+    getLatestResearchPackMock.mockResolvedValue({ id: "pack-1" });
+    getResearchSourcesMock.mockResolvedValue([]);
+    getContentAssetsMock.mockResolvedValue([]);
+  });
+
+  it("does not call the AI when the claim reports already_completed", async () => {
+    claimGenerationRunTaskMock.mockResolvedValue({ outcome: "already_completed" });
+
+    const result = await generatePagesPlan("topic-1", undefined, undefined, "run-1");
+
+    expect(result).toEqual({ ok: true });
+    expect(runContentTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("does not call the AI when the claim times out, and surfaces the timeout error", async () => {
+    claimGenerationRunTaskMock.mockResolvedValue({ outcome: "timed_out", error: "另一个请求仍在处理这一项，等待超时，请稍后重试。" });
+
+    const result = await generatePagesPlan("topic-1", undefined, undefined, "run-1");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/等待超时/);
+    expect(runContentTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("acquires the claim, calls the AI, and marks the task completed on success", async () => {
+    claimGenerationRunTaskMock.mockResolvedValue({ outcome: "acquired" });
+    runContentTaskMock.mockResolvedValue(RESOLVED_RESULT);
+    queue("content_assets", { data: null, error: null }); // the final insert
+
+    const result = await generatePagesPlan("topic-1", undefined, undefined, "run-1");
+
+    expect(result).toEqual({ ok: true });
+    expect(runContentTaskMock).toHaveBeenCalledTimes(1);
+    expect(completeGenerationRunTaskMock).toHaveBeenCalledWith("run-1", "planning:XIAOHONGSHU");
+    expect(failGenerationRunTaskMock).not.toHaveBeenCalled();
   });
 });

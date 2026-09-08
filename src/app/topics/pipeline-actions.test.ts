@@ -94,7 +94,7 @@ describe("runComplianceStep — fail closed", () => {
     await runComplianceStep("topic-1");
 
     expect(runComplianceReviewMock).toHaveBeenCalledTimes(1);
-    expect(runComplianceReviewMock).toHaveBeenCalledWith(XHS_ASSET.id);
+    expect(runComplianceReviewMock).toHaveBeenCalledWith(XHS_ASSET.id, undefined, undefined);
   });
 });
 
@@ -127,7 +127,7 @@ describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed
     const result = await runRevisionStep("topic-1");
     expect(result).toEqual({ skipped: false });
     expect(reviseContentAssetMock).toHaveBeenCalledTimes(1);
-    expect(reviseContentAssetMock).toHaveBeenCalledWith(XHS_ASSET.id);
+    expect(reviseContentAssetMock).toHaveBeenCalledWith(XHS_ASSET.id, undefined, undefined);
   });
 
   it("throws when a revision call fails, instead of silently leaving the flagged issue unresolved", async () => {
@@ -162,15 +162,15 @@ describe("runImageGenerationStep — fail closed on a partial carousel", () => {
   });
 });
 
-describe("runImagePlanningStep — threads `since` through for retry idempotency", () => {
+describe("runImagePlanningStep — threads `since`/`runId` through for retry idempotency", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("passes since through to generatePagesPlan as the third argument", async () => {
+  it("passes since and runId through to generatePagesPlan", async () => {
     generatePagesPlanMock.mockResolvedValue({ ok: true });
 
-    await runImagePlanningStep("topic-1", "2026-01-01T00:00:00Z");
+    await runImagePlanningStep("topic-1", "2026-01-01T00:00:00Z", "run-1");
 
-    expect(generatePagesPlanMock).toHaveBeenCalledWith("topic-1", undefined, "2026-01-01T00:00:00Z");
+    expect(generatePagesPlanMock).toHaveBeenCalledWith("topic-1", undefined, "2026-01-01T00:00:00Z", "run-1");
   });
 
   it("throws when generatePagesPlan reports failure (e.g. its own fail-closed idempotency check errored)", async () => {

@@ -52,14 +52,14 @@ async function latestGeneratedAssets(topicId: string): Promise<ContentAsset[]> {
     .filter((asset): asset is ContentAsset => asset !== null);
 }
 
-/** Step 1 — C/D/E generate the selected platforms' text at once (existing "生成内容" batch, now scoped to whichever platforms the operator picked — see PlatformChoiceRadios). `since` (this run's created_at) makes a retry skip platforms already generated in this run — see generateContent's doc comment. */
-export async function runContentGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string): Promise<void> {
-  await generateContent(topicId, platforms, since);
+/** Step 1 — C/D/E generate the selected platforms' text at once (existing "生成内容" batch, now scoped to whichever platforms the operator picked — see PlatformChoiceRadios). `since` (this run's created_at) makes a retry skip platforms already generated in this run — see generateContent's doc comment. `runId` additionally gives each platform an atomic claim (round 6) so two concurrent requests can't both call the AI for the same platform. */
+export async function runContentGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string, runId?: string): Promise<void> {
+  await generateContent(topicId, platforms, since, runId);
 }
 
-/** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. Only ever called when 小红书 is among the selected platforms (see generation-runner.tsx's buildSteps). `since` (this run's created_at) makes a retry skip planning if this run already produced a plan — see generatePagesPlan's doc comment. */
-export async function runImagePlanningStep(topicId: string, since?: string): Promise<void> {
-  const result = await generatePagesPlan(topicId, undefined, since);
+/** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. Only ever called when 小红书 is among the selected platforms (see generation-runner.tsx's buildSteps). `since` (this run's created_at) makes a retry skip planning if this run already produced a plan; `runId` additionally gives it an atomic claim (round 6) — see generatePagesPlan's doc comment. */
+export async function runImagePlanningStep(topicId: string, since?: string, runId?: string): Promise<void> {
+  const result = await generatePagesPlan(topicId, undefined, since, runId);
   if (!result.ok) throw new Error(result.error ?? "图文规划生成失败。");
 }
 
@@ -77,17 +77,17 @@ export async function runImagePlanningStep(topicId: string, since?: string): Pro
  * to no portrait, since there it's a deliberate per-click choice with its
  * own checkbox).
  */
-export async function runImageGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string): Promise<void> {
+export async function runImageGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string, runId?: string): Promise<void> {
   const portrait = await getLatestLeoPortrait();
   const tasks: { label: string; promise: Promise<{ ok: boolean; error?: string }> }[] = [];
   if (platforms.includes("VIDEO_CHANNEL") || platforms.includes("XIAOHONGSHU")) {
-    tasks.push({ label: "封面", promise: generateCrossPlatformCover(topicId, portrait !== null, undefined, since) });
+    tasks.push({ label: "封面", promise: generateCrossPlatformCover(topicId, portrait !== null, undefined, since, runId) });
   }
   if (platforms.includes("WECHAT_OFFICIAL_ACCOUNT")) {
-    tasks.push({ label: "公众号封面", promise: generateWechatCover(topicId, undefined, since) });
+    tasks.push({ label: "公众号封面", promise: generateWechatCover(topicId, undefined, since, runId) });
   }
   if (platforms.includes("XIAOHONGSHU")) {
-    tasks.push({ label: "小红书图文", promise: generateXiaohongshuCarousel(topicId, undefined, since) });
+    tasks.push({ label: "小红书图文", promise: generateXiaohongshuCarousel(topicId, undefined, since, runId) });
   }
 
   const settled = await Promise.allSettled(tasks.map((t) => t.promise));
@@ -136,13 +136,13 @@ async function computeAnyFlagged(topicId: string): Promise<boolean> {
  * which is indistinguishable from "reviewed and genuinely clean". Fail
  * closed instead: never LOW, never skip, just stop.
  */
-export async function runComplianceStep(topicId: string): Promise<{ anyFlagged: boolean }> {
+export async function runComplianceStep(topicId: string, runId?: string): Promise<{ anyFlagged: boolean }> {
   const latestAssets = await latestGeneratedAssets(topicId);
   const reviews = await getComplianceReviews(topicId);
   const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
   const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
 
-  const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id)));
+  const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id, undefined, runId)));
 
   const failures = settled
     .map((result, i) => ({ asset: pendingAssets[i], result }))
@@ -176,7 +176,7 @@ export async function runComplianceStep(topicId: string): Promise<{ anyFlagged: 
  * same browser session. Returns whether it actually had nothing to do, so
  * the UI can show "skipped" instead of guessing.
  */
-export async function runRevisionStep(topicId: string): Promise<{ skipped: boolean }> {
+export async function runRevisionStep(topicId: string, runId?: string): Promise<{ skipped: boolean }> {
   const anyFlagged = await computeAnyFlagged(topicId);
   if (!anyFlagged) return { skipped: true };
 
@@ -194,7 +194,7 @@ export async function runRevisionStep(topicId: string): Promise<{ skipped: boole
     return review !== undefined && review.overall_risk !== "LOW";
   });
 
-  const settled = await Promise.allSettled(flagged.map((asset) => reviseContentAsset(asset.id)));
+  const settled = await Promise.allSettled(flagged.map((asset) => reviseContentAsset(asset.id, undefined, runId)));
   const failures = settled
     .map((result, i) => ({ asset: flagged[i], result }))
     .filter(({ result }) => result.status === "rejected" || !result.value.ok);
@@ -298,24 +298,30 @@ export async function getOrCreateGenerationRun(topicId: string, platforms: Conte
   await requireGenerationRunAccess();
   const supabase = await createClient();
 
+  // Race-safe (live audit finding, round 6): a plain SELECT-then-INSERT
+  // let two concurrent requests each see "no run yet" and each INSERT
+  // their own row. `UNIQUE(topic_id)` (migration 0028) plus an upsert
+  // that ignores a conflicting insert closes that window atomically — the
+  // loser's upsert inserts nothing (rather than erroring or overwriting),
+  // and the follow-up select below reads back whichever row actually won.
+  const { data: inserted, error: insertError } = await supabase
+    .from("generation_runs")
+    .upsert(
+      { topic_id: topicId, platforms, status: "running", completed_steps: [] },
+      { onConflict: "topic_id", ignoreDuplicates: true },
+    )
+    .select(GENERATION_RUN_COLUMNS);
+  if (insertError) throw new Error(`无法开始生成流程，请重试：${insertError.message}`);
+  if (inserted && inserted.length > 0) return toGenerationRun(inserted[0]);
+
   const { data: existing, error: selectError } = await supabase
     .from("generation_runs")
     .select(GENERATION_RUN_COLUMNS)
     .eq("topic_id", topicId)
-    .order("created_at", { ascending: false })
-    .limit(1)
     .maybeSingle();
   if (selectError) throw new Error(`读取生成进度失败，请重试：${selectError.message}`);
-  if (existing) return toGenerationRun(existing);
-
-  const { data: created, error: insertError } = await supabase
-    .from("generation_runs")
-    .insert({ topic_id: topicId, platforms, status: "running", completed_steps: [] })
-    .select(GENERATION_RUN_COLUMNS)
-    .single();
-  if (insertError || !created) throw new Error(`无法开始生成流程，请重试：${insertError?.message ?? ""}`);
-
-  return toGenerationRun(created);
+  if (!existing) throw new Error("无法读取生成进度，请重试。");
+  return toGenerationRun(existing);
 }
 
 /** Called after each step actually executes (not when it's merely skipped) — see generation-runner.tsx. */

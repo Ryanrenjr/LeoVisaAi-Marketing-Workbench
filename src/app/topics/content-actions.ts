@@ -14,6 +14,7 @@ import { runContentTask, runWechatFullArticleTask, isRouterResolutionFailure } f
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
+import { claimGenerationRunTask, completeGenerationRunTask, failGenerationRunTask } from "@/lib/generation-run-tasks";
 import type { GenericContentTaskType } from "@/lib/ai/content-schemas";
 import type { ModelRef, TaskType } from "@/lib/ai/providers/types";
 import type {
@@ -64,10 +65,25 @@ async function generateAndPersistPlatform(
   platform: ContentPlatform,
   user: CurrentUser,
   override?: ModelRef | null,
+  runId?: string,
 ): Promise<{ ok: boolean; version?: number; error?: string }> {
   const contentType = PLATFORM_CONTENT_TYPE[platform];
   const taskType = PLATFORM_TASK_TYPE[platform];
   const evidenceInput = { topic, researchPack, sources };
+  const taskKey = `content:${platform}`;
+
+  // Atomic claim (live audit finding, round 6): the `since` prefilter in
+  // generateContent already narrows to platforms that look like they
+  // still need generating, but two concurrent requests can both pass
+  // that check before either writes — this closes that window. Only
+  // engaged when called from the orchestrated pipeline (runId provided);
+  // a manual single-platform regenerate from a team page has no run to
+  // claim against and behaves exactly as before.
+  if (runId) {
+    const claim = await claimGenerationRunTask(runId, taskKey);
+    if (claim.outcome === "already_completed") return { ok: true };
+    if (claim.outcome === "timed_out") return { ok: false, error: claim.error };
+  }
 
   const result = await runContentTask(taskType, evidenceInput, override);
 
@@ -78,6 +94,7 @@ async function generateAndPersistPlatform(
       actor_id: user.id,
       detail: { platform, error: result.error },
     });
+    if (runId) await failGenerationRunTask(runId, taskKey, result.error);
     return { ok: false, error: result.error };
   }
 
@@ -105,6 +122,7 @@ async function generateAndPersistPlatform(
       actor_id: user.id,
       detail: { platform, error: result.error, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
     });
+    if (runId) await failGenerationRunTask(runId, taskKey, result.error ?? "生成失败");
     return { ok: false, error: result.error ?? "生成失败" };
   }
 
@@ -132,7 +150,10 @@ async function generateAndPersistPlatform(
     version,
     created_by: user.id,
   });
-  if (insertError) return { ok: false, error: "保存失败" };
+  if (insertError) {
+    if (runId) await failGenerationRunTask(runId, taskKey, "保存失败");
+    return { ok: false, error: "保存失败" };
+  }
 
   await supabase.from("topic_activity_log").insert({
     topic_id: topic.id,
@@ -140,6 +161,8 @@ async function generateAndPersistPlatform(
     actor_id: user.id,
     detail: { platform, version, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
   });
+
+  if (runId) await completeGenerationRunTask(runId, taskKey);
 
   return { ok: true, version };
 }
@@ -212,6 +235,7 @@ export async function generateContent(
   topicId: string,
   platforms: ContentPlatform[] = ALL_PLATFORMS,
   since?: string,
+  runId?: string,
 ) {
   const { user, topic, researchPack, sources } = await loadGenerationContext(topicId);
   const supabase = await createClient();
@@ -235,7 +259,7 @@ export async function generateContent(
 
   const settled = await Promise.allSettled(
     platformsToGenerate.map((platform) =>
-      generateAndPersistPlatform(supabase, topic, researchPack, sources, platform, user),
+      generateAndPersistPlatform(supabase, topic, researchPack, sources, platform, user, undefined, runId),
     ),
   );
 

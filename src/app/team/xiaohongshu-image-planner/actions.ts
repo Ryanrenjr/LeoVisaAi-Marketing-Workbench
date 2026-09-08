@@ -16,6 +16,7 @@ import { runContentTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
+import { claimGenerationRunTask, completeGenerationRunTask, failGenerationRunTask } from "@/lib/generation-run-tasks";
 import type { ModelRef } from "@/lib/ai/providers/types";
 
 /**
@@ -46,6 +47,7 @@ export async function generatePagesPlan(
   topicId: string,
   override?: ModelRef | null,
   since?: string,
+  runId?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -72,6 +74,18 @@ export async function generatePagesPlan(
     if (existing) return { ok: true };
   }
 
+  // Atomic claim (live audit finding, round 6) — the since check above
+  // can't prevent two concurrent requests from both passing it before
+  // either writes; this closes that window. Only engaged from the
+  // orchestrated pipeline (runId provided) — a manual click from K's own
+  // page has no run to claim against and behaves exactly as before.
+  const taskKey = "planning:XIAOHONGSHU";
+  if (runId) {
+    const claim = await claimGenerationRunTask(runId, taskKey);
+    if (claim.outcome === "already_completed") return { ok: true };
+    if (claim.outcome === "timed_out") return { ok: false, error: claim.error };
+  }
+
   const researchPack = await getLatestResearchPack(topicId);
   if (!researchPack) return { ok: false, error: "未找到已批准的研究成果，无法生成内容。" };
   const sources = await getResearchSources(researchPack.id);
@@ -85,6 +99,7 @@ export async function generatePagesPlan(
       actor_id: user.id,
       detail: { platform: "XIAOHONGSHU", contentType: "xiaohongshu_pages", error: result.error },
     });
+    if (runId) await failGenerationRunTask(runId, taskKey, result.error);
     return { ok: false, error: result.error };
   }
 
@@ -117,6 +132,7 @@ export async function generatePagesPlan(
         ...(usageLogFailed ? { usageLogFailed: true } : {}),
       },
     });
+    if (runId) await failGenerationRunTask(runId, taskKey, result.error ?? "生成失败");
     return { ok: false, error: result.error ?? "生成失败" };
   }
 
@@ -135,7 +151,10 @@ export async function generatePagesPlan(
     version,
     created_by: user.id,
   });
-  if (insertError) return { ok: false, error: "保存失败" };
+  if (insertError) {
+    if (runId) await failGenerationRunTask(runId, taskKey, "保存失败");
+    return { ok: false, error: "保存失败" };
+  }
 
   await supabase.from("topic_activity_log").insert({
     topic_id: topicId,
@@ -143,6 +162,8 @@ export async function generatePagesPlan(
     actor_id: user.id,
     detail: { platform: "XIAOHONGSHU", contentType: "xiaohongshu_pages", version, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
   });
+
+  if (runId) await completeGenerationRunTask(runId, taskKey);
 
   revalidatePath(`/topics/${topicId}`);
   revalidatePath("/team/xiaohongshu-image-planner");

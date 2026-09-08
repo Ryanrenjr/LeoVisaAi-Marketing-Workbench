@@ -236,21 +236,25 @@ export function GenerationRunner({
     // tell "already produced in this run, don't redo it" apart from "an
     // older version from before this run started, still needs doing" —
     // see each function's own doc comment for the exact table it checks.
+    // `run.id` additionally gives each subtask an atomic claim (round 6,
+    // src/lib/generation-run-tasks.ts) — since only closes the retry-
+    // level race, the claim closes the concurrent-request-level one.
     const since = run.createdAt;
+    const runId = run.id;
     const executors: Record<StepKey, () => Promise<void>> = {
-      content: () => runContentGenerationStep(topicId, run.platforms, since),
+      content: () => runContentGenerationStep(topicId, run.platforms, since, runId),
       compliance: async () => {
-        await runComplianceStep(topicId);
+        await runComplianceStep(topicId, runId);
       },
       // Determined fresh from the DB every time (see runRevisionStep's doc
       // comment) — correct whether this is a normal run or a resume that
       // landed exactly between compliance finishing and revision starting.
       revision: async () => {
-        const { skipped } = await runRevisionStep(topicId);
+        const { skipped } = await runRevisionStep(topicId, runId);
         if (skipped) setSkippedRevision(true);
       },
-      planning: () => runImagePlanningStep(topicId, since),
-      images: () => runImageGenerationStep(topicId, run.platforms, since),
+      planning: () => runImagePlanningStep(topicId, since, runId),
+      images: () => runImageGenerationStep(topicId, run.platforms, since, runId),
     };
 
     async function runFrom(from: number) {

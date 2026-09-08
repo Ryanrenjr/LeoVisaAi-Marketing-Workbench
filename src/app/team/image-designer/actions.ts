@@ -16,6 +16,7 @@ import { writeUsageLog } from "@/lib/ai/usage-log";
 import { getEmployeeInstruction } from "@/lib/employee-instructions";
 import { appendCustomInstructions } from "@/lib/ai/prompt-addendum";
 import { saveGeneratedContentImage } from "@/lib/content-images";
+import { claimGenerationRunTask, completeGenerationRunTask, failGenerationRunTask } from "@/lib/generation-run-tasks";
 import type { ModelRef } from "@/lib/ai/providers/types";
 import type { ContentAsset } from "@/lib/types";
 
@@ -37,6 +38,7 @@ export async function generateCrossPlatformCover(
   includePortrait: boolean,
   override?: ModelRef | null,
   since?: string,
+  runId?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -58,14 +60,8 @@ export async function generateCrossPlatformCover(
 
   const other = source === xhsPost ? videoScript : xhsPost;
   const platformLabel = source === xhsPost ? "小红书" : "视频号";
-  return runCoverGeneration(
-    topic,
-    source,
-    platformLabel,
-    user.id,
-    override,
-    includePortrait,
-    other ? [other.id] : undefined,
+  return withTaskClaim(runId, "image:shared_cover", () =>
+    runCoverGeneration(topic, source, platformLabel, user.id, override, includePortrait, other ? [other.id] : undefined),
   );
 }
 
@@ -82,6 +78,7 @@ export async function generateWechatCover(
   topicId: string,
   override?: ModelRef | null,
   since?: string,
+  runId?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -102,7 +99,36 @@ export async function generateWechatCover(
     if (check.exists) return { ok: true };
   }
 
-  return runCoverGeneration(topic, source, "公众号", user.id, override, false, undefined, "1536x1024", "landscape");
+  return withTaskClaim(runId, "image:wechat_cover", () =>
+    runCoverGeneration(topic, source, "公众号", user.id, override, false, undefined, "1536x1024", "landscape"),
+  );
+}
+
+/**
+ * Atomic claim wrapper (live audit finding, round 6): the `since` check
+ * above is the existing "does a fresh image already exist" prefilter, but
+ * two concurrent requests can both pass it before either writes — this
+ * closes that window by requiring an exclusive claim on `taskKey` before
+ * `run` (the actual paid call) is allowed. Only engaged when called from
+ * the orchestrated pipeline (runId provided); a manual click from this
+ * page's own UI has no run to claim against and behaves exactly as
+ * before. See src/lib/generation-run-tasks.ts for the claim semantics.
+ */
+async function withTaskClaim(
+  runId: string | undefined,
+  taskKey: string,
+  run: () => Promise<{ ok: boolean; error?: string }>,
+): Promise<{ ok: boolean; error?: string }> {
+  if (!runId) return run();
+
+  const claim = await claimGenerationRunTask(runId, taskKey);
+  if (claim.outcome === "already_completed") return { ok: true };
+  if (claim.outcome === "timed_out") return { ok: false, error: claim.error };
+
+  const result = await run();
+  if (result.ok) await completeGenerationRunTask(runId, taskKey);
+  else await failGenerationRunTask(runId, taskKey, result.error ?? "生成失败。");
+  return result;
 }
 
 /**
@@ -236,6 +262,7 @@ export async function generateXiaohongshuCarousel(
   topicId: string,
   override?: ModelRef | null,
   since?: string,
+  runId?: string,
 ): Promise<{ ok: boolean; error?: string; generated?: number }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -283,6 +310,24 @@ export async function generateXiaohongshuCarousel(
       generated++;
       continue;
     }
+
+    // Atomic claim per page (live audit finding, round 6) — the
+    // alreadyDonePages check above is the existing since-based prefilter;
+    // this closes the race window between two concurrent requests both
+    // passing that check for the same page. See withTaskClaim's doc
+    // comment above for the same pattern applied to the cover functions.
+    const pageTaskKey = `carousel:${i + 1}`;
+    if (runId) {
+      const claim = await claimGenerationRunTask(runId, pageTaskKey);
+      if (claim.outcome === "already_completed") {
+        generated++;
+        continue;
+      }
+      if (claim.outcome === "timed_out") {
+        return { ok: false, error: claim.error, generated };
+      }
+    }
+
     const prompt = appendCustomInstructions(
       buildCarouselImagePrompt(
         topic,
@@ -298,6 +343,7 @@ export async function generateXiaohongshuCarousel(
       // idempotency check above on a retry — but a partial carousel must
       // never report ok:true, or the pipeline treats it as a finished step
       // and moves straight on to compliance/integration with pages missing.
+      if (runId) await failGenerationRunTask(runId, pageTaskKey, result.error);
       return { ok: false, error: result.error, generated };
     }
 
@@ -319,6 +365,7 @@ export async function generateXiaohongshuCarousel(
     });
 
     if (!result.ok || !result.data) {
+      if (runId) await failGenerationRunTask(runId, pageTaskKey, result.error ?? "生成失败。");
       return { ok: false, error: result.error ?? "生成失败。", generated };
     }
 
@@ -334,7 +381,11 @@ export async function generateXiaohongshuCarousel(
       imageKind: "carousel",
       pageIndex: i + 1,
     });
-    if (!saved.ok) return { ok: false, error: saved.error, generated };
+    if (!saved.ok) {
+      if (runId) await failGenerationRunTask(runId, pageTaskKey, saved.error ?? "保存失败。");
+      return { ok: false, error: saved.error, generated };
+    }
+    if (runId) await completeGenerationRunTask(runId, pageTaskKey);
     generated++;
   }
 

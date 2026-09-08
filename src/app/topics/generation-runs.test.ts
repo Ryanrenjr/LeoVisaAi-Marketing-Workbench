@@ -40,6 +40,7 @@ function chainable(result: { data?: unknown; error?: unknown }) {
     select: () => builder,
     insert: () => builder,
     update: () => builder,
+    upsert: () => builder,
     maybeSingle: () => Promise.resolve(result),
     single: () => Promise.resolve(result),
     then: (resolve: (v: unknown) => unknown, reject: (v: unknown) => unknown) => Promise.resolve(result).then(resolve, reject),
@@ -75,34 +76,53 @@ describe("generation_runs bookkeeping — fail closed on DB errors", () => {
     expect(fromMock).not.toHaveBeenCalled();
   });
 
-  describe("getOrCreateGenerationRun", () => {
-    it("throws if the existence check itself fails", async () => {
-      fromMock.mockReturnValueOnce(chainable({ data: null, error: { message: "select failed" } }));
-      await expect(getOrCreateGenerationRun("topic-1", ["VIDEO_CHANNEL"])).rejects.toThrow(/读取生成进度失败/);
+  describe("getOrCreateGenerationRun — race-safe via UNIQUE(topic_id) + upsert(ignoreDuplicates)", () => {
+    const row = {
+      id: "run-1",
+      platforms: ["VIDEO_CHANNEL"],
+      status: "running",
+      completed_steps: ["content"],
+      error: null,
+      created_at: "2026-01-01T00:00:00Z",
+    };
+
+    it("throws if the upsert itself errors", async () => {
+      fromMock.mockReturnValueOnce(chainable({ data: null, error: { message: "upsert failed" } }));
+      await expect(getOrCreateGenerationRun("topic-1", ["VIDEO_CHANNEL"])).rejects.toThrow(/无法开始生成流程/);
     });
 
-    it("returns the existing row without inserting when one is already there", async () => {
-      const row = {
-        id: "run-1",
-        platforms: ["VIDEO_CHANNEL"],
-        status: "running",
-        completed_steps: ["content"],
-        error: null,
-        created_at: "2026-01-01T00:00:00Z",
-      };
-      fromMock.mockReturnValueOnce(chainable({ data: row, error: null }));
+    it("returns the newly-created row when this request wins the race (upsert inserts a row)", async () => {
+      fromMock.mockReturnValueOnce(chainable({ data: [row], error: null }));
 
       const run = await getOrCreateGenerationRun("topic-1", ["VIDEO_CHANNEL"]);
       expect(run.id).toBe("run-1");
-      expect(fromMock).toHaveBeenCalledTimes(1);
+      expect(fromMock).toHaveBeenCalledTimes(1); // never fell back to a second read
     });
 
-    it("throws if creating a new row fails", async () => {
+    it("live audit finding (round 6): falls back to reading the existing row when another concurrent request already won — never a second insert, never an error", async () => {
       fromMock
-        .mockReturnValueOnce(chainable({ data: null, error: null }))
-        .mockReturnValueOnce(chainable({ data: null, error: { message: "insert failed" } }));
+        .mockReturnValueOnce(chainable({ data: [], error: null })) // upsert ignored — conflict, someone else already has a row
+        .mockReturnValueOnce(chainable({ data: row, error: null })); // fallback read of the winner's row
 
-      await expect(getOrCreateGenerationRun("topic-1", ["VIDEO_CHANNEL"])).rejects.toThrow(/无法开始生成流程/);
+      const run = await getOrCreateGenerationRun("topic-1", ["VIDEO_CHANNEL"]);
+      expect(run.id).toBe("run-1");
+      expect(fromMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("throws if the fallback read (after losing the upsert race) itself fails", async () => {
+      fromMock
+        .mockReturnValueOnce(chainable({ data: [], error: null }))
+        .mockReturnValueOnce(chainable({ data: null, error: { message: "select failed" } }));
+
+      await expect(getOrCreateGenerationRun("topic-1", ["VIDEO_CHANNEL"])).rejects.toThrow(/读取生成进度失败/);
+    });
+
+    it("throws (rather than returning nothing) if the fallback read somehow finds no row at all", async () => {
+      fromMock
+        .mockReturnValueOnce(chainable({ data: [], error: null }))
+        .mockReturnValueOnce(chainable({ data: null, error: null }));
+
+      await expect(getOrCreateGenerationRun("topic-1", ["VIDEO_CHANNEL"])).rejects.toThrow(/无法读取生成进度/);
     });
   });
 

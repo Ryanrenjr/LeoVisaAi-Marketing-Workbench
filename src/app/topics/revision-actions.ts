@@ -18,6 +18,7 @@ import { runContentRevisionTask, isRouterResolutionFailure } from "@/lib/ai/rout
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
 import { writeUsageLog } from "@/lib/ai/usage-log";
+import { claimGenerationRunTask, completeGenerationRunTask, failGenerationRunTask } from "@/lib/generation-run-tasks";
 import type { ModelRef, TaskType } from "@/lib/ai/providers/types";
 
 /**
@@ -30,6 +31,7 @@ import type { ModelRef, TaskType } from "@/lib/ai/providers/types";
 export async function reviseContentAsset(
   contentAssetId: string,
   override?: ModelRef | null,
+  runId?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -53,6 +55,21 @@ export async function reviseContentAsset(
   if (reviewError) return { ok: false, error: "读取合规审核结果失败。" };
   if (!latestReview || latestReview.findings.length === 0) {
     return { ok: false, error: "还没有合规审核标出的问题，无需修改。" };
+  }
+
+  // Atomic claim (live audit finding, round 6) — runRevisionStep's flagged-
+  // assets computation is naturally idempotent across sequential retries
+  // (a revised version has no review yet, so it stops looking "flagged"),
+  // but two concurrent requests can both compute the same flagged set
+  // before either produces a revision; this closes that window. Only
+  // engaged from the orchestrated pipeline (runId provided) — a manual
+  // "重新修改" click (from /topics/[id] or /team/reviser) has no run to
+  // claim against and behaves exactly as before.
+  const taskKey = `revision:${contentAssetId}`;
+  if (runId) {
+    const claim = await claimGenerationRunTask(runId, taskKey);
+    if (claim.outcome === "already_completed") return { ok: true };
+    if (claim.outcome === "timed_out") return { ok: false, error: claim.error };
   }
 
   const [topic, researchPack] = await Promise.all([
@@ -81,6 +98,7 @@ export async function reviseContentAsset(
       actor_id: user.id,
       detail: { platform: asset.platform, error: result.error },
     });
+    if (runId) await failGenerationRunTask(runId, taskKey, result.error);
     revalidatePath(`/topics/${asset.topic_id}`);
     revalidatePath("/team/reviser");
     return { ok: false, error: result.error };
@@ -110,6 +128,7 @@ export async function reviseContentAsset(
       actor_id: user.id,
       detail: { platform: asset.platform, error: result.error, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
     });
+    if (runId) await failGenerationRunTask(runId, taskKey, result.error ?? "修改失败。");
     revalidatePath(`/topics/${asset.topic_id}`);
     revalidatePath("/team/reviser");
     return { ok: false, error: result.error ?? "修改失败。" };
@@ -140,7 +159,10 @@ export async function reviseContentAsset(
     version,
     created_by: user.id,
   });
-  if (insertError) return { ok: false, error: "修改已生成，但保存失败，请重试。" };
+  if (insertError) {
+    if (runId) await failGenerationRunTask(runId, taskKey, "修改已生成，但保存失败，请重试。");
+    return { ok: false, error: "修改已生成，但保存失败，请重试。" };
+  }
 
   await supabase.from("topic_activity_log").insert({
     topic_id: asset.topic_id,
@@ -148,6 +170,8 @@ export async function reviseContentAsset(
     actor_id: user.id,
     detail: { platform: asset.platform, version, ...(usageLogFailed ? { usageLogFailed: true } : {}) },
   });
+
+  if (runId) await completeGenerationRunTask(runId, taskKey);
 
   revalidatePath(`/topics/${asset.topic_id}`);
   revalidatePath("/team/reviser");
