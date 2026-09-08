@@ -21,19 +21,20 @@ import type { ModelRef } from "@/lib/ai/providers/types";
 import type { ContentAsset } from "@/lib/types";
 
 /**
- * 小红书/视频封面 — one cover image, built from whichever draft exists
- * (小红书 preferred when both exist, since that was this feature's
- * original scope; falls back to 视频号 otherwise). ADMIN-only, same gate
- * as every other content-generation action — produces a real, billable
- * image.
+ * 视频号封面 — one cover image, built only from the latest 视频号口播稿
+ * (`video_script`). ADMIN-only, same gate as every other content-
+ * generation action — produces a real, billable image.
  *
- * Saved under BOTH platforms' content_asset_id when both drafts exist
- * (live bug report: it used to be saved only under whichever platform was
- * picked as `source`, so the OTHER platform's card always showed "封面：
- * 待生成" even though a shared cover had genuinely been generated) — see
- * `additionalAssetIds` on `saveGeneratedContentImage`.
+ * Round 9 P0 fix: this used to be `generateCrossPlatformCover`, sourced
+ * from whichever of 小红书/视频号 existed (小红书 preferred), and saved
+ * under BOTH platforms' content_asset_id (`additionalAssetIds`) so a
+ * single generated image represented both platforms' cover. That shared-
+ * cover product assumption no longer holds — 小红书's real 首图 is P1 of
+ * its own carousel (`generateXiaohongshuCarousel`), not a separately
+ * generated cover, so 小红书 never needs a cover image at all any more.
+ * This function now only ever produces a 视频号 cover.
  */
-export async function generateCrossPlatformCover(
+export async function generateVideoCover(
   topicId: string,
   includePortrait: boolean,
   override?: ModelRef | null,
@@ -47,10 +48,8 @@ export async function generateCrossPlatformCover(
   if (!topic) return { ok: false, error: "未找到选题。" };
 
   const assets = await getContentAssets(topicId);
-  const xhsPost = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_post");
-  const videoScript = getLatestForLineage(assets, "VIDEO_CHANNEL", "video_script");
-  const source = xhsPost ?? videoScript;
-  if (!source) return { ok: false, error: "请先生成小红书文字或视频口播稿，再生成封面。" };
+  const source = getLatestForLineage(assets, "VIDEO_CHANNEL", "video_script");
+  if (!source) return { ok: false, error: "请先生成视频口播稿，再生成封面。" };
 
   if (since) {
     const check = await hasExistingImage(source.id, "cover", since);
@@ -58,10 +57,8 @@ export async function generateCrossPlatformCover(
     if (check.exists) return { ok: true };
   }
 
-  const other = source === xhsPost ? videoScript : xhsPost;
-  const platformLabel = source === xhsPost ? "小红书" : "视频号";
-  return withTaskClaim(runId, "image:shared_cover", () =>
-    runCoverGeneration(topic, source, platformLabel, user.id, override, includePortrait, other ? [other.id] : undefined),
+  return withTaskClaim(runId, "image:video_cover", () =>
+    runCoverGeneration(topic, source, "视频号", user.id, override, includePortrait),
   );
 }
 
@@ -100,7 +97,7 @@ export async function generateWechatCover(
   }
 
   return withTaskClaim(runId, "image:wechat_cover", () =>
-    runCoverGeneration(topic, source, "公众号", user.id, override, false, undefined, "1536x1024", "landscape"),
+    runCoverGeneration(topic, source, "公众号", user.id, override, false, "1536x1024", "landscape"),
   );
 }
 
@@ -170,7 +167,6 @@ async function runCoverGeneration(
   userId: string,
   override?: ModelRef | null,
   includePortrait = false,
-  additionalAssetIds?: string[],
   size: "1024x1024" | "1024x1536" | "1536x1024" = "1024x1536",
   orientation: "portrait" | "landscape" = "portrait",
 ): Promise<{ ok: boolean; error?: string }> {
@@ -234,7 +230,6 @@ async function runCoverGeneration(
   const saved = await saveGeneratedContentImage(supabase, {
     topicId: topic.id,
     contentAssetId: source.id,
-    additionalAssetIds,
     prompt,
     imageBase64,
     provider: result.provider,

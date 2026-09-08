@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildWechatBrandFooter, deriveTitleAndContent, mergeEditIntoStructuredContent } from "./content-mapping";
+import {
+  buildPublishFacingTextForCompliance,
+  buildWechatBrandFooter,
+  deriveTitleAndContent,
+  mergeEditIntoStructuredContent,
+} from "./content-mapping";
 
 describe("deriveTitleAndContent", () => {
   it("uses title/full_script for VIDEO_CHANNEL", () => {
@@ -54,6 +59,111 @@ describe("deriveTitleAndContent", () => {
       closing_note: "结尾话术",
     });
     expect(result).toEqual({ title: "标题", content: "正文内容\n\n结尾话术" });
+  });
+});
+
+/**
+ * Round 9 P0 fix: runComplianceReview used to pass only `asset.content`
+ * (the plain body column) to the compliance model, which for
+ * VIDEO_CHANNEL and xiaohongshu_post silently skipped fields a reader
+ * genuinely sees on the published post/video (publish_title,
+ * publish_caption, cover_highlights, title_options, keywords, ...).
+ */
+describe("buildPublishFacingTextForCompliance", () => {
+  it("includes publish_title/publish_caption/full_script/cover_text/cover_highlights for video_script", () => {
+    const text = buildPublishFacingTextForCompliance({
+      content_type: "video_script",
+      content: "unused",
+      structured_content: {
+        publish_title: "发布标题",
+        publish_caption: "发布内容",
+        full_script: "口播稿正文",
+        cover_text: "封面文字",
+        cover_highlights: ["ILR/ILE：2年", "第二条"],
+        source_references: ["S1"],
+        expert_review_notes: [{ claim: "x", reason: "research_gap", note: "y" }],
+      },
+    });
+    expect(text).toContain("发布标题");
+    expect(text).toContain("发布内容");
+    expect(text).toContain("口播稿正文");
+    expect(text).toContain("封面文字");
+    expect(text).toContain("ILR/ILE：2年");
+    expect(text).not.toContain("S1");
+  });
+
+  it("includes title_options/cover_title/caption/keywords for xiaohongshu_post", () => {
+    const text = buildPublishFacingTextForCompliance({
+      content_type: "xiaohongshu_post",
+      content: "unused",
+      structured_content: {
+        title_options: ["标题一", "标题二"],
+        cover_title: "封面标题",
+        caption: "发布文案",
+        keywords: ["关键词一"],
+      },
+    });
+    expect(text).toContain("标题一");
+    expect(text).toContain("标题二");
+    expect(text).toContain("封面标题");
+    expect(text).toContain("发布文案");
+    expect(text).toContain("关键词一");
+  });
+
+  it("includes every page for xiaohongshu_pages", () => {
+    const text = buildPublishFacingTextForCompliance({
+      content_type: "xiaohongshu_pages",
+      content: "unused",
+      structured_content: { pages: ["第一页文字", "第二页文字"] },
+    });
+    expect(text).toContain("第一页文字");
+    expect(text).toContain("第二页文字");
+  });
+
+  it("includes title/full_article/closing_note/cover_title/cover_subtitle/share_caption for wechat_article", () => {
+    const text = buildPublishFacingTextForCompliance({
+      content_type: "wechat_article",
+      content: "unused",
+      structured_content: {
+        title: "文章标题",
+        full_article: "正文内容",
+        closing_note: "结尾话术",
+        cover_title: "封面主标题",
+        cover_subtitle: "封面副标题",
+        share_caption: "分享文案",
+      },
+    });
+    expect(text).toContain("文章标题");
+    expect(text).toContain("正文内容");
+    expect(text).toContain("结尾话术");
+    expect(text).toContain("封面主标题");
+    expect(text).toContain("封面副标题");
+    expect(text).toContain("分享文案");
+  });
+
+  it("falls back to asset.content for a legacy content_type it doesn't recognize", () => {
+    const text = buildPublishFacingTextForCompliance({
+      content_type: "wechat_full_article",
+      content: "旧版正文",
+      structured_content: { title: "旧标题", full_article: "旧版正文" },
+    });
+    expect(text).toBe("旧版正文");
+  });
+
+  it("never includes source_references or expert_review_notes text", () => {
+    const text = buildPublishFacingTextForCompliance({
+      content_type: "wechat_article",
+      content: "unused",
+      structured_content: {
+        title: "标题",
+        full_article: "正文",
+        source_references: ["source-id-should-not-leak"],
+        expert_review_notes: [{ claim: "note-should-not-leak", reason: "research_gap", note: "detail-should-not-leak" }],
+      },
+    });
+    expect(text).not.toContain("source-id-should-not-leak");
+    expect(text).not.toContain("note-should-not-leak");
+    expect(text).not.toContain("detail-should-not-leak");
   });
 });
 

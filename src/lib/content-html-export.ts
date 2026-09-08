@@ -24,20 +24,22 @@ function renderInline(escapedLine: string): string {
   return escapedLine.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 }
 
-export function renderContentAsHtml(title: string, content: string): string {
+function renderBlocks(content: string): string {
   const blocks = content
     .split(/\n{2,}/)
     .map((block) => block.trim())
     .filter((block) => block.length > 0);
 
-  const bodyHtml = blocks
+  return blocks
     .map((block) => {
       const lines = block.split("\n").map((line) => renderInline(escapeHtml(line)));
       const tag = HEADING_RE.test(block) ? "h2" : "p";
       return `<${tag}>${lines.join("<br>")}</${tag}>`;
     })
     .join("\n");
+}
 
+function wrapHtmlPage(title: string, bodyHtml: string): string {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -66,4 +68,25 @@ ${bodyHtml}
 </body>
 </html>
 `;
+}
+
+export function renderContentAsHtml(title: string, content: string): string {
+  return wrapHtmlPage(title, renderBlocks(content));
+}
+
+/**
+ * Same page shell as renderContentAsHtml, but for a final package that
+ * needs several explicitly-labeled sections rather than one flowing body
+ * — e.g. 视频号内容.html (发布标题/发布内容/口播稿) and 小红书发布文案.html
+ * (发布标题/发布内容). Each section renders as an `<h2>` heading followed
+ * by its own body's paragraphs (same block-splitting as renderBlocks); a
+ * section with an empty body is skipped rather than rendering an empty
+ * heading.
+ */
+export function renderSectionsAsHtml(title: string, sections: { heading: string; body: string }[]): string {
+  const bodyHtml = sections
+    .filter((s) => s.body.trim().length > 0)
+    .map((s) => `<h2>${escapeHtml(s.heading)}</h2>\n${renderBlocks(s.body)}`)
+    .join("\n");
+  return wrapHtmlPage(title, bodyHtml);
 }

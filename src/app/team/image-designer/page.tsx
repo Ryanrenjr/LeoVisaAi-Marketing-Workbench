@@ -49,14 +49,13 @@ async function TopicRow({
     .filter((img) => img.image_kind === "carousel")
     .sort((a, b) => (a.page_index ?? 0) - (b.page_index ?? 0));
 
-  const xhsPost = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_post");
   const xhsPagesPlan = getLatestForLineage(assets, "XIAOHONGSHU", "xiaohongshu_pages");
   const videoScript = getLatestForLineage(assets, "VIDEO_CHANNEL", "video_script");
   const wechatArticle = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_article");
   const wechatOutline = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_outline");
   const wechatFull = getLatestForLineage(assets, "WECHAT_OFFICIAL_ACCOUNT", "wechat_full_article");
 
-  const canCover = Boolean(xhsPost || videoScript);
+  const canCover = Boolean(videoScript);
   const canWechatCover = Boolean(wechatArticle || wechatOutline || wechatFull);
   const canCarousel = Boolean(xhsPagesPlan);
 
@@ -88,7 +87,7 @@ async function TopicRow({
               resolutionError={modelOptions.resolutionError}
             />
           ) : (
-            <DisabledActionRow label="生成小红书/视频封面" reason="先生成小红书文案或视频口播稿" />
+            <DisabledActionRow label="生成视频封面" reason="先生成视频口播稿" />
           )}
           {canWechatCover ? (
             <GenerateAction
@@ -159,7 +158,7 @@ export default async function ImageDesignerPage() {
         avatarId="image-designer"
         letter={employee.letter}
         name={employeeName}
-        subtitle="小红书/视频封面、公众号封面、小红书图文（P1-P6）——根据已经写好的文字或小红书图文规划员的规划生成配图。"
+        subtitle="视频封面、公众号封面、小红书图文（P1-Pn）——根据已经写好的文字或小红书图文规划员的规划生成配图。"
       />
 
       {demo && (

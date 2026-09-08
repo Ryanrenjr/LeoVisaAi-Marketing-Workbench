@@ -44,6 +44,58 @@ export function buildWechatBrandFooter(brand: Pick<BrandConfig, "wechatFooter">)
   return `最后核验：${today}\n\n${brand.wechatFooter}`;
 }
 
+function asText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function asTextArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+}
+
+/**
+ * What a compliance reviewer must actually see — every field that ends up
+ * genuinely public when this asset is published, and nothing else. Round 9
+ * P0 fix: `runComplianceReview` used to pass only `asset.content` (the
+ * plain body column) to the model, which for VIDEO_CHANNEL and
+ * xiaohongshu_post silently skipped `publish_title`/`publish_caption`/
+ * `cover_highlights` — fields a viewer genuinely sees on the published
+ * post/video, just never folded into the `content` column. Keyed by
+ * `content_type`, not `platform`, because XIAOHONGSHU has two lineages
+ * with completely different fields (xiaohongshu_post vs xiaohongshu_pages).
+ * Deliberately excludes `source_references`/`expert_review_notes` and any
+ * other internal metadata — those are never shown to a reader. Falls back
+ * to `asset.content` for a content_type this function doesn't recognize
+ * (the legacy wechat_outline/wechat_full_article shapes, which the
+ * automated pipeline never produces but a manual re-review from
+ * /team/compliance could still reach), so nothing regresses to reviewing
+ * no text at all.
+ */
+export function buildPublishFacingTextForCompliance(asset: {
+  content_type: ContentType;
+  content: string;
+  structured_content: Record<string, unknown> | null;
+}): string {
+  const c = asset.structured_content ?? {};
+  let parts: string[];
+  switch (asset.content_type) {
+    case "video_script":
+      parts = [asText(c.publish_title), asText(c.publish_caption), asText(c.full_script), asText(c.cover_text), ...asTextArray(c.cover_highlights)];
+      break;
+    case "xiaohongshu_post":
+      parts = [...asTextArray(c.title_options), asText(c.cover_title), asText(c.caption), ...asTextArray(c.keywords)];
+      break;
+    case "xiaohongshu_pages":
+      parts = [...asTextArray(c.pages)];
+      break;
+    case "wechat_article":
+      parts = [asText(c.title), asText(c.full_article), asText(c.closing_note), asText(c.cover_title), asText(c.cover_subtitle), asText(c.share_caption)];
+      break;
+    default:
+      return asset.content;
+  }
+  return parts.filter((p) => p.length > 0).join("\n\n");
+}
+
 /** Derives the plain `title`/`content` columns from a freshly-generated structured content object. */
 export function deriveTitleAndContent(
   platform: ContentPlatform,

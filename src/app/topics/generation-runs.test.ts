@@ -7,7 +7,7 @@ vi.mock("./content-actions", () => ({ generateContent: vi.fn() }));
 vi.mock("./research-actions", () => ({ approveResearchOnly: vi.fn() }));
 vi.mock("../team/xiaohongshu-image-planner/actions", () => ({ generatePagesPlan: vi.fn() }));
 vi.mock("../team/image-designer/actions", () => ({
-  generateCrossPlatformCover: vi.fn(),
+  generateVideoCover: vi.fn(),
   generateWechatCover: vi.fn(),
   generateXiaohongshuCarousel: vi.fn(),
 }));

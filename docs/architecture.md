@@ -34,10 +34,11 @@
   See "AI architecture" below, `docs/model-router.md`, and
   `docs/search-router.md`.
 - **The one-click generation pipeline** (`GenerationRunner`, mounted on
-  the home page): content → compliance → revision (if flagged) → final
-  verification (if revised) → 小红书图文规划 (if selected) → images →
-  manual 打包下载, resumable across refreshes/crashes and safe against two
-  concurrent requests double-billing the same AI call. Backed by
+  the home page): content (小红书图文规划, if selected, is part of this
+  step — see below) → compliance → revision (if flagged) → final
+  verification (if revised) → images → manual 打包下载, resumable across
+  refreshes/crashes and safe against two concurrent requests double-billing
+  the same AI call. Backed by
   `generation_runs` (one row per topic, tracks which steps completed) and
   `generation_run_tasks` (one row per billable subtask, an atomic Postgres
   `claim_generation_run_task()` function is the actual mutual-exclusion
@@ -68,7 +69,7 @@ standing up and operating a separate API service for no benefit.
 src/
   app/                    route segments (App Router)
     layout.tsx            root layout: minimal chrome, nav
-    page.tsx              home page — the numbered 9-step employee rail
+    page.tsx              home page — the numbered 8-step employee rail
                            (src/components/pipeline-flow.tsx) plus
                            GenerationRunner when ?generating=<topicId> is
                            present
@@ -86,9 +87,9 @@ src/
       content-actions.ts     generate/regenerate/edit content drafts, full article
       pipeline-actions.ts     the one-click generation pipeline's granular
                                steps (content/compliance/revision/final
-                               verification/planning/images) plus
-                               generation_runs bookkeeping — what
-                               GenerationRunner actually calls
+                               verification/images) plus generation_runs
+                               bookkeeping — what GenerationRunner actually
+                               calls
       compliance-actions.ts / revision-actions.ts   Employee G/H, each
                                subtask wrapped in an atomic claim (see
                                src/lib/generation-run-tasks.ts) when

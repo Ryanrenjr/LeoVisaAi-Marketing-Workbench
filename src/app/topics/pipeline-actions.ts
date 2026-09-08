@@ -14,7 +14,7 @@ import { reviseContentAsset } from "./revision-actions";
 import { approveResearchOnly } from "./research-actions";
 import { generatePagesPlan } from "../team/xiaohongshu-image-planner/actions";
 import {
-  generateCrossPlatformCover,
+  generateVideoCover,
   generateWechatCover,
   generateXiaohongshuCarousel,
 } from "../team/image-designer/actions";
@@ -22,26 +22,28 @@ import { getLatestLeoPortrait } from "@/lib/leo-portraits";
 import type { ContentAsset, ContentPlatform, ContentType } from "@/lib/types";
 
 /**
- * "选题确认之后，直接从内容到最后一步整合" + "工作的时候要加上百分比，图文
- * 规划也要加进去，生图也要加上，封面所有的" (live user instructions) — the
- * five steps below (content → 图文规划 → 生图 → 合规审核 → 校对) are the
- * granular building blocks a CLIENT component
+ * "选题确认之后，直接从内容到最后一步整合" + "工作的时候要加上百分比" (live
+ * user instructions) — the steps below (content → 合规审核 → 校对 →
+ * 终审复核 → 生图) are the granular building blocks a CLIENT component
  * (`src/components/generation-runner.tsx`, mounted on the home page)
  * calls one at a time via `useTransition`, so it can show which digital
  * employee is working, the full step sequence, and a live-ish percentage
  * between steps. Splitting these apart (rather than one big server-side
  * chain) is the whole point: a plain `<form action>` has no way to report
- * progress mid-flight, but a client component awaiting five separate
+ * progress mid-flight, but a client component awaiting several separate
  * calls can update state after each one completes.
+ *
+ * Round 9 P0 fix: 小红书图文规划 (`xiaohongshu_pages`) used to be its own
+ * pipeline step between final verification and images — it is now part of
+ * the content step (see runContentGenerationStep), so the P1–Pn page text
+ * genuinely goes through compliance/revision/final verification like any
+ * other formal content, instead of skipping that chain entirely.
  */
 
-const PLATFORM_CONTENT_TYPE: Record<
-  ContentPlatform,
-  Extract<ContentType, "video_script" | "xiaohongshu_post" | "wechat_article">
-> = {
-  VIDEO_CHANNEL: "video_script",
-  XIAOHONGSHU: "xiaohongshu_post",
-  WECHAT_OFFICIAL_ACCOUNT: "wechat_article",
+const PLATFORM_CONTENT_TYPES: Record<ContentPlatform, ContentType[]> = {
+  VIDEO_CHANNEL: ["video_script"],
+  XIAOHONGSHU: ["xiaohongshu_post", "xiaohongshu_pages"],
+  WECHAT_OFFICIAL_ACCOUNT: ["wechat_article"],
 };
 
 /**
@@ -52,44 +54,87 @@ const PLATFORM_CONTENT_TYPE: Record<
  * selected for this run could still get reviewed, revised, or blocked on.
  * `platforms` should always be `run.platforms` (see generation-runner.tsx),
  * the one source of truth for what this generation run actually selected.
+ *
+ * XIAOHONGSHU maps to TWO lineages, not one (round 9 P0 fix): the
+ * `xiaohongshu_pages` P1–Pn plan used to be produced by a separate
+ * "planning" pipeline step positioned AFTER this function's callers
+ * (compliance/revision/final verification), which meant the actual P1–Pn
+ * page text was never reviewed, never eligible for revision, and never
+ * re-checked by final verification — only the title/caption
+ * (`xiaohongshu_post`) went through that chain. Both lineages are now
+ * "formal content" from this function's point of view, so every caller
+ * below automatically covers both without any change to their own logic.
  */
 async function latestGeneratedAssets(topicId: string, platforms: ContentPlatform[]): Promise<ContentAsset[]> {
   const assets = await getContentAssets(topicId);
   return platforms
-    .map((platform) => getLatestForLineage(assets, platform, PLATFORM_CONTENT_TYPE[platform]))
+    .flatMap((platform) => PLATFORM_CONTENT_TYPES[platform].map((contentType) => getLatestForLineage(assets, platform, contentType)))
     .filter((asset): asset is ContentAsset => asset !== null);
 }
 
-/** Step 1 — C/D/E generate the selected platforms' text at once (existing "生成内容" batch, now scoped to whichever platforms the operator picked — see PlatformChoiceRadios). `since` (this run's created_at) makes a retry skip platforms already generated in this run — see generateContent's doc comment. `runId` additionally gives each platform an atomic claim (round 6) so two concurrent requests can't both call the AI for the same platform. */
+/**
+ * Step 1 — C/D/F generate the selected platforms' title/caption text
+ * (existing "生成内容" batch, now scoped to whichever platforms the
+ * operator picked — see PlatformChoiceRadios), and — when XIAOHONGSHU is
+ * among the selected platforms — K writes the 小红书图文 P1–Pn page plan
+ * as part of this same logical step (round 9 P0 fix: this used to be a
+ * separate "planning" step positioned after compliance/revision/final
+ * verification, which meant the P1–Pn page text skipped that entire
+ * review chain — see latestGeneratedAssets's doc comment). The two run in
+ * parallel; either one failing stops this step, same "isolate then fail
+ * closed" pattern as runImageGenerationStep below. `since` (this run's
+ * created_at) makes a retry skip whichever sub-task already succeeded in
+ * this run — see generateContent's/generatePagesPlan's own doc comments.
+ * `runId` additionally gives each an atomic claim (round 6) so two
+ * concurrent requests can't both call the AI for the same sub-task.
+ */
 export async function runContentGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string, runId?: string): Promise<void> {
-  await generateContent(topicId, platforms, since, runId);
-}
+  const tasks: { label: string; promise: Promise<void> }[] = [
+    { label: "文案", promise: generateContent(topicId, platforms, since, runId) },
+  ];
+  if (platforms.includes("XIAOHONGSHU")) {
+    tasks.push({
+      label: "小红书图文规划",
+      promise: generatePagesPlan(topicId, undefined, since, runId).then((result) => {
+        if (!result.ok) throw new Error(result.error ?? "图文规划生成失败。");
+      }),
+    });
+  }
 
-/** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. Only ever called when 小红书 is among the selected platforms (see generation-runner.tsx's buildSteps). `since` (this run's created_at) makes a retry skip planning if this run already produced a plan; `runId` additionally gives it an atomic claim (round 6) — see generatePagesPlan's doc comment. */
-export async function runImagePlanningStep(topicId: string, since?: string, runId?: string): Promise<void> {
-  const result = await generatePagesPlan(topicId, undefined, since, runId);
-  if (!result.ok) throw new Error(result.error ?? "图文规划生成失败。");
+  const settled = await Promise.allSettled(tasks.map((t) => t.promise));
+  const failures = settled
+    .map((result, i) => ({ label: tasks[i].label, result }))
+    .filter(({ result }) => result.status === "rejected");
+  if (failures.length > 0) {
+    const detail = failures
+      .map(({ label, result }) => `${label}：${(result as PromiseRejectedResult).reason instanceof Error ? (result as PromiseRejectedResult).reason.message : String((result as PromiseRejectedResult).reason)}`)
+      .join("；");
+    throw new Error(`内容生成失败：${detail}`);
+  }
 }
 
 /**
- * Step 3 — F generates whichever images the selected platforms actually
- * need: the shared 视频号/小红书 cover (only if either of those two is
- * selected), the 公众号 cover (only if selected), and the 小红书图文
- * carousel (only if 小红书 selected — needs step 2's plan). Runs in
- * parallel — independent images, same "isolate the failure" principle as
- * every other step: one image failing never blocks the others. Includes
- * Leo's portrait in the shared cover automatically when one has been
- * uploaded (live bug report: this automated chain used to hardcode
- * `includePortrait: false`, silently skipping it every run even when a
- * portrait existed — manual runs from 图片设理员's own page still default
- * to no portrait, since there it's a deliberate per-click choice with its
- * own checkbox).
+ * Step 2 — E generates whichever images the selected platforms actually
+ * need: an independent 视频号 cover (only if VIDEO_CHANNEL selected,
+ * sourced only from video_script — see generateVideoCover's doc comment),
+ * the 公众号 cover (only if selected), and the 小红书图文 carousel (only
+ * if 小红书 selected — needs step 1's plan). Runs in parallel —
+ * independent images, same "isolate the failure" principle as every other
+ * step: one image failing never blocks the others. Round 9 P0 fix: 小红书
+ * no longer gets any cover here — P1 of the carousel IS its 首图, and the
+ * previously-shared 视频号/小红书 cover no longer exists (see
+ * generateVideoCover's doc comment). Includes Leo's portrait in the video
+ * cover automatically when one has been uploaded (live bug report: this
+ * automated chain used to hardcode `includePortrait: false`, silently
+ * skipping it every run even when a portrait existed — manual runs from
+ * 图片设理员's own page still default to no portrait, since there it's a
+ * deliberate per-click choice with its own checkbox).
  */
 export async function runImageGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string, runId?: string): Promise<void> {
   const portrait = await getLatestLeoPortrait();
   const tasks: { label: string; promise: Promise<{ ok: boolean; error?: string }> }[] = [];
-  if (platforms.includes("VIDEO_CHANNEL") || platforms.includes("XIAOHONGSHU")) {
-    tasks.push({ label: "封面", promise: generateCrossPlatformCover(topicId, portrait !== null, undefined, since, runId) });
+  if (platforms.includes("VIDEO_CHANNEL")) {
+    tasks.push({ label: "视频封面", promise: generateVideoCover(topicId, portrait !== null, undefined, since, runId) });
   }
   if (platforms.includes("WECHAT_OFFICIAL_ACCOUNT")) {
     tasks.push({ label: "公众号封面", promise: generateWechatCover(topicId, undefined, since, runId) });

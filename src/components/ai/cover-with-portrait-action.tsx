@@ -2,15 +2,17 @@
 
 import { useState } from "react";
 import { GenerateAction, type OverridableModel } from "./generate-action";
-import { generateCrossPlatformCover } from "@/app/team/image-designer/actions";
+import { generateVideoCover } from "@/app/team/image-designer/actions";
 import type { AIProviderId } from "@/lib/ai/providers/types";
 
 /**
- * 小红书/视频封面 generation, plus the "带李尔王特写" toggle — the one place
- * a generation button needs an extra per-click option beyond the shared
+ * 视频封面 generation, plus the "带李尔王特写" toggle — the one place a
+ * generation button needs an extra per-click option beyond the shared
  * model override GenerateAction already handles, so this wraps it rather
  * than growing GenerateAction's props for every other call site too.
- * Defaults to on: 小红书/视频封面一般都需要带特写 (live user instruction).
+ * Defaults to on: 视频封面一般都需要带特写 (live user instruction). Round 9
+ * P0 fix: this used to also cover 小红书's (shared) cover — 小红书 no
+ * longer generates any cover at all, so this is video-only now.
  */
 export function CoverWithPortraitAction({
   topicId,
@@ -40,9 +42,9 @@ export function CoverWithPortraitAction({
       </label>
       <GenerateAction
         action={async (override: { provider: AIProviderId; modelId: string } | null) => {
-          return generateCrossPlatformCover(topicId, includePortrait, override);
+          return generateVideoCover(topicId, includePortrait, override);
         }}
-        label="生成小红书/视频封面"
+        label="生成视频封面"
         variant="secondary"
         taskType="IMAGE_GENERATION"
         models={models}

@@ -34,11 +34,11 @@ import type { ModelRef } from "@/lib/ai/providers/types";
  * of D's title/caption draft.
  *
  * `since` (a generation_runs.created_at timestamp — same convention as
- * generateContent/generateCrossPlatformCover/etc.) makes a retry
- * idempotent: if this run already produced an xiaohongshu_pages version
- * (e.g. planning succeeded but markGenerationRunStep then failed, and the
- * whole step got retried), skip calling the AI again rather than
- * re-billing it. The existence check itself is fail-closed (live audit
+ * generateContent/generateVideoCover/etc.) makes a retry idempotent: if
+ * this run already produced an xiaohongshu_pages version (e.g. this
+ * succeeded but markGenerationRunStep then failed, and the whole content
+ * step got retried), skip calling the AI again rather than re-billing it.
+ * The existence check itself is fail-closed (live audit
  * finding, round 5) — a DB error while checking is NOT the same as
  * "nothing exists yet", and must stop here rather than fall through to
  * another paid call.
@@ -79,7 +79,7 @@ export async function generatePagesPlan(
   // either writes; this closes that window. Only engaged from the
   // orchestrated pipeline (runId provided) — a manual click from K's own
   // page has no run to claim against and behaves exactly as before.
-  const taskKey = "planning:XIAOHONGSHU";
+  const taskKey = "content:XIAOHONGSHU:pages";
   if (runId) {
     const claim = await claimGenerationRunTask(runId, taskKey);
     if (claim.outcome === "already_completed") return { ok: true };

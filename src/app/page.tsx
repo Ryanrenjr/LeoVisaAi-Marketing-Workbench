@@ -1,7 +1,7 @@
 import { isDemoMode } from "@/lib/topics";
 import { timeBasedGreeting, resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { getEmployeeNames } from "@/lib/employee-names";
-import { LaneCard, LaneGroup, StageRow } from "@/components/pipeline-flow";
+import { LaneCard, LaneCardPair, LaneGroup, StageRow } from "@/components/pipeline-flow";
 import { GenerationRunner } from "@/components/generation-runner";
 import Link from "next/link";
 import type { ContentPlatform } from "@/lib/types";
@@ -51,7 +51,7 @@ async function BossHome({
       )}
 
       <section className="flex flex-col gap-1">
-        <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 9 步</h2>
+        <h2 className="mb-3 text-sm font-medium text-[var(--muted)]">工作流程 · 共 8 步</h2>
 
         <StageRow
           avatarId="planner"
@@ -75,10 +75,17 @@ async function BossHome({
             name={resolveEmployeeDisplayName("video-editor", employeeNames)}
             href="/team/video-editor"
           />
-          <LaneCard
-            avatarId="xiaohongshu-editor"
-            name={resolveEmployeeDisplayName("xiaohongshu-editor", employeeNames)}
-            href="/team/xiaohongshu-editor"
+          <LaneCardPair
+            primary={{
+              avatarId: "xiaohongshu-editor",
+              name: resolveEmployeeDisplayName("xiaohongshu-editor", employeeNames),
+              href: "/team/xiaohongshu-editor",
+            }}
+            secondary={{
+              avatarId: "xiaohongshu-image-planner",
+              name: resolveEmployeeDisplayName("xiaohongshu-image-planner", employeeNames),
+              href: "/team/xiaohongshu-image-planner",
+            }}
           />
           <LaneCard
             avatarId="wechat-editor"
@@ -114,17 +121,8 @@ async function BossHome({
           conditionalText="改过才复核"
         />
         <StageRow
-          avatarId="xiaohongshu-image-planner"
-          step={7}
-          name={resolveEmployeeDisplayName("xiaohongshu-image-planner", employeeNames)}
-          actionLabel="查看规划"
-          href="/team/xiaohongshu-image-planner"
-          kind="conditional"
-          conditionalText="仅选小红书时执行"
-        />
-        <StageRow
           avatarId="image-designer"
-          step={8}
+          step={7}
           name={resolveEmployeeDisplayName("image-designer", employeeNames)}
           actionLabel="查看配图"
           href="/team/image-designer"
@@ -132,7 +130,7 @@ async function BossHome({
         />
         <StageRow
           avatarId="integrator"
-          step={9}
+          step={8}
           name={resolveEmployeeDisplayName("integrator", employeeNames)}
           actionLabel="查看整合"
           href="/team/integrator"

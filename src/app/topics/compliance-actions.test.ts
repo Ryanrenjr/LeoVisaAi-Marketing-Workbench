@@ -55,7 +55,15 @@ const RESOLVED_RESULT = {
 describe("runComplianceReview — atomic claim wiring (runId provided)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getContentAssetByIdMock.mockResolvedValue({ id: "asset-1", topic_id: "topic-1", platform: "VIDEO_CHANNEL", content: "text", research_pack_id: "pack-1" });
+    getContentAssetByIdMock.mockResolvedValue({
+      id: "asset-1",
+      topic_id: "topic-1",
+      platform: "VIDEO_CHANNEL",
+      content_type: "video_script",
+      content: "text",
+      structured_content: {},
+      research_pack_id: "pack-1",
+    });
     getResearchPackByIdMock.mockResolvedValue({ id: "pack-1" });
   });
 
@@ -97,5 +105,34 @@ describe("runComplianceReview — atomic claim wiring (runId provided)", () => {
 
     expect(result).toEqual({ ok: true });
     expect(claimGenerationRunTaskMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Round 9 P0 fix: this used to pass the plain `asset.content` column to
+   * the compliance model, which for VIDEO_CHANNEL/xiaohongshu_post skips
+   * publish_title/publish_caption/cover_highlights/etc — fields a viewer
+   * genuinely sees on the published post/video. `asset.content` is left
+   * empty here on purpose so this test fails if the raw column is still
+   * what's being reviewed.
+   */
+  it("reviews the publish-facing structured fields, not the raw asset.content column", async () => {
+    getContentAssetByIdMock.mockResolvedValue({
+      id: "asset-1",
+      topic_id: "topic-1",
+      platform: "VIDEO_CHANNEL",
+      content_type: "video_script",
+      content: "",
+      structured_content: { publish_title: "发布标题探针", publish_caption: "发布内容", full_script: "口播稿" },
+      research_pack_id: "pack-1",
+    });
+    runComplianceTaskMock.mockResolvedValue(RESOLVED_RESULT);
+
+    await runComplianceReview("asset-1");
+
+    expect(runComplianceTaskMock).toHaveBeenCalledWith(
+      expect.objectContaining({ textForReview: expect.stringContaining("发布标题探针") }),
+      expect.anything(),
+      undefined,
+    );
   });
 });

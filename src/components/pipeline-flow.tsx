@@ -163,7 +163,23 @@ export function LaneGroup({ step, label, children }: { step: number; label: stri
         <p className="text-sm text-[var(--muted)]">{label}</p>
       </div>
       <BranchBar count={count} edge="top" />
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">{children}</div>
+      {/* BranchBar's ticks assume exactly `count` equal-width columns
+          spanning the full row (see its own flex-1 math) — this grid must
+          render that same column count on desktop, or the ticks drift off
+          each card's real center. A hardcoded `md:grid-cols-4` here (left
+          over from when there were 4 separate lane cards) is exactly what
+          broke once 小红书 collapsed to one paired lane, leaving only 3 — a
+          phantom 4th column pushed every card left of where the ticks
+          pointed. Driving the desktop column count from `count` itself via
+          a CSS variable keeps the two permanently in sync, whatever `count`
+          is; `grid-cols-2` below `md` is unchanged (cards wrap 2-per-row on
+          narrow screens, same as before). */}
+      <div
+        className="grid grid-cols-2 gap-3 md:grid-cols-[var(--lane-cols)]"
+        style={{ "--lane-cols": `repeat(${count}, minmax(0, 1fr))` } as React.CSSProperties}
+      >
+        {children}
+      </div>
       <BranchBar count={count} edge="bottom" />
     </div>
   );
@@ -192,6 +208,51 @@ export function LaneCard({
         />
       </div>
       <p className="w-full truncate text-sm font-medium">{name}</p>
+    </Link>
+  );
+}
+
+/**
+ * One lane, two employees — round 9 P0 fix: 小红书图文规划 (K) is no longer
+ * its own workflow stage, it's an internal sub-task of the "内容生成" step
+ * alongside 小红书标题文案 (D). Both still occupy exactly one lane in the
+ * LaneGroup (not two), reflecting "one content product, produced by two
+ * digital employees" rather than exposing them as separate pipeline steps.
+ * Two independent hrefs since both employees still have their own page.
+ */
+export function LaneCardPair({
+  primary,
+  secondary,
+}: {
+  primary: { avatarId: string; name: string; href: string };
+  secondary: { avatarId: string; name: string; href: string };
+}) {
+  return (
+    <div className="card flex flex-1 flex-col items-center justify-center gap-2 px-2 py-4 text-center">
+      <div className="flex items-start justify-center gap-1.5">
+        <LaneCardPairMember employee={primary} />
+        <span className="mt-4 shrink-0 text-xs font-semibold text-[var(--muted)]">+</span>
+        <LaneCardPairMember employee={secondary} />
+      </div>
+    </div>
+  );
+}
+
+function LaneCardPairMember({ employee }: { employee: { avatarId: string; name: string; href: string } }) {
+  return (
+    <Link
+      href={employee.href}
+      className="group flex w-[4.75rem] flex-col items-center gap-1.5 hover:opacity-80"
+    >
+      <div className="relative h-12 w-12 shrink-0">
+        <Image
+          src={`/employees/${employee.avatarId}.png`}
+          alt=""
+          fill
+          className="rounded-full object-cover shadow-[0_0_0_1.5px_var(--border)] transition-transform duration-200 group-hover:scale-105"
+        />
+      </div>
+      <p className="text-[11px] font-medium leading-tight">{employee.name}</p>
     </Link>
   );
 }

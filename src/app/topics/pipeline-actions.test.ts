@@ -22,15 +22,16 @@ vi.mock("@/lib/supabase/server", () => ({
   createClient: async () => ({ from: (table: string) => (table === "compliance_reviews" ? complianceReviewsChainable() : {}) }),
 }));
 vi.mock("@/lib/leo-portraits", () => ({ getLatestLeoPortrait: vi.fn().mockResolvedValue(null) }));
-vi.mock("./content-actions", () => ({ generateContent: vi.fn() }));
+const generateContentMock = vi.fn();
+vi.mock("./content-actions", () => ({ generateContent: (...args: unknown[]) => generateContentMock(...args) }));
 vi.mock("./research-actions", () => ({ approveResearchOnly: vi.fn() }));
 const generatePagesPlanMock = vi.fn();
 vi.mock("../team/xiaohongshu-image-planner/actions", () => ({ generatePagesPlan: (...args: unknown[]) => generatePagesPlanMock(...args) }));
-const generateCrossPlatformCoverMock = vi.fn();
+const generateVideoCoverMock = vi.fn();
 const generateWechatCoverMock = vi.fn();
 const generateXiaohongshuCarouselMock = vi.fn();
 vi.mock("../team/image-designer/actions", () => ({
-  generateCrossPlatformCover: (...args: unknown[]) => generateCrossPlatformCoverMock(...args),
+  generateVideoCover: (...args: unknown[]) => generateVideoCoverMock(...args),
   generateWechatCover: (...args: unknown[]) => generateWechatCoverMock(...args),
   generateXiaohongshuCarousel: (...args: unknown[]) => generateXiaohongshuCarouselMock(...args),
 }));
@@ -53,7 +54,7 @@ import {
   runRevisionStep,
   runFinalVerificationStep,
   runImageGenerationStep,
-  runImagePlanningStep,
+  runContentGenerationStep,
 } from "./pipeline-actions";
 import type { ContentPlatform } from "@/lib/types";
 
@@ -65,6 +66,7 @@ function asset(platform: ContentAsset["platform"], contentType: ContentAsset["co
 
 const VIDEO_ASSET = asset("VIDEO_CHANNEL", "video_script");
 const XHS_ASSET = asset("XIAOHONGSHU", "xiaohongshu_post");
+const XHS_PAGES_ASSET = asset("XIAOHONGSHU", "xiaohongshu_pages");
 const WECHAT_ASSET = asset("WECHAT_OFFICIAL_ACCOUNT", "wechat_article");
 
 function review(assetId: string, risk: ComplianceReviewRow["overall_risk"]): ComplianceReviewRow {
@@ -120,6 +122,24 @@ describe("runComplianceStep — fail closed", () => {
     expect(runComplianceReviewMock).toHaveBeenCalledTimes(1);
     expect(runComplianceReviewMock).toHaveBeenCalledWith(XHS_ASSET.id, undefined, undefined);
   });
+
+  /**
+   * Round 9 P0 fix: `xiaohongshu_pages` (K's P1–Pn plan) used to be
+   * produced by a separate "planning" step positioned AFTER this one, so
+   * it never went through compliance at all. It's now folded into the
+   * content step and must be reviewed exactly like xiaohongshu_post.
+   */
+  it("reviews BOTH xiaohongshu_post and xiaohongshu_pages when XIAOHONGSHU is selected — the page plan is no longer skipped", async () => {
+    getContentAssetsMock.mockResolvedValue([XHS_ASSET, XHS_PAGES_ASSET]);
+    runComplianceReviewMock.mockResolvedValue({ ok: true });
+    getComplianceReviewsMock.mockResolvedValue([]);
+
+    await runComplianceStep("topic-1", ["XIAOHONGSHU"]);
+
+    expect(runComplianceReviewMock).toHaveBeenCalledTimes(2);
+    expect(runComplianceReviewMock).toHaveBeenCalledWith(XHS_ASSET.id, undefined, undefined);
+    expect(runComplianceReviewMock).toHaveBeenCalledWith(XHS_PAGES_ASSET.id, undefined, undefined);
+  });
 });
 
 describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed state)", () => {
@@ -162,11 +182,34 @@ describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed
   });
 });
 
-describe("runImageGenerationStep — fail closed on a partial carousel", () => {
+/**
+ * Round 9 P0 fix: 小红书图文规划 (K's P1–Pn page plan) no longer generates
+ * any cover, and neither does 视频号 share one with it any more —
+ * `generateVideoCover` only ever runs for VIDEO_CHANNEL, and XIAOHONGSHU
+ * only ever calls the carousel generator, never any cover function.
+ */
+describe("runImageGenerationStep — per-platform dispatch, no shared cover, fail closed on a partial carousel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    generateCrossPlatformCoverMock.mockResolvedValue({ ok: true });
+    generateVideoCoverMock.mockResolvedValue({ ok: true });
     generateWechatCoverMock.mockResolvedValue({ ok: true });
+    generateXiaohongshuCarouselMock.mockResolvedValue({ ok: true, generated: 3 });
+  });
+
+  it("only calls generateVideoCover when VIDEO_CHANNEL is the only selected platform — no XIAOHONGSHU/WECHAT calls", async () => {
+    await runImageGenerationStep("topic-1", ["VIDEO_CHANNEL"]);
+
+    expect(generateVideoCoverMock).toHaveBeenCalledTimes(1);
+    expect(generateWechatCoverMock).not.toHaveBeenCalled();
+    expect(generateXiaohongshuCarouselMock).not.toHaveBeenCalled();
+  });
+
+  it("only calls generateXiaohongshuCarousel when XIAOHONGSHU is the only selected platform — never a cover function", async () => {
+    await runImageGenerationStep("topic-1", ["XIAOHONGSHU"]);
+
+    expect(generateXiaohongshuCarouselMock).toHaveBeenCalledTimes(1);
+    expect(generateVideoCoverMock).not.toHaveBeenCalled();
+    expect(generateWechatCoverMock).not.toHaveBeenCalled();
   });
 
   it("throws when generateXiaohongshuCarousel reports ok:false, even though some pages generated", async () => {
@@ -180,27 +223,59 @@ describe("runImageGenerationStep — fail closed on a partial carousel", () => {
   });
 
   it("succeeds when every task genuinely reports ok:true", async () => {
-    generateXiaohongshuCarouselMock.mockResolvedValue({ ok: true, generated: 3 });
-
     await expect(runImageGenerationStep("topic-1", ["XIAOHONGSHU"])).resolves.toBeUndefined();
+  });
+
+  it("runs all three tasks in parallel when every platform is selected", async () => {
+    await runImageGenerationStep("topic-1", ALL_PLATFORMS);
+
+    expect(generateVideoCoverMock).toHaveBeenCalledTimes(1);
+    expect(generateWechatCoverMock).toHaveBeenCalledTimes(1);
+    expect(generateXiaohongshuCarouselMock).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("runImagePlanningStep — threads `since`/`runId` through for retry idempotency", () => {
+/**
+ * Round 9 P0 fix: 小红书图文规划 (`xiaohongshu_pages`) used to be produced
+ * by a separate "planning" pipeline step positioned after compliance/
+ * revision/final verification. It's now part of this same content step,
+ * so its P1–Pn page text actually goes through review — see
+ * latestGeneratedAssets's doc comment in pipeline-actions.ts.
+ */
+describe("runContentGenerationStep — folds 小红书图文规划 into the content step for XIAOHONGSHU", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("passes since and runId through to generatePagesPlan", async () => {
+  it("calls only generateContent when XIAOHONGSHU is not selected", async () => {
+    generateContentMock.mockResolvedValue(undefined);
+
+    await runContentGenerationStep("topic-1", ["VIDEO_CHANNEL"], "2026-01-01T00:00:00Z", "run-1");
+
+    expect(generateContentMock).toHaveBeenCalledWith("topic-1", ["VIDEO_CHANNEL"], "2026-01-01T00:00:00Z", "run-1");
+    expect(generatePagesPlanMock).not.toHaveBeenCalled();
+  });
+
+  it("calls both generateContent and generatePagesPlan in parallel when XIAOHONGSHU is selected", async () => {
+    generateContentMock.mockResolvedValue(undefined);
     generatePagesPlanMock.mockResolvedValue({ ok: true });
 
-    await runImagePlanningStep("topic-1", "2026-01-01T00:00:00Z", "run-1");
+    await runContentGenerationStep("topic-1", ["XIAOHONGSHU"], "2026-01-01T00:00:00Z", "run-1");
 
+    expect(generateContentMock).toHaveBeenCalledWith("topic-1", ["XIAOHONGSHU"], "2026-01-01T00:00:00Z", "run-1");
     expect(generatePagesPlanMock).toHaveBeenCalledWith("topic-1", undefined, "2026-01-01T00:00:00Z", "run-1");
   });
 
-  it("throws when generatePagesPlan reports failure (e.g. its own fail-closed idempotency check errored)", async () => {
+  it("throws when generateContent rejects, even if generatePagesPlan succeeds", async () => {
+    generateContentMock.mockRejectedValue(new Error("内容生成失败：视频号：model timeout"));
+    generatePagesPlanMock.mockResolvedValue({ ok: true });
+
+    await expect(runContentGenerationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/内容生成失败/);
+  });
+
+  it("throws when generatePagesPlan reports ok:false, even if generateContent succeeds", async () => {
+    generateContentMock.mockResolvedValue(undefined);
     generatePagesPlanMock.mockResolvedValue({ ok: false, error: "检查图文规划是否已生成失败，请重试：connection reset" });
 
-    await expect(runImagePlanningStep("topic-1", "2026-01-01T00:00:00Z")).rejects.toThrow(/检查图文规划是否已生成失败/);
+    await expect(runContentGenerationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/检查图文规划是否已生成失败/);
   });
 });
 

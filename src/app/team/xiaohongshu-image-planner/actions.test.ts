@@ -74,8 +74,8 @@ const RESOLVED_RESULT = {
 };
 
 /**
- * Live audit finding (P0, round 5): runImagePlanningStep/generatePagesPlan
- * had no `since` param at all — every retry of the planning step (e.g.
+ * Live audit finding (P0, round 5): generatePagesPlan had no `since` param
+ * at all — every retry of the content step's page-planning sub-task (e.g.
  * after markGenerationRunStep failed post-success) called the AI again,
  * re-billing it and creating a redundant xiaohongshu_pages version. The
  * existence check backing `since` must also be fail-closed: a DB error
@@ -177,7 +177,7 @@ describe("generatePagesPlan — atomic claim wiring (runId provided)", () => {
 
     expect(result).toEqual({ ok: true });
     expect(runContentTaskMock).toHaveBeenCalledTimes(1);
-    expect(completeGenerationRunTaskMock).toHaveBeenCalledWith("run-1", "planning:XIAOHONGSHU");
+    expect(completeGenerationRunTaskMock).toHaveBeenCalledWith("run-1", "content:XIAOHONGSHU:pages");
     expect(failGenerationRunTaskMock).not.toHaveBeenCalled();
   });
 });

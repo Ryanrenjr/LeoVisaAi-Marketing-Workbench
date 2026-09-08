@@ -63,7 +63,7 @@ vi.mock("@/lib/generation-run-tasks", () => ({
   failGenerationRunTask: (...args: unknown[]) => failGenerationRunTaskMock(...args),
 }));
 
-import { generateXiaohongshuCarousel, generateCrossPlatformCover, generateWechatCover } from "./actions";
+import { generateXiaohongshuCarousel, generateVideoCover, generateWechatCover } from "./actions";
 
 function plan(pages: string[]): ContentAsset {
   return {
@@ -145,14 +145,14 @@ describe("generateXiaohongshuCarousel — partial failure must never report ok:t
   });
 });
 
-function xhsPostAsset(): ContentAsset {
+function videoScriptAsset(): ContentAsset {
   return {
-    id: "xhs-post-1",
-    platform: "XIAOHONGSHU",
-    content_type: "xiaohongshu_post",
+    id: "video-script-1",
+    platform: "VIDEO_CHANNEL",
+    content_type: "video_script",
     version: 1,
     title: "标题",
-    content: "正文",
+    content: "口播稿",
     structured_content: {},
   } as unknown as ContentAsset;
 }
@@ -184,24 +184,41 @@ describe("cover idempotency checks fail closed on a DB error, instead of assumin
     getTopicByIdMock.mockResolvedValue({ id: "topic-1", title: "标题", business: "UK_VISA" });
   });
 
-  it("generateCrossPlatformCover (shared 视频号/小红书 cover): stops and never calls the image model when the existence check errors", async () => {
-    getContentAssetsMock.mockResolvedValue([xhsPostAsset()]);
+  it("generateVideoCover (视频号 cover): stops and never calls the image model when the existence check errors", async () => {
+    getContentAssetsMock.mockResolvedValue([videoScriptAsset()]);
     queueContentImagesResult({ data: null, error: { message: "connection reset" } });
 
-    const result = await generateCrossPlatformCover("topic-1", false, undefined, "2026-01-01T00:00:00Z");
+    const result = await generateVideoCover("topic-1", false, undefined, "2026-01-01T00:00:00Z");
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/检查封面是否已生成失败/);
     expect(runImageGenerationTaskMock).not.toHaveBeenCalled();
   });
 
-  it("generateCrossPlatformCover: skips generation (no paid call) when the check confirms a cover already exists", async () => {
-    getContentAssetsMock.mockResolvedValue([xhsPostAsset()]);
+  it("generateVideoCover: skips generation (no paid call) when the check confirms a cover already exists", async () => {
+    getContentAssetsMock.mockResolvedValue([videoScriptAsset()]);
     queueContentImagesResult({ data: { id: "img-1" }, error: null });
 
-    const result = await generateCrossPlatformCover("topic-1", false, undefined, "2026-01-01T00:00:00Z");
+    const result = await generateVideoCover("topic-1", false, undefined, "2026-01-01T00:00:00Z");
 
     expect(result).toEqual({ ok: true });
+    expect(runImageGenerationTaskMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Round 9 P0 fix: generateVideoCover (formerly generateCrossPlatformCover)
+   * no longer falls back to xiaohongshu_post — 小红书 never gets a cover
+   * from this function any more (P1 of its own carousel is its 首图).
+   */
+  it("generateVideoCover: returns a clear error and never calls the image model when no video_script exists, even if a xiaohongshu_post does", async () => {
+    getContentAssetsMock.mockResolvedValue([
+      { id: "xhs-post-1", platform: "XIAOHONGSHU", content_type: "xiaohongshu_post", version: 1, title: "标题", content: "文案", structured_content: {} } as unknown as ContentAsset,
+    ]);
+
+    const result = await generateVideoCover("topic-1", false);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/请先生成视频口播稿/);
     expect(runImageGenerationTaskMock).not.toHaveBeenCalled();
   });
 
@@ -262,38 +279,38 @@ describe("atomic claim wiring (runId provided) — image-designer", () => {
     getTopicByIdMock.mockResolvedValue({ id: "topic-1", title: "标题", business: "UK_VISA" });
   });
 
-  it("generateCrossPlatformCover: does not call the image model when the claim reports already_completed", async () => {
-    getContentAssetsMock.mockResolvedValue([xhsPostAsset()]);
+  it("generateVideoCover: does not call the image model when the claim reports already_completed", async () => {
+    getContentAssetsMock.mockResolvedValue([videoScriptAsset()]);
     claimGenerationRunTaskMock.mockResolvedValue({ outcome: "already_completed" });
 
-    const result = await generateCrossPlatformCover("topic-1", false, undefined, undefined, "run-1");
+    const result = await generateVideoCover("topic-1", false, undefined, undefined, "run-1");
 
     expect(result).toEqual({ ok: true });
     expect(runImageGenerationTaskMock).not.toHaveBeenCalled();
   });
 
-  it("generateCrossPlatformCover: does not call the image model when the claim times out, and surfaces the timeout error", async () => {
-    getContentAssetsMock.mockResolvedValue([xhsPostAsset()]);
+  it("generateVideoCover: does not call the image model when the claim times out, and surfaces the timeout error", async () => {
+    getContentAssetsMock.mockResolvedValue([videoScriptAsset()]);
     claimGenerationRunTaskMock.mockResolvedValue({ outcome: "timed_out", error: "另一个请求仍在处理这一项，等待超时，请稍后重试。" });
 
-    const result = await generateCrossPlatformCover("topic-1", false, undefined, undefined, "run-1");
+    const result = await generateVideoCover("topic-1", false, undefined, undefined, "run-1");
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/等待超时/);
     expect(runImageGenerationTaskMock).not.toHaveBeenCalled();
   });
 
-  it("generateCrossPlatformCover: acquires the claim, calls the model, and marks the task completed on success", async () => {
-    getContentAssetsMock.mockResolvedValue([xhsPostAsset()]);
+  it("generateVideoCover: acquires the claim, calls the model, and marks the task completed on success", async () => {
+    getContentAssetsMock.mockResolvedValue([videoScriptAsset()]);
     claimGenerationRunTaskMock.mockResolvedValue({ outcome: "acquired" });
     runImageGenerationTaskMock.mockResolvedValue(resolvedResult());
     saveGeneratedContentImageMock.mockResolvedValue({ ok: true });
 
-    const result = await generateCrossPlatformCover("topic-1", false, undefined, undefined, "run-1");
+    const result = await generateVideoCover("topic-1", false, undefined, undefined, "run-1");
 
     expect(result).toEqual({ ok: true });
     expect(runImageGenerationTaskMock).toHaveBeenCalledTimes(1);
-    expect(completeGenerationRunTaskMock).toHaveBeenCalledWith("run-1", "image:shared_cover");
+    expect(completeGenerationRunTaskMock).toHaveBeenCalledWith("run-1", "image:video_cover");
     expect(failGenerationRunTaskMock).not.toHaveBeenCalled();
   });
 

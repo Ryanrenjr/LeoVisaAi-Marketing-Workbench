@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import {
   runContentGenerationStep,
-  runImagePlanningStep,
   runImageGenerationStep,
   runComplianceStep,
   runRevisionStep,
@@ -25,7 +24,7 @@ import { PendingSubmitButton } from "@/components/pending-submit-button";
 import type { EmployeeId } from "@/lib/boss-language";
 import type { ContentPlatform } from "@/lib/types";
 
-/** A step's executor gets this many total attempts (1 real + 2 automatic retries) before a transient error (429, network blip) is surfaced to a human — cheap because subtask-level idempotency (see executors below, and generateContent/generateCrossPlatformCover/etc.'s `since` param) means a retry skips whatever already succeeded instead of re-running it. */
+/** A step's executor gets this many total attempts (1 real + 2 automatic retries) before a transient error (429, network blip) is surfaced to a human — cheap because subtask-level idempotency (see executors below, and generateContent/generateVideoCover/etc.'s `since` param) means a retry skips whatever already succeeded instead of re-running it. */
 const STEP_ATTEMPT_DELAYS_MS = [2000, 5000];
 
 async function withStepRetry(run: () => Promise<void>): Promise<void> {
@@ -40,7 +39,7 @@ async function withStepRetry(run: () => Promise<void>): Promise<void> {
   }
 }
 
-type StepKey = "content" | "compliance" | "revision" | "finalVerification" | "planning" | "images";
+type StepKey = "content" | "compliance" | "revision" | "finalVerification" | "images";
 type StepStatus = "pending" | "active" | "done" | "skipped";
 
 interface StepDef {
@@ -58,18 +57,17 @@ const PLATFORM_WRITER: Record<ContentPlatform, EmployeeId> = {
 };
 
 /**
- * Relative weight per step, renormalized to 100 over whichever steps are
- * actually included for this run (live user instruction: "可以有一个选择
- * ...出小红书图文/出视频号口播/出公众号文字/一键全出" — when 小红书 isn't
- * picked, the "planning" step (K's page plan) doesn't apply at all, so the
- * step list itself varies, not just which platforms get generated).
+ * Relative weight per step, renormalized to 100 (live user instruction:
+ * "可以有一个选择...出小红书图文/出视频号口播/出公众号文字/一键全出" — the
+ * step list itself is fixed regardless of platform choice now; round 9 P0
+ * fix folded 小红书图文规划 (K's page plan) into the content step, so it no
+ * longer needs its own weight entry).
  */
 const STEP_WEIGHT: Record<StepKey, number> = {
   content: 20,
   compliance: 15,
   revision: 15,
   finalVerification: 10,
-  planning: 15,
   images: 25,
 };
 
@@ -83,11 +81,14 @@ const STEP_WEIGHT: Record<StepKey, number> = {
  * creates a newer version: the cover is still in the database, just
  * attached to a version nothing shows anymore. Text has to be final
  * before anything gets drawn.
+ *
+ * The step list itself is now fixed (round 9 P0 fix) — 小红书图文规划 used
+ * to be a platform-conditional extra step here; it's now an internal part
+ * of the content step (see runContentGenerationStep in pipeline-actions.ts),
+ * so GenerationRunner's own step sequence no longer varies by platform.
  */
 function buildSteps(platforms: ContentPlatform[]): StepDef[] {
-  const keys: StepKey[] = platforms.includes("XIAOHONGSHU")
-    ? ["content", "compliance", "revision", "finalVerification", "planning", "images"]
-    : ["content", "compliance", "revision", "finalVerification", "images"];
+  const keys: StepKey[] = ["content", "compliance", "revision", "finalVerification", "images"];
 
   const totalWeight = keys.reduce((sum, key) => sum + STEP_WEIGHT[key], 0);
   const contentLabel =
@@ -97,15 +98,18 @@ function buildSteps(platforms: ContentPlatform[]): StepDef[] {
     compliance: "合规审核",
     revision: "按审核意见校对修改",
     finalVerification: "终审复核",
-    planning: "小红书图文规划",
     images: "生成配图（封面 + 图文）",
   };
+  // XIAOHONGSHU's content step covers both D's title/caption and K's P1–Pn
+  // page plan (round 9 P0 fix) — show both employees working during it.
+  const contentEmployees: EmployeeId[] = platforms.includes("XIAOHONGSHU")
+    ? [...platforms.map((p) => PLATFORM_WRITER[p]), "xiaohongshu-image-planner"]
+    : platforms.map((p) => PLATFORM_WRITER[p]);
   const EMPLOYEES: Record<StepKey, EmployeeId[]> = {
-    content: platforms.map((p) => PLATFORM_WRITER[p]),
+    content: contentEmployees,
     compliance: ["compliance"],
     revision: ["reviser"],
     finalVerification: ["compliance"],
-    planning: ["xiaohongshu-image-planner"],
     images: ["image-designer"],
   };
 
@@ -242,7 +246,7 @@ export function GenerationRunner({
     const startIndex = resumeFromIndex === -1 ? steps.length : resumeFromIndex;
 
     // `since` = this run's creation time, so a retried step's underlying
-    // generator (generateContent / generateCrossPlatformCover / etc.) can
+    // generator (generateContent / generateVideoCover / etc.) can
     // tell "already produced in this run, don't redo it" apart from "an
     // older version from before this run started, still needs doing" —
     // see each function's own doc comment for the exact table it checks.
@@ -271,7 +275,6 @@ export function GenerationRunner({
         const { skipped } = await runFinalVerificationStep(topicId, run.platforms, runId);
         setSkippedSteps((prev) => ({ ...prev, finalVerification: skipped }));
       },
-      planning: () => runImagePlanningStep(topicId, since, runId),
       images: () => runImageGenerationStep(topicId, run.platforms, since, runId),
     };
 

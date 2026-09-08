@@ -18,7 +18,7 @@ import { createClient } from "./supabase/server";
  * `completeGenerationRunTask`'s doc comment below.
  *
  * `task_key` convention (caller's responsibility, not enforced here):
- * `content:<platform>`, `planning:XIAOHONGSHU`, `image:shared_cover`,
+ * `content:<platform>`, `content:XIAOHONGSHU:pages`, `image:video_cover`,
  * `image:wechat_cover`, `carousel:<pageIndex>`, `compliance:<contentAssetId>`,
  * `revision:<contentAssetId>`.
  */

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireUser } from "@/lib/auth";
 import { getContentAssetById, getResearchPackById } from "@/lib/topics";
+import { buildPublishFacingTextForCompliance } from "@/lib/content-mapping";
 import { canRunCompliance } from "@/lib/permissions";
 import { runComplianceTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
@@ -58,7 +59,7 @@ export async function runComplianceReview(
   const platformLabel = CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform;
 
   const result = await runComplianceTask(
-    { platform: platformLabel, textForReview: asset.content },
+    { platform: platformLabel, textForReview: buildPublishFacingTextForCompliance(asset) },
     researchPack,
     override,
   );
