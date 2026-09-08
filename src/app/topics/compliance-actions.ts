@@ -18,16 +18,27 @@ import type { ModelRef } from "@/lib/ai/providers/types";
  * generated from. Advisory only — writes a row to compliance_reviews for
  * Leo to read; never changes topics.status or content_assets.status on
  * its own. See docs/security-boundaries.md "AI usage".
+ *
+ * Returns `{ok:false}` on every failure path instead of silently
+ * `console.error`-ing and returning nothing — a caller (see
+ * runComplianceStep in pipeline-actions.ts) that only checks "does a
+ * compliance_reviews row exist" cannot otherwise tell "review ran and
+ * found nothing" apart from "review never ran at all", which is exactly
+ * the fail-open bug this fixes: a failed review must stop the pipeline,
+ * never be treated as an implicit LOW-risk pass.
  */
-export async function runComplianceReview(contentAssetId: string, override?: ModelRef | null): Promise<void> {
+export async function runComplianceReview(
+  contentAssetId: string,
+  override?: ModelRef | null,
+): Promise<{ ok: boolean; error?: string }> {
   const user = await requireUser();
   if (!canRunCompliance(user.role)) throw new Error("Forbidden: ADMIN role required");
 
   const asset = await getContentAssetById(contentAssetId);
-  if (!asset) return;
+  if (!asset) return { ok: false, error: "未找到对应的内容草稿。" };
 
   const researchPack = await getResearchPackById(asset.research_pack_id);
-  if (!researchPack) return;
+  if (!researchPack) return { ok: false, error: "未找到对应的研究成果。" };
 
   const platformLabel = CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform;
 
@@ -41,7 +52,7 @@ export async function runComplianceReview(contentAssetId: string, override?: Mod
 
   if (isRouterResolutionFailure(result)) {
     console.error("[compliance] router resolution failed:", result.error);
-    return;
+    return { ok: false, error: result.error };
   }
 
   const model = getModel(result.provider, result.modelId);
@@ -63,10 +74,10 @@ export async function runComplianceReview(contentAssetId: string, override?: Mod
 
   if (!result.ok || !result.data) {
     console.error("[compliance] task failed:", result.error);
-    return;
+    return { ok: false, error: result.error ?? "合规审核失败。" };
   }
 
-  await supabase.from("compliance_reviews").insert({
+  const { error: insertError } = await supabase.from("compliance_reviews").insert({
     topic_id: asset.topic_id,
     content_asset_id: asset.id,
     overall_risk: result.data.overall_risk,
@@ -75,7 +86,9 @@ export async function runComplianceReview(contentAssetId: string, override?: Mod
     provider: result.provider,
     created_by: user.id,
   });
+  if (insertError) return { ok: false, error: "合规结果保存失败。" };
 
   revalidatePath(`/topics/${asset.topic_id}`);
   revalidatePath("/team/compliance");
+  return { ok: true };
 }

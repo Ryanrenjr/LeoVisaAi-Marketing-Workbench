@@ -24,6 +24,13 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   if (!profile) return null;
 
+  // Same defense as src/proxy.ts's middleware check, applied here too so
+  // every direct requireUser() call in a Server Action is covered even if
+  // a route somehow isn't matched by the middleware — a session that
+  // isn't the one fixed operator account is not a logged-in user as far
+  // as this app is concerned, regardless of how it was obtained.
+  if (profile.email !== process.env.OPERATOR_EMAIL) return null;
+
   return {
     id: profile.id,
     email: profile.email,

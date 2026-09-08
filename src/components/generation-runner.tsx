@@ -9,7 +9,12 @@ import {
   runImageGenerationStep,
   runComplianceStep,
   runRevisionStep,
+  getOrCreateGenerationRun,
+  markGenerationRunStep,
+  completeGenerationRun,
+  failGenerationRun,
 } from "@/app/topics/pipeline-actions";
+import type { GenerationRun } from "@/app/topics/pipeline-actions";
 import { resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { CONTENT_PLATFORM_LABEL } from "@/lib/status";
 import { Button } from "@/components/ui/button";
@@ -87,37 +92,41 @@ function buildSteps(platforms: ContentPlatform[]): StepDef[] {
  * "选题确认之后，直接从内容到最后一步整合" + "工作的时候要加上百分比，最好
  * 再首页加上每个员工工作的样子" + "这个过程要把流程也写上，先哪个后哪个，
  * 然后进度。图文规划也要加进去，生图也要加上，封面所有的" + "可以有一个选择
- * ...出小红书图文/出视频号口播/出公众号文字/一键全出" (live user
- * instructions) — mounted on the home page whenever `?generating=<topicId>`
- * is present (see `approveAndGoHome` in pipeline-actions.ts), this runs
- * every generation step for the selected platform(s) client-side, one at a
- * time, showing the full step sequence (done/active/pending), which
- * digital employee is currently working, and a percentage that climbs
- * toward each step's ceiling the same "decelerating estimate" way
- * `ThinkingRow` already does (there's no real progress signal from a
- * single AI call), then jumps to that step's real completion value once
- * the step's server action actually resolves.
+ * ...出小红书图文/出视频号口播/出公众号文字/一键全出" + a live audit
+ * finding (P0: refresh mid-pipeline re-ran everything from scratch,
+ * re-billing AI calls) — mounted on the home page whenever
+ * `?generating=<topicId>` is present (see `approveAndGoHome` in
+ * pipeline-actions.ts). Two-phase mount: first fetch-or-create the
+ * persisted `generation_runs` row for this topic (getOrCreateGenerationRun
+ * — same row survives a refresh, so a re-mount resumes instead of
+ * restarting), then run whichever steps aren't in that row's
+ * `completed_steps` yet, showing the full step sequence
+ * (done/active/pending), which digital employee is currently working, and
+ * a percentage that climbs toward each step's ceiling the same
+ * "decelerating estimate" way `ThinkingRow` already does (there's no real
+ * progress signal from a single AI call), then jumps to that step's real
+ * completion value once the step's server action actually resolves.
  */
 export function GenerationRunner({
   topicId,
   employeeNames,
-  platforms,
+  platforms: requestedPlatforms,
 }: {
   topicId: string;
   employeeNames: Partial<Record<EmployeeId, string>>;
   platforms: ContentPlatform[];
 }) {
   const router = useRouter();
-  const steps = buildSteps(platforms);
+  const [run, setRun] = useState<GenerationRun | null>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const [skippedRevision, setSkippedRevision] = useState(false);
   const [percent, setPercent] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
-  const ceilingRef = useRef(steps[0].ceiling);
+  const ceilingRef = useRef(1);
+  const initRef = useRef(false);
   const startedRef = useRef(false);
   const pausedRef = useRef(false);
-  const anyFlaggedRef = useRef(false);
 
   /** Can only take effect between steps — a Server Action already in flight can't be interrupted mid-call, so "暂停" means "finish the step that's running, then wait" rather than freezing instantly. */
   function waitIfPaused(): Promise<void> {
@@ -150,37 +159,76 @@ export function GenerationRunner({
     return () => clearInterval(interval);
   }, []);
 
+  // Phase 1 — resolve (or create) the persisted run before doing any work.
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    if (initRef.current) return;
+    initRef.current = true;
 
-    const executors: Record<StepKey, () => Promise<void>> = {
-      content: () => runContentGenerationStep(topicId, platforms),
-      compliance: async () => {
-        const { anyFlagged } = await runComplianceStep(topicId);
-        anyFlaggedRef.current = anyFlagged;
-      },
-      revision: async () => {
-        if (!anyFlaggedRef.current) {
-          setSkippedRevision(true);
+    (async () => {
+      try {
+        const loaded = await getOrCreateGenerationRun(topicId, requestedPlatforms);
+        if (loaded.status === "done") {
+          router.push("/team/integrator");
           return;
         }
-        await runRevisionStep(topicId);
+        if (loaded.status === "failed") {
+          setError(loaded.error ?? "生成过程中出错了。");
+          return;
+        }
+        setRun(loaded);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "初始化生成过程失败。");
+      }
+    })();
+  }, [topicId, requestedPlatforms, router]);
+
+  // Phase 2 — once the run is known, execute whichever steps aren't in
+  // its completed_steps yet. Runs at most once per run.id (startedRef).
+  useEffect(() => {
+    if (!run || startedRef.current) return;
+    startedRef.current = true;
+
+    const steps = buildSteps(run.platforms);
+    const resumeFromIndex = steps.findIndex((s) => !run.completedSteps.includes(s.key));
+    const startIndex = resumeFromIndex === -1 ? steps.length : resumeFromIndex;
+
+    const executors: Record<StepKey, () => Promise<void>> = {
+      content: () => runContentGenerationStep(topicId, run.platforms),
+      compliance: async () => {
+        await runComplianceStep(topicId);
+      },
+      // Determined fresh from the DB every time (see runRevisionStep's doc
+      // comment) — correct whether this is a normal run or a resume that
+      // landed exactly between compliance finishing and revision starting.
+      revision: async () => {
+        const { skipped } = await runRevisionStep(topicId);
+        if (skipped) setSkippedRevision(true);
       },
       planning: () => runImagePlanningStep(topicId),
-      images: () => runImageGenerationStep(topicId, platforms),
+      images: () => runImageGenerationStep(topicId, run.platforms),
     };
 
-    async function run() {
+    async function runFrom(from: number) {
       try {
-        for (let i = 0; i < steps.length; i++) {
+        // Resuming partway through — seed the bar to reflect what's
+        // already done before the loop's first iteration starts climbing
+        // toward the next step's ceiling. (When from === 0 this is a
+        // no-op: steps[-1] is undefined, so percent stays at its initial 1.)
+        if (from > 0) {
+          setPercent(steps[from - 1].ceiling);
+          ceilingRef.current = steps[from]?.ceiling ?? 100;
+        }
+
+        for (let i = from; i < steps.length; i++) {
           setActiveIndex(i);
           ceilingRef.current = steps[i].ceiling;
           await executors[steps[i].key]();
           setPercent(steps[i].ceiling);
+          await markGenerationRunStep(run!.id, steps[i].key);
           await waitIfPaused();
         }
 
+        await completeGenerationRun(run!.id);
         setPercent(100);
         setActiveIndex(steps.length);
         // A beat before navigating away — otherwise the 100% state never
@@ -190,12 +238,14 @@ export function GenerationRunner({
         await new Promise((resolve) => setTimeout(resolve, 550));
         router.push("/team/integrator");
       } catch (err) {
-        setError(err instanceof Error ? err.message : "生成过程中出错了。");
+        const message = err instanceof Error ? err.message : "生成过程中出错了。";
+        setError(message);
+        await failGenerationRun(run!.id, message).catch(() => {});
       }
     }
 
-    run();
-  }, [topicId, router, platforms, steps]);
+    runFrom(startIndex);
+  }, [run, topicId, router]);
 
   if (error) {
     return (
@@ -206,6 +256,16 @@ export function GenerationRunner({
     );
   }
 
+  if (!run) {
+    return (
+      <div className="card flex items-center gap-2 px-5 py-4 text-sm text-[var(--muted)]">
+        <span className="thinking-avatar inline-block h-2 w-2 rounded-full bg-[var(--accent)]" />
+        正在准备生成流程…
+      </div>
+    );
+  }
+
+  const steps = buildSteps(run.platforms);
   const allDone = activeIndex >= steps.length;
   const activeEmployees = allDone ? [] : steps[activeIndex].employees;
   const revisionIndex = steps.findIndex((s) => s.key === "revision");

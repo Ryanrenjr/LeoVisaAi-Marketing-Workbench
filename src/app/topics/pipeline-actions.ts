@@ -2,8 +2,12 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { requireUser } from "@/lib/auth";
+import { createClient } from "@/lib/supabase/server";
+import { canManageContentAssets } from "@/lib/permissions";
 import { getContentAssets, getComplianceReviews } from "@/lib/topics";
 import { getLatestForLineage } from "@/lib/content-versions";
+import { CONTENT_PLATFORM_LABEL } from "@/lib/status";
 import { generateContent } from "./content-actions";
 import { runComplianceReview } from "./compliance-actions";
 import { reviseContentAsset } from "./revision-actions";
@@ -55,7 +59,8 @@ export async function runContentGenerationStep(topicId: string, platforms: Conte
 
 /** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. Only ever called when 小红书 is among the selected platforms (see generation-runner.tsx's buildSteps). */
 export async function runImagePlanningStep(topicId: string): Promise<void> {
-  await generatePagesPlan(topicId);
+  const result = await generatePagesPlan(topicId);
+  if (!result.ok) throw new Error(result.error ?? "图文规划生成失败。");
 }
 
 /**
@@ -74,24 +79,42 @@ export async function runImagePlanningStep(topicId: string): Promise<void> {
  */
 export async function runImageGenerationStep(topicId: string, platforms: ContentPlatform[]): Promise<void> {
   const portrait = await getLatestLeoPortrait();
-  const tasks: Promise<unknown>[] = [];
+  const tasks: { label: string; promise: Promise<{ ok: boolean; error?: string }> }[] = [];
   if (platforms.includes("VIDEO_CHANNEL") || platforms.includes("XIAOHONGSHU")) {
-    tasks.push(generateCrossPlatformCover(topicId, portrait !== null));
+    tasks.push({ label: "封面", promise: generateCrossPlatformCover(topicId, portrait !== null) });
   }
   if (platforms.includes("WECHAT_OFFICIAL_ACCOUNT")) {
-    tasks.push(generateWechatCover(topicId));
+    tasks.push({ label: "公众号封面", promise: generateWechatCover(topicId) });
   }
   if (platforms.includes("XIAOHONGSHU")) {
-    tasks.push(generateXiaohongshuCarousel(topicId));
+    tasks.push({ label: "小红书图文", promise: generateXiaohongshuCarousel(topicId) });
   }
-  await Promise.allSettled(tasks);
+
+  const settled = await Promise.allSettled(tasks.map((t) => t.promise));
+  // A silently-discarded {ok:false} here used to mean "配图少生成两张，前端
+  // 100%完成" — every failure now stops the pipeline instead of being
+  // treated as a no-op success.
+  const failures = settled
+    .map((result, i) => ({ label: tasks[i].label, result }))
+    .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+  if (failures.length > 0) {
+    const detail = failures
+      .map(({ label, result }) => `${label}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "生成失败")}`)
+      .join("；");
+    throw new Error(`配图生成失败：${detail}`);
+  }
 }
 
-/** Step 4 — G runs compliance on every platform's latest draft. Returns whether anything came back non-LOW, so the client knows whether a revision step follows. */
-export async function runComplianceStep(topicId: string): Promise<{ anyFlagged: boolean }> {
+/**
+ * Reads the current (already-persisted) compliance state for whatever
+ * platforms actually have drafts — shared by runComplianceStep (right
+ * after it runs compliance) and runRevisionStep (which now determines
+ * for itself whether it has anything to do, rather than trusting a value
+ * handed down from a sibling step — see runRevisionStep's doc comment for
+ * why that mattered).
+ */
+async function computeAnyFlagged(topicId: string): Promise<boolean> {
   const latestAssets = await latestGeneratedAssets(topicId);
-  await Promise.allSettled(latestAssets.map((asset) => runComplianceReview(asset.id)));
-
   const reviews = await getComplianceReviews(topicId);
   const latestReviewByAssetId = new Map<string, (typeof reviews)[number]>();
   for (const review of reviews) {
@@ -99,19 +122,60 @@ export async function runComplianceStep(topicId: string): Promise<{ anyFlagged: 
       latestReviewByAssetId.set(review.content_asset_id, review);
     }
   }
-
-  const anyFlagged = latestAssets.some((asset) => {
+  return latestAssets.some((asset) => {
     const review = latestReviewByAssetId.get(asset.id);
-    return review && review.overall_risk !== "LOW";
+    return review !== undefined && review.overall_risk !== "LOW";
   });
+}
+
+/**
+ * Step 4 — G runs compliance on every platform's latest draft. A review
+ * that fails to even run (router/model failure, not "found no issues")
+ * must stop the pipeline here — the old code let a failed review silently
+ * read back as "no compliance_reviews row → not flagged → skip revision",
+ * which is indistinguishable from "reviewed and genuinely clean". Fail
+ * closed instead: never LOW, never skip, just stop.
+ */
+export async function runComplianceStep(topicId: string): Promise<{ anyFlagged: boolean }> {
+  const latestAssets = await latestGeneratedAssets(topicId);
+  const settled = await Promise.allSettled(latestAssets.map((asset) => runComplianceReview(asset.id)));
+
+  const failures = settled
+    .map((result, i) => ({ asset: latestAssets[i], result }))
+    .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+  if (failures.length > 0) {
+    const detail = failures
+      .map(
+        ({ asset, result }) =>
+          `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "审核失败")}`,
+      )
+      .join("；");
+    throw new Error(`合规审核未能完成，已停止：${detail}`);
+  }
+
+  const anyFlagged = await computeAnyFlagged(topicId);
 
   revalidatePath(`/topics/${topicId}`);
   revalidatePath("/team/compliance");
   return { anyFlagged };
 }
 
-/** Step 5 — H auto-revises every platform whose latest compliance review came back non-LOW. Never auto-approves anything: the revised draft still needs Leo's own look. */
-export async function runRevisionStep(topicId: string): Promise<void> {
+/**
+ * Step 5 — H auto-revises every platform whose latest compliance review
+ * came back non-LOW. Never auto-approves anything: the revised draft
+ * still needs Leo's own look. Determines for itself (via
+ * computeAnyFlagged, re-reading the DB) whether there's anything flagged,
+ * instead of trusting a value the caller computed earlier — a client-side
+ * ref holding "did compliance find anything" doesn't survive a page
+ * refresh, so on resume (see generation-runner.tsx) this step needs to be
+ * correct standing alone, not dependent on what happened earlier in the
+ * same browser session. Returns whether it actually had nothing to do, so
+ * the UI can show "skipped" instead of guessing.
+ */
+export async function runRevisionStep(topicId: string): Promise<{ skipped: boolean }> {
+  const anyFlagged = await computeAnyFlagged(topicId);
+  if (!anyFlagged) return { skipped: true };
+
   const latestAssets = await latestGeneratedAssets(topicId);
   const reviews = await getComplianceReviews(topicId);
   const latestReviewByAssetId = new Map<string, (typeof reviews)[number]>();
@@ -123,14 +187,27 @@ export async function runRevisionStep(topicId: string): Promise<void> {
 
   const flagged = latestAssets.filter((asset) => {
     const review = latestReviewByAssetId.get(asset.id);
-    return review && review.overall_risk !== "LOW";
+    return review !== undefined && review.overall_risk !== "LOW";
   });
 
-  await Promise.allSettled(flagged.map((asset) => reviseContentAsset(asset.id)));
+  const settled = await Promise.allSettled(flagged.map((asset) => reviseContentAsset(asset.id)));
+  const failures = settled
+    .map((result, i) => ({ asset: flagged[i], result }))
+    .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+  if (failures.length > 0) {
+    const detail = failures
+      .map(
+        ({ asset, result }) =>
+          `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "修改失败")}`,
+      )
+      .join("；");
+    throw new Error(`校对修改失败：${detail}`);
+  }
 
   revalidatePath(`/topics/${topicId}`);
   revalidatePath("/team/reviser");
   revalidatePath("/team/integrator");
+  return { skipped: false };
 }
 
 const SELECTABLE_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];
@@ -158,4 +235,85 @@ export async function approveAndGoHome(topicId: string, researchPackId: string, 
     choice !== "ALL" && SELECTABLE_PLATFORMS.includes(choice as ContentPlatform) ? `&platforms=${choice}` : "";
 
   redirect(`/?generating=${topicId}${platformSuffix}`);
+}
+
+export interface GenerationRun {
+  id: string;
+  platforms: ContentPlatform[];
+  status: "running" | "done" | "failed";
+  completedSteps: string[];
+  error: string | null;
+}
+
+/**
+ * Persists generation progress so a refresh/crash/dropped-wifi mid-pipeline
+ * resumes from where it left off instead of silently re-running (and
+ * re-billing) every step from scratch — GenerationRunner calls this once on
+ * mount, before starting any actual work. A topic only ever has one
+ * meaningful run at a time (the "通过" button is only clickable once, from
+ * RESEARCH_READY), so this always operates on "the run for this topic",
+ * not a list. The row's own platforms (not whatever the caller passes in)
+ * win once a run exists, so a mangled/stale `?platforms=` URL param can
+ * never diverge from what's actually been recorded as in progress.
+ */
+export async function getOrCreateGenerationRun(topicId: string, platforms: ContentPlatform[]): Promise<GenerationRun> {
+  const user = await requireUser();
+  if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
+
+  const supabase = await createClient();
+
+  const { data: existing } = await supabase
+    .from("generation_runs")
+    .select("id, platforms, status, completed_steps, error")
+    .eq("topic_id", topicId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (existing) {
+    return {
+      id: existing.id,
+      platforms: existing.platforms as ContentPlatform[],
+      status: existing.status,
+      completedSteps: existing.completed_steps ?? [],
+      error: existing.error,
+    };
+  }
+
+  const { data: created, error } = await supabase
+    .from("generation_runs")
+    .insert({ topic_id: topicId, platforms, status: "running", completed_steps: [] })
+    .select("id, platforms, status, completed_steps, error")
+    .single();
+  if (error || !created) throw new Error("无法开始生成流程，请重试。");
+
+  return {
+    id: created.id,
+    platforms: created.platforms as ContentPlatform[],
+    status: created.status,
+    completedSteps: created.completed_steps ?? [],
+    error: created.error,
+  };
+}
+
+/** Called after each step actually executes (not when it's merely skipped) — see generation-runner.tsx. */
+export async function markGenerationRunStep(runId: string, step: string): Promise<void> {
+  const supabase = await createClient();
+  const { data: run } = await supabase.from("generation_runs").select("completed_steps").eq("id", runId).single();
+  const completed = new Set<string>(run?.completed_steps ?? []);
+  completed.add(step);
+  await supabase
+    .from("generation_runs")
+    .update({ completed_steps: Array.from(completed), updated_at: new Date().toISOString() })
+    .eq("id", runId);
+}
+
+export async function completeGenerationRun(runId: string): Promise<void> {
+  const supabase = await createClient();
+  await supabase.from("generation_runs").update({ status: "done", updated_at: new Date().toISOString() }).eq("id", runId);
+}
+
+export async function failGenerationRun(runId: string, error: string): Promise<void> {
+  const supabase = await createClient();
+  await supabase.from("generation_runs").update({ status: "failed", error, updated_at: new Date().toISOString() }).eq("id", runId);
 }

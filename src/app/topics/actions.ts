@@ -198,13 +198,28 @@ export async function discardTopic(topicId: string) {
 
   const supabase = await createClient();
 
-  const { data: images } = await supabase.from("content_images").select("image_path").eq("topic_id", topicId);
+  // Every step below must actually check its error before proceeding —
+  // silently continuing past a failure here is exactly how the "one-shot,
+  // no leftover content" guarantee breaks: a topic row could disappear
+  // from the database while its images remain as untracked orphans in
+  // Storage, or the delete itself could fail while the caller still gets
+  // redirected as if it succeeded.
+  const { data: images, error: imagesError } = await supabase
+    .from("content_images")
+    .select("image_path")
+    .eq("topic_id", topicId);
+  if (imagesError) throw new Error(`读取选题图片失败，请重试：${imagesError.message}`);
+
   const paths = (images ?? []).map((img) => img.image_path).filter((p): p is string => Boolean(p));
   if (paths.length > 0) {
-    await supabase.storage.from("content-images").remove(paths);
+    const { error: removeError } = await supabase.storage.from("content-images").remove(paths);
+    if (removeError) {
+      throw new Error(`清理图片失败，本次不会删除这条选题，请重试：${removeError.message}`);
+    }
   }
 
-  await supabase.from("topics").delete().eq("id", topicId);
+  const { error: deleteError } = await supabase.from("topics").delete().eq("id", topicId);
+  if (deleteError) throw new Error(`删除失败，请重试：${deleteError.message}`);
 
   revalidatePath("/topics");
   redirect("/");

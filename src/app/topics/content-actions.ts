@@ -9,6 +9,7 @@ import { canGenerateContent, canManageContentAssets } from "@/lib/permissions";
 import { getLatestForLineage, nextVersionNumber } from "@/lib/content-versions";
 import { buildWechatBrandFooter, deriveTitleAndContent, mergeEditIntoStructuredContent } from "@/lib/content-mapping";
 import { getBrandConfig } from "@/lib/brand-config";
+import { CONTENT_PLATFORM_LABEL } from "@/lib/status";
 import { runContentTask, runWechatFullArticleTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
 import { TASK_TYPE_EMPLOYEE } from "@/lib/ai/providers/types";
@@ -209,7 +210,7 @@ export async function generateContent(topicId: string, platforms: ContentPlatfor
     detail: { platforms },
   });
 
-  await Promise.allSettled(
+  const settled = await Promise.allSettled(
     platforms.map((platform) => generateAndPersistPlatform(supabase, topic, researchPack, sources, platform, user)),
   );
 
@@ -218,6 +219,24 @@ export async function generateContent(topicId: string, platforms: ContentPlatfor
   revalidatePath(`/topics/${topicId}`);
   revalidatePath("/topics");
   revalidatePath("/research-completed");
+
+  // A discarded {ok:false} here used to mean "小红书失败，视频号/公众号
+  // 成功，前端仍然100%完成" — every platform's failure now stops the
+  // pipeline (see pipeline-actions.ts's runContentGenerationStep, which
+  // just calls this and lets the throw propagate) instead of silently
+  // producing an incomplete set of drafts that looks like a full success.
+  const failures = settled
+    .map((result, i) => ({ platform: platforms[i], result }))
+    .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+  if (failures.length > 0) {
+    const detail = failures
+      .map(
+        ({ platform, result }) =>
+          `${CONTENT_PLATFORM_LABEL[platform]}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "生成失败")}`,
+      )
+      .join("；");
+    throw new Error(`内容生成失败：${detail}`);
+  }
 }
 
 const PLATFORM_TEAM_PAGE: Record<ContentPlatform, string> = {
