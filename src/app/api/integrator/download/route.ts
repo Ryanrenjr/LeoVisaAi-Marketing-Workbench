@@ -33,26 +33,37 @@ const PLATFORM_CONTENT_TYPES: Record<ContentPlatform, { contentType: ContentType
 
 const ALL_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];
 
+interface PlatformZipResult {
+  foundAny: boolean;
+  /** Non-empty means this platform's package is incomplete — the whole request must fail closed instead of shipping a partial zip (see GET's final check). */
+  problems: string[];
+}
+
 async function addPlatformToZip(
   zip: JSZip,
   supabase: Awaited<ReturnType<typeof createClient>>,
   assets: ContentAsset[],
   platform: ContentPlatform,
   folderPrefix: string,
-): Promise<boolean> {
+): Promise<PlatformZipResult> {
   const contentTypes = PLATFORM_CONTENT_TYPES[platform];
   let foundAny = false;
+  const problems: string[] = [];
 
   for (const { contentType, label } of contentTypes) {
     const asset = getLatestForLineage(assets, platform, contentType);
     if (!asset) continue;
     foundAny = true;
 
-    const { data: images } = await supabase
+    const { data: images, error: imagesError } = await supabase
       .from("content_images")
       .select("image_path, image_kind, page_index")
       .eq("content_asset_id", asset.id)
       .order("page_index", { ascending: true, nullsFirst: true });
+    if (imagesError) {
+      problems.push(`${folderPrefix}${label}：读取图片记录失败（${imagesError.message}）`);
+      continue;
+    }
 
     // Use the already-stored title/content columns rather than
     // recomputing from structured_content — they were derived once, at
@@ -64,9 +75,16 @@ async function addPlatformToZip(
     const subfolder = contentTypes.length > 1 ? `${label}/` : "";
     zip.file(`${folderPrefix}${subfolder}${label}.html`, renderContentAsHtml(asset.title, asset.content));
 
+    let carouselDownloaded = 0;
     for (const image of images ?? []) {
-      const { data: downloaded } = await supabase.storage.from("content-images").download(image.image_path);
-      if (!downloaded) continue;
+      const { data: downloaded, error: downloadError } = await supabase.storage
+        .from("content-images")
+        .download(image.image_path);
+      if (!downloaded || downloadError) {
+        const what = image.image_kind === "carousel" ? `第${image.page_index ?? "?"}页图片` : "封面图片";
+        problems.push(`${folderPrefix}${label}：${what}下载失败（${downloadError?.message ?? "未知错误"}）`);
+        continue;
+      }
       const bytes = new Uint8Array(await downloaded.arrayBuffer());
       const ext = image.image_path.split(".").pop() ?? "png";
       const filename =
@@ -74,10 +92,22 @@ async function addPlatformToZip(
           ? `${folderPrefix}${subfolder}图文/第${image.page_index ?? "?"}页.${ext}`
           : `${folderPrefix}${subfolder}封面.${ext}`;
       zip.file(filename, bytes);
+      if (image.image_kind === "carousel") carouselDownloaded++;
+    }
+
+    // xiaohongshu_pages declares how many pages the plan has; cross-check
+    // against how many carousel images actually made it into the zip —
+    // catches "plan says 6 pages, only 4 got generated/downloaded" instead
+    // of shipping a silently-incomplete carousel.
+    if (contentType === "xiaohongshu_pages") {
+      const declaredPages = (asset.structured_content as { pages?: unknown[] } | null)?.pages?.length ?? 0;
+      if (declaredPages > 0 && carouselDownloaded !== declaredPages) {
+        problems.push(`${folderPrefix}${label}：规划共 ${declaredPages} 页，实际打包 ${carouselDownloaded} 页`);
+      }
     }
   }
 
-  return foundAny;
+  return { foundAny, problems };
 }
 
 export async function GET(request: Request) {
@@ -97,11 +127,13 @@ export async function GET(request: Request) {
 
   let foundAny = false;
   let filenameSuffix: string;
+  const problems: string[] = [];
 
   if (!platformParam || platformParam === "all") {
     for (const platform of ALL_PLATFORMS) {
-      const found = await addPlatformToZip(zip, supabase, assets, platform, `${CONTENT_PLATFORM_LABEL[platform]}/`);
-      foundAny = foundAny || found;
+      const result = await addPlatformToZip(zip, supabase, assets, platform, `${CONTENT_PLATFORM_LABEL[platform]}/`);
+      foundAny = foundAny || result.foundAny;
+      problems.push(...result.problems);
     }
     filenameSuffix = "全部平台";
   } else {
@@ -109,11 +141,21 @@ export async function GET(request: Request) {
     if (!(platform in PLATFORM_CONTENT_TYPES)) {
       return new Response("Invalid platform.", { status: 400 });
     }
-    foundAny = await addPlatformToZip(zip, supabase, assets, platform, "");
+    const result = await addPlatformToZip(zip, supabase, assets, platform, "");
+    foundAny = result.foundAny;
+    problems.push(...result.problems);
     filenameSuffix = CONTENT_PLATFORM_LABEL[platform];
   }
 
   if (!foundAny) return new Response("No content for this topic yet.", { status: 404 });
+
+  // Fail closed: a partial zip (missing image, unreadable record, page
+  // count mismatch) is worse than no zip — the operator could otherwise
+  // download an incomplete package and then hit "完成，清空这条选题",
+  // permanently losing the only copy of what didn't make it in.
+  if (problems.length > 0) {
+    return new Response(`打包未完成，以下内容缺失：\n${problems.join("\n")}`, { status: 500 });
+  }
 
   const zipBytes = await zip.generateAsync({ type: "uint8array" });
   const filename = `${topic.title}-${filenameSuffix}`.replace(/[\\/:*?"<>|]/g, "_");

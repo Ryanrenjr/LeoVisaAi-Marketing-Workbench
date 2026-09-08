@@ -36,6 +36,7 @@ export async function generateCrossPlatformCover(
   topicId: string,
   includePortrait: boolean,
   override?: ModelRef | null,
+  since?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -48,6 +49,8 @@ export async function generateCrossPlatformCover(
   const videoScript = getLatestForLineage(assets, "VIDEO_CHANNEL", "video_script");
   const source = xhsPost ?? videoScript;
   if (!source) return { ok: false, error: "请先生成小红书文字或视频口播稿，再生成封面。" };
+
+  if (since && (await hasExistingImage(source.id, "cover", since))) return { ok: true };
 
   const other = source === xhsPost ? videoScript : xhsPost;
   const platformLabel = source === xhsPost ? "小红书" : "视频号";
@@ -74,6 +77,7 @@ export async function generateCrossPlatformCover(
 export async function generateWechatCover(
   topicId: string,
   override?: ModelRef | null,
+  since?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -88,7 +92,23 @@ export async function generateWechatCover(
   const source = article ?? fullArticle ?? outline;
   if (!source) return { ok: false, error: "请先生成公众号文章，再生成封面。" };
 
+  if (since && (await hasExistingImage(source.id, "cover", since))) return { ok: true };
+
   return runCoverGeneration(topic, source, "公众号", user.id, override, false, undefined, "1536x1024", "landscape");
+}
+
+/** Idempotency check for retries (live audit finding: without this, retrying a failed step re-generates images that already succeeded, re-billing the image model). Checks the actual content_images table — the real source of truth — rather than a separate progress ledger that could drift from it. */
+async function hasExistingImage(contentAssetId: string, imageKind: "cover" | "carousel", since: string): Promise<boolean> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("content_images")
+    .select("id")
+    .eq("content_asset_id", contentAssetId)
+    .eq("image_kind", imageKind)
+    .gte("created_at", since)
+    .limit(1)
+    .maybeSingle();
+  return data !== null;
 }
 
 async function runCoverGeneration(
@@ -189,6 +209,7 @@ async function runCoverGeneration(
 export async function generateXiaohongshuCarousel(
   topicId: string,
   override?: ModelRef | null,
+  since?: string,
 ): Promise<{ ok: boolean; error?: string; generated?: number }> {
   const user = await requireUser();
   if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
@@ -207,7 +228,26 @@ export async function generateXiaohongshuCarousel(
   const supabase = await createClient();
   let generated = 0;
 
+  // Idempotency for retries (live audit finding): if pages 1-3 already
+  // generated successfully in this run and page 4 failed, a retry should
+  // only redo page 4 onward — not re-bill for the pages that already
+  // exist. `pageIndex` is 1-based (see saveGeneratedContentImage below).
+  let alreadyDonePages = new Set<number>();
+  if (since) {
+    const { data: existingImages } = await supabase
+      .from("content_images")
+      .select("page_index")
+      .eq("content_asset_id", plan.id)
+      .eq("image_kind", "carousel")
+      .gte("created_at", since);
+    alreadyDonePages = new Set((existingImages ?? []).map((img) => img.page_index).filter((p): p is number => p !== null));
+  }
+
   for (let i = 0; i < pages.length; i++) {
+    if (alreadyDonePages.has(i + 1)) {
+      generated++;
+      continue;
+    }
     const prompt = appendCustomInstructions(
       buildCarouselImagePrompt(
         topic,

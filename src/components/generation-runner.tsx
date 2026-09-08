@@ -13,13 +13,31 @@ import {
   markGenerationRunStep,
   completeGenerationRun,
   failGenerationRun,
+  retryGenerationRun,
 } from "@/app/topics/pipeline-actions";
 import type { GenerationRun } from "@/app/topics/pipeline-actions";
+import { discardTopic } from "@/app/topics/actions";
 import { resolveEmployeeDisplayName } from "@/lib/boss-language";
 import { CONTENT_PLATFORM_LABEL } from "@/lib/status";
 import { Button } from "@/components/ui/button";
+import { PendingSubmitButton } from "@/components/pending-submit-button";
 import type { EmployeeId } from "@/lib/boss-language";
 import type { ContentPlatform } from "@/lib/types";
+
+/** A step's executor gets this many total attempts (1 real + 2 automatic retries) before a transient error (429, network blip) is surfaced to a human — cheap because subtask-level idempotency (see executors below, and generateContent/generateCrossPlatformCover/etc.'s `since` param) means a retry skips whatever already succeeded instead of re-running it. */
+const STEP_ATTEMPT_DELAYS_MS = [2000, 5000];
+
+async function withStepRetry(run: () => Promise<void>): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await run();
+      return;
+    } catch (err) {
+      if (attempt >= STEP_ATTEMPT_DELAYS_MS.length) throw err;
+      await new Promise((resolve) => setTimeout(resolve, STEP_ATTEMPT_DELAYS_MS[attempt]));
+    }
+  }
+}
 
 type StepKey = "content" | "compliance" | "revision" | "planning" | "images";
 type StepStatus = "pending" | "active" | "done" | "skipped";
@@ -160,40 +178,67 @@ export function GenerationRunner({
   }, []);
 
   // Phase 1 — resolve (or create) the persisted run before doing any work.
+  // A "failed" run still gets setRun (not just setError): the error card
+  // below needs run.id to offer a "重试当前步骤" button, and Phase 2 reads
+  // run.status itself to decide whether to actually execute anything.
+  async function loadRun() {
+    try {
+      const loaded = await getOrCreateGenerationRun(topicId, requestedPlatforms);
+      if (loaded.status === "done") {
+        router.push("/team/integrator");
+        return;
+      }
+      setError(loaded.status === "failed" ? (loaded.error ?? "生成过程中出错了。") : null);
+      setRun(loaded);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "初始化生成过程失败。");
+    }
+  }
+
   useEffect(() => {
     if (initRef.current) return;
     initRef.current = true;
+    loadRun();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    (async () => {
-      try {
-        const loaded = await getOrCreateGenerationRun(topicId, requestedPlatforms);
-        if (loaded.status === "done") {
-          router.push("/team/integrator");
-          return;
-        }
-        if (loaded.status === "failed") {
-          setError(loaded.error ?? "生成过程中出错了。");
-          return;
-        }
-        setRun(loaded);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "初始化生成过程失败。");
-      }
-    })();
-  }, [topicId, requestedPlatforms, router]);
+  async function handleRetry() {
+    // No run yet means loadRun itself failed (e.g. couldn't reach the DB
+    // to create the row) — re-run it instead of retryGenerationRun, which
+    // needs an existing run.id.
+    if (!run) {
+      await loadRun();
+      return;
+    }
+    try {
+      const refreshed = await retryGenerationRun(run.id);
+      setError(null);
+      startedRef.current = false;
+      setRun(refreshed);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重试失败，请刷新页面再试。");
+    }
+  }
 
-  // Phase 2 — once the run is known, execute whichever steps aren't in
-  // its completed_steps yet. Runs at most once per run.id (startedRef).
+  // Phase 2 — once the run is known AND running, execute whichever steps
+  // aren't in its completed_steps yet. Runs at most once per run.id
+  // (startedRef; handleRetry resets it to allow a second pass).
   useEffect(() => {
-    if (!run || startedRef.current) return;
+    if (!run || run.status !== "running" || startedRef.current) return;
     startedRef.current = true;
 
     const steps = buildSteps(run.platforms);
     const resumeFromIndex = steps.findIndex((s) => !run.completedSteps.includes(s.key));
     const startIndex = resumeFromIndex === -1 ? steps.length : resumeFromIndex;
 
+    // `since` = this run's creation time, so a retried step's underlying
+    // generator (generateContent / generateCrossPlatformCover / etc.) can
+    // tell "already produced in this run, don't redo it" apart from "an
+    // older version from before this run started, still needs doing" —
+    // see each function's own doc comment for the exact table it checks.
+    const since = run.createdAt;
     const executors: Record<StepKey, () => Promise<void>> = {
-      content: () => runContentGenerationStep(topicId, run.platforms),
+      content: () => runContentGenerationStep(topicId, run.platforms, since),
       compliance: async () => {
         await runComplianceStep(topicId);
       },
@@ -205,7 +250,7 @@ export function GenerationRunner({
         if (skipped) setSkippedRevision(true);
       },
       planning: () => runImagePlanningStep(topicId),
-      images: () => runImageGenerationStep(topicId, run.platforms),
+      images: () => runImageGenerationStep(topicId, run.platforms, since),
     };
 
     async function runFrom(from: number) {
@@ -222,7 +267,7 @@ export function GenerationRunner({
         for (let i = from; i < steps.length; i++) {
           setActiveIndex(i);
           ceilingRef.current = steps[i].ceiling;
-          await executors[steps[i].key]();
+          await withStepRetry(executors[steps[i].key]);
           setPercent(steps[i].ceiling);
           await markGenerationRunStep(run!.id, steps[i].key);
           await waitIfPaused();
@@ -249,9 +294,21 @@ export function GenerationRunner({
 
   if (error) {
     return (
-      <div className="card flex flex-col gap-2 px-5 py-4 text-sm">
-        <p className="font-medium text-red-700 dark:text-red-400">生成过程中出错了</p>
-        <p className="text-[var(--muted)]">{error}</p>
+      <div className="card flex flex-col gap-3 px-5 py-4 text-sm">
+        <div className="flex flex-col gap-2">
+          <p className="font-medium text-red-700 dark:text-red-400">生成过程中出错了</p>
+          <p className="text-[var(--muted)]">{error}</p>
+        </div>
+        <div className="flex gap-3">
+          <form action={discardTopic.bind(null, topicId)} className="flex-1">
+            <PendingSubmitButton variant="secondary" className="w-full">
+              结束并清空
+            </PendingSubmitButton>
+          </form>
+          <Button type="button" className="flex-1" onClick={handleRetry}>
+            重试当前步骤
+          </Button>
+        </div>
       </div>
     );
   }

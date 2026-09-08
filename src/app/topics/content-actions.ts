@@ -198,20 +198,45 @@ async function loadGenerationContext(topicId: string) {
  * and approveAndGoHome in pipeline-actions.ts). Each platform routes
  * independently, so a per-platform override doesn't make sense here — see
  * regeneratePlatformContent for single-platform override.
+ *
+ * `since` (a generation_runs.created_at timestamp) makes a retry
+ * idempotent at the platform level — live audit finding: without this, a
+ * failed content step (say 小红书 failed while 视频号/公众号 succeeded)
+ * would re-generate ALL THREE platforms on retry, re-billing the two that
+ * already worked. When provided, any platform that already has a
+ * content_assets version created at or after `since` is skipped entirely
+ * — the source of truth is the content itself, not a separate ledger that
+ * could drift from what actually happened.
  */
-export async function generateContent(topicId: string, platforms: ContentPlatform[] = ALL_PLATFORMS) {
+export async function generateContent(
+  topicId: string,
+  platforms: ContentPlatform[] = ALL_PLATFORMS,
+  since?: string,
+) {
   const { user, topic, researchPack, sources } = await loadGenerationContext(topicId);
   const supabase = await createClient();
+
+  let platformsToGenerate = platforms;
+  if (since) {
+    const existingAssets = await getContentAssets(topicId);
+    platformsToGenerate = platforms.filter((platform) => {
+      const latest = getLatestForLineage(existingAssets, platform, PLATFORM_CONTENT_TYPE[platform]);
+      return !latest || latest.created_at < since;
+    });
+    if (platformsToGenerate.length === 0) return; // every requested platform already has a fresh-enough version from this run
+  }
 
   await supabase.from("topic_activity_log").insert({
     topic_id: topicId,
     activity_type: "content_generation_started",
     actor_id: user.id,
-    detail: { platforms },
+    detail: { platforms: platformsToGenerate },
   });
 
   const settled = await Promise.allSettled(
-    platforms.map((platform) => generateAndPersistPlatform(supabase, topic, researchPack, sources, platform, user)),
+    platformsToGenerate.map((platform) =>
+      generateAndPersistPlatform(supabase, topic, researchPack, sources, platform, user),
+    ),
   );
 
   await maybeAdvanceToContentDraft(supabase, topicId, user);
@@ -226,7 +251,7 @@ export async function generateContent(topicId: string, platforms: ContentPlatfor
   // just calls this and lets the throw propagate) instead of silently
   // producing an incomplete set of drafts that looks like a full success.
   const failures = settled
-    .map((result, i) => ({ platform: platforms[i], result }))
+    .map((result, i) => ({ platform: platformsToGenerate[i], result }))
     .filter(({ result }) => result.status === "rejected" || !result.value.ok);
   if (failures.length > 0) {
     const detail = failures

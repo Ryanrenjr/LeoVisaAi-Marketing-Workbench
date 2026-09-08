@@ -52,9 +52,9 @@ async function latestGeneratedAssets(topicId: string): Promise<ContentAsset[]> {
     .filter((asset): asset is ContentAsset => asset !== null);
 }
 
-/** Step 1 — C/D/E generate the selected platforms' text at once (existing "生成内容" batch, now scoped to whichever platforms the operator picked — see PlatformChoiceRadios). */
-export async function runContentGenerationStep(topicId: string, platforms: ContentPlatform[]): Promise<void> {
-  await generateContent(topicId, platforms);
+/** Step 1 — C/D/E generate the selected platforms' text at once (existing "生成内容" batch, now scoped to whichever platforms the operator picked — see PlatformChoiceRadios). `since` (this run's created_at) makes a retry skip platforms already generated in this run — see generateContent's doc comment. */
+export async function runContentGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string): Promise<void> {
+  await generateContent(topicId, platforms, since);
 }
 
 /** Step 2 — K writes the 小红书图文 P1–Pn page plan, independent of D's title/caption. Feeds step 3's carousel generation. Only ever called when 小红书 is among the selected platforms (see generation-runner.tsx's buildSteps). */
@@ -77,17 +77,17 @@ export async function runImagePlanningStep(topicId: string): Promise<void> {
  * to no portrait, since there it's a deliberate per-click choice with its
  * own checkbox).
  */
-export async function runImageGenerationStep(topicId: string, platforms: ContentPlatform[]): Promise<void> {
+export async function runImageGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string): Promise<void> {
   const portrait = await getLatestLeoPortrait();
   const tasks: { label: string; promise: Promise<{ ok: boolean; error?: string }> }[] = [];
   if (platforms.includes("VIDEO_CHANNEL") || platforms.includes("XIAOHONGSHU")) {
-    tasks.push({ label: "封面", promise: generateCrossPlatformCover(topicId, portrait !== null) });
+    tasks.push({ label: "封面", promise: generateCrossPlatformCover(topicId, portrait !== null, undefined, since) });
   }
   if (platforms.includes("WECHAT_OFFICIAL_ACCOUNT")) {
-    tasks.push({ label: "公众号封面", promise: generateWechatCover(topicId) });
+    tasks.push({ label: "公众号封面", promise: generateWechatCover(topicId, undefined, since) });
   }
   if (platforms.includes("XIAOHONGSHU")) {
-    tasks.push({ label: "小红书图文", promise: generateXiaohongshuCarousel(topicId) });
+    tasks.push({ label: "小红书图文", promise: generateXiaohongshuCarousel(topicId, undefined, since) });
   }
 
   const settled = await Promise.allSettled(tasks.map((t) => t.promise));
@@ -138,10 +138,14 @@ async function computeAnyFlagged(topicId: string): Promise<boolean> {
  */
 export async function runComplianceStep(topicId: string): Promise<{ anyFlagged: boolean }> {
   const latestAssets = await latestGeneratedAssets(topicId);
-  const settled = await Promise.allSettled(latestAssets.map((asset) => runComplianceReview(asset.id)));
+  const reviews = await getComplianceReviews(topicId);
+  const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
+  const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
+
+  const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id)));
 
   const failures = settled
-    .map((result, i) => ({ asset: latestAssets[i], result }))
+    .map((result, i) => ({ asset: pendingAssets[i], result }))
     .filter(({ result }) => result.status === "rejected" || !result.value.ok);
   if (failures.length > 0) {
     const detail = failures
@@ -243,6 +247,33 @@ export interface GenerationRun {
   status: "running" | "done" | "failed";
   completedSteps: string[];
   error: string | null;
+  /** Everything a subtask produces at or after this timestamp counts as "done in this run" — see the `since` params threaded through generateContent/runImageGenerationStep/runComplianceStep below. */
+  createdAt: string;
+}
+
+const GENERATION_RUN_COLUMNS = "id, platforms, status, completed_steps, error, created_at";
+
+function toGenerationRun(row: {
+  id: string;
+  platforms: unknown;
+  status: string;
+  completed_steps: string[] | null;
+  error: string | null;
+  created_at: string;
+}): GenerationRun {
+  return {
+    id: row.id,
+    platforms: row.platforms as ContentPlatform[],
+    status: row.status as GenerationRun["status"],
+    completedSteps: row.completed_steps ?? [],
+    error: row.error,
+    createdAt: row.created_at,
+  };
+}
+
+async function requireGenerationRunAccess() {
+  const user = await requireUser();
+  if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
 }
 
 /**
@@ -255,65 +286,95 @@ export interface GenerationRun {
  * not a list. The row's own platforms (not whatever the caller passes in)
  * win once a run exists, so a mangled/stale `?platforms=` URL param can
  * never diverge from what's actually been recorded as in progress.
+ *
+ * Every generation_runs read/write in this file (this function and the
+ * four below it) checks its own Supabase error and throws — a live audit
+ * found the previous version let a failed write pass silently, which is
+ * exactly how "AI call succeeded but the system forgot" happens: the
+ * content is real and billed, but a refresh reads back a run that never
+ * recorded it.
  */
 export async function getOrCreateGenerationRun(topicId: string, platforms: ContentPlatform[]): Promise<GenerationRun> {
-  const user = await requireUser();
-  if (!canManageContentAssets(user.role)) throw new Error("Forbidden: ADMIN role required");
-
+  await requireGenerationRunAccess();
   const supabase = await createClient();
 
-  const { data: existing } = await supabase
+  const { data: existing, error: selectError } = await supabase
     .from("generation_runs")
-    .select("id, platforms, status, completed_steps, error")
+    .select(GENERATION_RUN_COLUMNS)
     .eq("topic_id", topicId)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (selectError) throw new Error(`读取生成进度失败，请重试：${selectError.message}`);
+  if (existing) return toGenerationRun(existing);
 
-  if (existing) {
-    return {
-      id: existing.id,
-      platforms: existing.platforms as ContentPlatform[],
-      status: existing.status,
-      completedSteps: existing.completed_steps ?? [],
-      error: existing.error,
-    };
-  }
-
-  const { data: created, error } = await supabase
+  const { data: created, error: insertError } = await supabase
     .from("generation_runs")
     .insert({ topic_id: topicId, platforms, status: "running", completed_steps: [] })
-    .select("id, platforms, status, completed_steps, error")
+    .select(GENERATION_RUN_COLUMNS)
     .single();
-  if (error || !created) throw new Error("无法开始生成流程，请重试。");
+  if (insertError || !created) throw new Error(`无法开始生成流程，请重试：${insertError?.message ?? ""}`);
 
-  return {
-    id: created.id,
-    platforms: created.platforms as ContentPlatform[],
-    status: created.status,
-    completedSteps: created.completed_steps ?? [],
-    error: created.error,
-  };
+  return toGenerationRun(created);
 }
 
 /** Called after each step actually executes (not when it's merely skipped) — see generation-runner.tsx. */
 export async function markGenerationRunStep(runId: string, step: string): Promise<void> {
+  await requireGenerationRunAccess();
   const supabase = await createClient();
-  const { data: run } = await supabase.from("generation_runs").select("completed_steps").eq("id", runId).single();
+
+  const { data: run, error: selectError } = await supabase
+    .from("generation_runs")
+    .select("completed_steps")
+    .eq("id", runId)
+    .single();
+  if (selectError) throw new Error(`读取生成进度失败：${selectError.message}`);
+
   const completed = new Set<string>(run?.completed_steps ?? []);
   completed.add(step);
-  await supabase
+  const { error: updateError } = await supabase
     .from("generation_runs")
     .update({ completed_steps: Array.from(completed), updated_at: new Date().toISOString() })
     .eq("id", runId);
+  if (updateError) throw new Error(`记录生成进度失败：${updateError.message}`);
 }
 
 export async function completeGenerationRun(runId: string): Promise<void> {
+  await requireGenerationRunAccess();
   const supabase = await createClient();
-  await supabase.from("generation_runs").update({ status: "done", updated_at: new Date().toISOString() }).eq("id", runId);
+  const { error } = await supabase
+    .from("generation_runs")
+    .update({ status: "done", updated_at: new Date().toISOString() })
+    .eq("id", runId);
+  if (error) throw new Error(`标记生成完成失败：${error.message}`);
 }
 
 export async function failGenerationRun(runId: string, error: string): Promise<void> {
+  await requireGenerationRunAccess();
   const supabase = await createClient();
-  await supabase.from("generation_runs").update({ status: "failed", error, updated_at: new Date().toISOString() }).eq("id", runId);
+  const { error: updateError } = await supabase
+    .from("generation_runs")
+    .update({ status: "failed", error, updated_at: new Date().toISOString() })
+    .eq("id", runId);
+  if (updateError) throw new Error(`记录失败状态失败：${updateError.message}`);
+}
+
+/**
+ * "重试当前步骤" (live audit finding: a failed run had no way forward
+ * except discarding the whole topic — a single 429/dropped connection
+ * shouldn't be fatal). Resets status back to running and clears the
+ * stored error; `completed_steps` is left exactly as-is, so resuming
+ * picks up from the same point. Safe to call repeatedly.
+ */
+export async function retryGenerationRun(runId: string): Promise<GenerationRun> {
+  await requireGenerationRunAccess();
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("generation_runs")
+    .update({ status: "running", error: null, updated_at: new Date().toISOString() })
+    .eq("id", runId)
+    .select(GENERATION_RUN_COLUMNS)
+    .single();
+  if (error || !data) throw new Error(`重试失败，请刷新页面再试：${error?.message ?? ""}`);
+  return toGenerationRun(data);
 }

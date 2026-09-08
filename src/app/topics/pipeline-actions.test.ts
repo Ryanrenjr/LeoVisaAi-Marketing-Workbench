@@ -80,6 +80,18 @@ describe("runComplianceStep — fail closed", () => {
     const { anyFlagged } = await runComplianceStep("topic-1");
     expect(anyFlagged).toBe(true);
   });
+
+  it("skips assets that already have a compliance_reviews row — retry after a partial failure doesn't re-review what already succeeded", async () => {
+    // VIDEO and WECHAT already reviewed (e.g. from a first pass that then
+    // failed on XHS); only XHS should actually be sent for review again.
+    runComplianceReviewMock.mockResolvedValue({ ok: true });
+    getComplianceReviewsMock.mockResolvedValue([review(VIDEO_ASSET.id, "LOW"), review(WECHAT_ASSET.id, "LOW")]);
+
+    await runComplianceStep("topic-1");
+
+    expect(runComplianceReviewMock).toHaveBeenCalledTimes(1);
+    expect(runComplianceReviewMock).toHaveBeenCalledWith(XHS_ASSET.id);
+  });
 });
 
 describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed state)", () => {
