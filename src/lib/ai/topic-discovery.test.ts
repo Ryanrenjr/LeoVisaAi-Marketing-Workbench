@@ -4,6 +4,7 @@ import {
   buildTopicDiscoveryUserPrompt,
   filterCandidatesByValidLabels,
   TOPIC_DISCOVERY_SYSTEM_PROMPT,
+  TopicCandidateSchema,
 } from "./topic-discovery";
 import type { TopicCandidate } from "./topic-discovery";
 
@@ -97,6 +98,83 @@ describe("TOPIC_DISCOVERY_SYSTEM_PROMPT", () => {
   it("never lets a directed search's own keyword numbers be treated as already-confirmed fact", () => {
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("is NOT verified fact");
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Never fabricate a figure");
+  });
+
+  // Round 3B — a real production run correctly kept the core "fee vs.
+  // processing cost" angle but also let through a second candidate that
+  // only shared the domain ("永居费用") — "一家人申请英国永居，真正要准备
+  // 的不只是申请费" (drifted to total family budget). Fixed by adding an
+  // explicit "domain-relevant ≠ question-relevant" rule with concrete
+  // PASS/FAIL examples lifted straight from this real failure.
+
+  // TEST 1
+  it("states the core rule: domain-relevant is not the same as question-relevant", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Domain-relevant is not question-relevant");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain(
+      "Sharing the same visa type, immigration category, audience, or cost topic is NOT enough on its own",
+    );
+  });
+
+  // TEST 2 — the exact real fixture: candidate A should read as the PASS
+  // example, candidate B (the real drifted candidate) as a named FAIL example.
+  it("names the real PASS candidate (fee vs. processing cost) and the real FAIL candidate (family total budget) from this exact production case", () => {
+    const CANDIDATE_A = "英国永居申请费为什么可能远高于实际处理成本？";
+    const CANDIDATE_B_CORE = "一家人申请永居总共要准备多少钱？";
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain(CANDIDATE_A);
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain(CANDIDATE_B_CORE);
+    // A must appear under the PASS heading, B under the FAIL heading — not swapped.
+    const passIndex = TOPIC_DISCOVERY_SYSTEM_PROMPT.indexOf("PASS (keeps the core relationship)");
+    const failIndex = TOPIC_DISCOVERY_SYSTEM_PROMPT.indexOf("FAIL (only shares the domain");
+    expect(passIndex).toBeGreaterThan(-1);
+    expect(failIndex).toBeGreaterThan(passIndex);
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT.indexOf(CANDIDATE_A)).toBeGreaterThan(passIndex);
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT.indexOf(CANDIDATE_A)).toBeLessThan(failIndex);
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT.indexOf(CANDIDATE_B_CORE)).toBeGreaterThan(failIndex);
+  });
+
+  it("requires rejecting a domain-only match even if it clears every other bar in the prompt", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain(
+      "that's domain-relevant, not question-relevant, and must be rejected even if it clears every other bar in this prompt",
+    );
+  });
+
+  // TEST 3
+  it("explicitly allows directed search to return exactly one candidate and forbids broadening for diversity", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain('Do not treat "at least 2 candidates" or "some variety" as a goal');
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("One high-quality, tightly on-point candidate beats three loosely-related ones");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("return exactly one");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("don't broaden the topic just to reach 2 or 3");
+  });
+
+  it("prefers digging deeper into the same relationship over expanding sideways into adjacent topics", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("go deeper, not wider");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("expanding sideways into adjacent topics");
+  });
+});
+
+// TEST 4 — Round 3A behavior must not regress after the Round 3B prompt additions.
+describe("Round 3A behavior does not regress", () => {
+  it("keyword is still surfaced to the model as the highest-priority direction", () => {
+    const prompt = buildTopicDiscoveryUserPrompt("[N1] x", REAL_FAILURE_KEYWORD);
+    expect(prompt).toContain(REAL_FAILURE_KEYWORD);
+    expect(prompt).toContain("最高优先级");
+  });
+
+  it("directed search is still capped at 3 and 0 is still explicitly valid", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("never more than 3");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("0 is a completely valid result");
+  });
+
+  it("invalid source_label filtering still drops hallucinated labels", () => {
+    const candidates = [candidate({ source_label: "N1" }), candidate({ source_label: "N99" })];
+    expect(filterCandidatesByValidLabels(candidates, ["N1", "N2"])).toEqual([candidate({ source_label: "N1" })]);
+  });
+
+  it("TopicCandidateSchema still has exactly the same 8 fields — no core_relation/semantic_anchor/etc. added", () => {
+    const shape = Object.keys(TopicCandidateSchema.shape).sort();
+    expect(shape).toEqual(
+      ["audience", "business", "content_pillar", "priority", "question", "reason", "source_label", "title"],
+    );
   });
 });
 
