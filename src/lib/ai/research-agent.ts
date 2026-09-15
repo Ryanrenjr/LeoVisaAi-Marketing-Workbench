@@ -61,14 +61,22 @@ export async function runResearchAgent(
     audience: string;
   },
   customInstructions?: string | null,
+  /**
+   * The Model Router's resolved modelId for this task (see router.ts's
+   * runNativeResearchTask). Falls back to MODEL_ALIAS only when omitted —
+   * there is no caller today that omits it (the Router is the only real
+   * caller), but this keeps the function safely callable standalone.
+   */
+  modelId?: string,
 ): Promise<ResearchAgentResult> {
   const started = Date.now();
+  const effectiveModelId = modelId ?? MODEL_ALIAS;
 
   if (!isConfigured()) {
     return {
       ok: false,
       error: "ANTHROPIC_API_KEY 未配置，无法运行研究。",
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: null,
       outputTokens: null,
       latencyMs: Date.now() - started,
@@ -85,7 +93,7 @@ export async function runResearchAgent(
 
     for (let i = 0; i < MAX_PAUSE_RESUMES; i++) {
       const stream = client.messages.stream({
-        model: MODEL_ALIAS,
+        model: effectiveModelId,
         max_tokens: 16000,
         system: appendCustomInstructions(buildSkillPrompt("researcher", RESEARCH_SYSTEM_PROMPT), customInstructions),
         tools: [{ type: "web_search_20260209", name: "web_search", max_uses: MAX_SEARCH_USES }],
@@ -130,7 +138,7 @@ export async function runResearchAgent(
     return {
       ok: true,
       pack,
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: usage.input_tokens,
       outputTokens: usage.output_tokens,
       latencyMs,
@@ -146,7 +154,7 @@ export async function runResearchAgent(
     return {
       ok: false,
       error: message,
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: null,
       outputTokens: null,
       latencyMs,

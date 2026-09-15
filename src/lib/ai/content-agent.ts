@@ -97,10 +97,11 @@ async function callStructured<T>(params: {
   userMessage: string;
   schema: ZodType<T>;
   maxTokens: number;
+  modelId: string;
 }): Promise<{ parsed: T; usage: { input_tokens: number; output_tokens: number } }> {
   const client = new Anthropic();
   const response = await client.messages.parse({
-    model: MODEL_ALIAS,
+    model: params.modelId,
     max_tokens: params.maxTokens,
     system: params.systemPrompt,
     messages: [{ role: "user", content: params.userMessage }],
@@ -134,14 +135,22 @@ async function runContentGeneration<T extends Groundable>(
     maxTokens: number;
     textFieldsForScan: (parsed: T) => string[];
   },
+  /**
+   * The Model Router's resolved modelId (see router.ts's runContentTask).
+   * Falls back to MODEL_ALIAS only when omitted — there is no caller
+   * today that omits it (the Router is the only real caller), but this
+   * keeps every generate* function below safely callable standalone.
+   */
+  modelId?: string,
 ): Promise<ContentAgentResult<T>> {
   const started = Date.now();
+  const effectiveModelId = modelId ?? MODEL_ALIAS;
 
   if (!isConfigured()) {
     return {
       ok: false,
       error: "ANTHROPIC_API_KEY 未配置，无法生成内容。",
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: null,
       outputTokens: null,
       latencyMs: Date.now() - started,
@@ -163,6 +172,7 @@ async function runContentGeneration<T extends Groundable>(
       userMessage,
       schema: opts.schema,
       maxTokens: opts.maxTokens,
+      modelId: effectiveModelId,
     });
 
     const { sourceIds, droppedCount } = groundContentSources(parsed.source_references, labelToId);
@@ -187,7 +197,7 @@ async function runContentGeneration<T extends Groundable>(
     return {
       ok: true,
       content: grounded,
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: usage.input_tokens,
       outputTokens: usage.output_tokens,
       latencyMs: Date.now() - started,
@@ -196,7 +206,7 @@ async function runContentGeneration<T extends Groundable>(
     return {
       ok: false,
       error: formatError(err),
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: null,
       outputTokens: null,
       latencyMs: Date.now() - started,
@@ -207,81 +217,106 @@ async function runContentGeneration<T extends Groundable>(
 export async function generateVideoChannelContent(
   input: EvidenceInput,
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<ContentAgentResult<VideoChannelContent>> {
-  return runContentGeneration(input, {
-    systemPrompt: appendCustomInstructions(buildSkillPrompt("video-editor", VIDEO_SYSTEM_PROMPT), customInstructions),
-    taskInstruction: "Write the VIDEO_CHANNEL script now, following the structure and rules above.",
-    schema: VideoChannelContentSchema,
-    maxTokens: 8000,
-    textFieldsForScan: (c) => [c.title, c.hook, c.cover_text, c.full_script, c.cta, c.publish_title, c.publish_caption],
-  });
+  return runContentGeneration(
+    input,
+    {
+      systemPrompt: appendCustomInstructions(buildSkillPrompt("video-editor", VIDEO_SYSTEM_PROMPT), customInstructions),
+      taskInstruction: "Write the VIDEO_CHANNEL script now, following the structure and rules above.",
+      schema: VideoChannelContentSchema,
+      maxTokens: 8000,
+      textFieldsForScan: (c) => [c.title, c.hook, c.cover_text, c.full_script, c.cta, c.publish_title, c.publish_caption],
+    },
+    modelId,
+  );
 }
 
 export async function generateXiaohongshuContent(
   input: EvidenceInput,
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<ContentAgentResult<XiaohongshuContent>> {
-  return runContentGeneration(input, {
-    systemPrompt: appendCustomInstructions(buildSkillPrompt("xiaohongshu-editor", XHS_SYSTEM_PROMPT), customInstructions),
-    taskInstruction: "Write the Xiaohongshu title and caption now, following the rules above.",
-    schema: XiaohongshuContentSchema,
-    maxTokens: 4000,
-    textFieldsForScan: (c) => [...c.title_options, c.cover_title, c.caption],
-  });
+  return runContentGeneration(
+    input,
+    {
+      systemPrompt: appendCustomInstructions(buildSkillPrompt("xiaohongshu-editor", XHS_SYSTEM_PROMPT), customInstructions),
+      taskInstruction: "Write the Xiaohongshu title and caption now, following the rules above.",
+      schema: XiaohongshuContentSchema,
+      maxTokens: 4000,
+      textFieldsForScan: (c) => [...c.title_options, c.cover_title, c.caption],
+    },
+    modelId,
+  );
 }
 
 export async function generateXiaohongshuPagesPlan(
   input: EvidenceInput,
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<ContentAgentResult<XiaohongshuPagesPlan>> {
-  return runContentGeneration(input, {
-    systemPrompt: appendCustomInstructions(
-      buildSkillPrompt("xiaohongshu-image-planner", XHS_PAGES_SYSTEM_PROMPT),
-      customInstructions,
-    ),
-    taskInstruction: "Plan the Xiaohongshu 图文 page-by-page image-text content now, following the rules above.",
-    schema: XiaohongshuPagesPlanSchema,
-    maxTokens: 8000,
-    textFieldsForScan: (c) => [...c.pages],
-  });
+  return runContentGeneration(
+    input,
+    {
+      systemPrompt: appendCustomInstructions(
+        buildSkillPrompt("xiaohongshu-image-planner", XHS_PAGES_SYSTEM_PROMPT),
+        customInstructions,
+      ),
+      taskInstruction: "Plan the Xiaohongshu 图文 page-by-page image-text content now, following the rules above.",
+      schema: XiaohongshuPagesPlanSchema,
+      maxTokens: 8000,
+      textFieldsForScan: (c) => [...c.pages],
+    },
+    modelId,
+  );
 }
 
 export async function generateWechatOutline(
   input: EvidenceInput,
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<ContentAgentResult<WechatOutline>> {
-  return runContentGeneration(input, {
-    systemPrompt: appendCustomInstructions(buildSkillPrompt("wechat-editor", WECHAT_OUTLINE_SYSTEM_PROMPT), customInstructions),
-    taskInstruction:
-      "Write the WeChat Official Account OUTLINE now (not the full article), following the rules above.",
-    schema: WechatOutlineSchema,
-    maxTokens: 8000,
-    textFieldsForScan: (c) => [...c.title_options, c.summary, ...c.detailed_outline, ...c.key_claims],
-  });
+  return runContentGeneration(
+    input,
+    {
+      systemPrompt: appendCustomInstructions(buildSkillPrompt("wechat-editor", WECHAT_OUTLINE_SYSTEM_PROMPT), customInstructions),
+      taskInstruction:
+        "Write the WeChat Official Account OUTLINE now (not the full article), following the rules above.",
+      schema: WechatOutlineSchema,
+      maxTokens: 8000,
+      textFieldsForScan: (c) => [...c.title_options, c.summary, ...c.detailed_outline, ...c.key_claims],
+    },
+    modelId,
+  );
 }
 
 export async function generateWechatArticle(
   input: EvidenceInput,
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<ContentAgentResult<WechatArticle>> {
-  return runContentGeneration(input, {
-    systemPrompt: appendCustomInstructions(buildSkillPrompt("wechat-editor", WECHAT_ARTICLE_SYSTEM_PROMPT), customInstructions),
-    taskInstruction:
-      "Write the complete, publish-ready WeChat Official Account ARTICLE now (no outline step), following the rules above.",
-    schema: WechatArticleSchema,
-    maxTokens: 16000,
-    textFieldsForScan: (c) => [
-      c.title,
-      ...c.title_options,
-      c.summary,
-      c.full_article,
-      c.closing_note,
-      ...c.golden_quotes,
-      c.cover_title,
-      c.cover_subtitle,
-      c.share_caption,
-    ],
-  });
+  return runContentGeneration(
+    input,
+    {
+      systemPrompt: appendCustomInstructions(buildSkillPrompt("wechat-editor", WECHAT_ARTICLE_SYSTEM_PROMPT), customInstructions),
+      taskInstruction:
+        "Write the complete, publish-ready WeChat Official Account ARTICLE now (no outline step), following the rules above.",
+      schema: WechatArticleSchema,
+      maxTokens: 16000,
+      textFieldsForScan: (c) => [
+        c.title,
+        ...c.title_options,
+        c.summary,
+        c.full_article,
+        c.closing_note,
+        ...c.golden_quotes,
+        c.cover_title,
+        c.cover_subtitle,
+        c.share_caption,
+      ],
+    },
+    modelId,
+  );
 }
 
 export async function generateWechatFullArticle(
@@ -289,14 +324,16 @@ export async function generateWechatFullArticle(
     outline: Pick<WechatOutline, "title_options" | "summary" | "detailed_outline" | "key_claims">;
   },
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<ContentAgentResult<WechatFullArticle>> {
   const started = Date.now();
+  const effectiveModelId = modelId ?? MODEL_ALIAS;
 
   if (!isConfigured()) {
     return {
       ok: false,
       error: "ANTHROPIC_API_KEY 未配置，无法生成内容。",
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: null,
       outputTokens: null,
       latencyMs: Date.now() - started,
@@ -314,6 +351,7 @@ export async function generateWechatFullArticle(
       userMessage,
       schema: WechatFullArticleSchema,
       maxTokens: 16000,
+      modelId: effectiveModelId,
     });
 
     const { sourceIds, droppedCount } = groundContentSources(parsed.source_references, labelToId);
@@ -338,7 +376,7 @@ export async function generateWechatFullArticle(
     return {
       ok: true,
       content: grounded,
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: usage.input_tokens,
       outputTokens: usage.output_tokens,
       latencyMs: Date.now() - started,
@@ -347,7 +385,7 @@ export async function generateWechatFullArticle(
     return {
       ok: false,
       error: formatError(err),
-      modelAlias: MODEL_ALIAS,
+      modelAlias: effectiveModelId,
       inputTokens: null,
       outputTokens: null,
       latencyMs: Date.now() - started,

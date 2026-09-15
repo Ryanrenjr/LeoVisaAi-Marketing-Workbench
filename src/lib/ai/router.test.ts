@@ -108,7 +108,8 @@ describe("runResearchTask", () => {
       latencyMs: 100,
     });
     const { result } = await runResearchTask(TOPIC);
-    expect(runGoogleResearchMock).toHaveBeenCalledWith(TOPIC, "gemini-3.6-flash", null);
+    // gemini-3.8-flash is now the developmentRecommended Flash model (Round 2) — Development Mode resolves to it, not the legacy 3.6.
+    expect(runGoogleResearchMock).toHaveBeenCalledWith(TOPIC, "gemini-3.8-flash", null);
     expect(runAnthropicResearchMock).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(result.provider).toBe("GOOGLE");
@@ -126,7 +127,8 @@ describe("runResearchTask", () => {
       latencyMs: 100,
     });
     const { result } = await runResearchTask(TOPIC, { provider: "ANTHROPIC", modelId: "claude-opus-5" });
-    expect(runAnthropicResearchMock).toHaveBeenCalledWith(TOPIC, null);
+    // Router must pass the resolved modelId through, not leave it to a hardcoded default (Round 2 fix).
+    expect(runAnthropicResearchMock).toHaveBeenCalledWith(TOPIC, null, "claude-opus-5");
     expect(runGoogleResearchMock).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
   });
@@ -375,7 +377,8 @@ describe("runContentTask", () => {
       latencyMs: 1,
     });
     await runContentTask("VIDEO_WRITING", EVIDENCE_INPUT, { provider: "ANTHROPIC", modelId: "claude-opus-5" });
-    expect(runAnthropicContentTaskMock).toHaveBeenCalledWith("VIDEO_WRITING", EVIDENCE_INPUT, null);
+    // Router must pass the resolved modelId through, not leave it to a hardcoded default (Round 2 fix).
+    expect(runAnthropicContentTaskMock).toHaveBeenCalledWith("VIDEO_WRITING", EVIDENCE_INPUT, null, "claude-opus-5");
     expect(generateGoogleStructuredMock).not.toHaveBeenCalled();
     expect(generateGroqStructuredMock).not.toHaveBeenCalled();
   });
@@ -430,7 +433,8 @@ describe("runWechatFullArticleTask", () => {
       { ...EVIDENCE_INPUT, outline },
       { provider: "ANTHROPIC", modelId: "claude-opus-5" },
     );
-    expect(runAnthropicWechatFullArticleMock).toHaveBeenCalledWith({ ...EVIDENCE_INPUT, outline }, null);
+    // Router must pass the resolved modelId through, not leave it to a hardcoded default (Round 2 fix).
+    expect(runAnthropicWechatFullArticleMock).toHaveBeenCalledWith({ ...EVIDENCE_INPUT, outline }, null, "claude-opus-5");
   });
 
   it("dispatches to a non-Anthropic provider and applies grounding", async () => {

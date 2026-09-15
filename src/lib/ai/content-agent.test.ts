@@ -126,6 +126,16 @@ describe("generateVideoChannelContent", () => {
     expect(result.modelAlias).toBe("claude-opus-5");
   });
 
+  it("uses the Router-resolved modelId when supplied, not the MODEL_ALIAS fallback", async () => {
+    mockParseOnce(validVideo);
+    const result = await generateVideoChannelContent(EVIDENCE_INPUT, null, "claude-sonnet-5");
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected success");
+    expect(result.modelAlias).toBe("claude-sonnet-5");
+    const call = parseMock.mock.calls[0][0];
+    expect(call.model).toBe("claude-sonnet-5");
+  });
+
   it("drops a fabricated source label end-to-end", async () => {
     mockParseOnce({ ...validVideo, source_references: ["S1", "S99"] });
     const result = await generateVideoChannelContent(EVIDENCE_INPUT);

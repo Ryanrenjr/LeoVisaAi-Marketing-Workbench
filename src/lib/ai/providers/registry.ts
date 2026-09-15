@@ -29,6 +29,32 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     pricingNote: "按输入/输出 token 计费，价格以 Anthropic 官方定价为准。",
     lastVerifiedAt: "2026-08-20",
   },
+  // claude-sonnet-5 — confirmed via the official Anthropic models overview
+  // (platform.claude.com/docs/en/about-claude/models/overview) on
+  // 2026-09-15: real API model id, supports structured output/vision/tool
+  // use, PAID ($2/$10 per MTok in/out). Live user instruction: this is
+  // G｜合规审核员's COMPLIANCE model — not because Claude "understands UK
+  // law better," but for cross-model independent review: content is
+  // authored on OpenAI Terra, reviewed by a different provider (Anthropic
+  // Sonnet 5) to reduce same-model blind spots.
+  {
+    provider: "ANTHROPIC",
+    modelId: "claude-sonnet-5",
+    displayName: "Claude Sonnet 5",
+    pricingType: "PAID",
+    supportsWebSearch: false,
+    supportsStructuredOutput: true,
+    supportsToolUse: true,
+    supportsVision: true,
+    supportsImageGeneration: false,
+    supportsReasoning: true,
+    enabled: true,
+    developmentRecommended: false,
+    dataPolicyNote: "通过 Anthropic API 调用，不用于训练模型（Anthropic 商业条款）。",
+    freeTierNote: null,
+    pricingNote: "按输入/输出 token 计费（$2/输入、$10/输出，每百万 token），价格以 Anthropic 官方定价为准。",
+    lastVerifiedAt: "2026-09-15",
+  },
 
   // --- Google Gemini -------------------------------------------------------
   // gemini-2.5-flash / gemini-2.5-flash-lite (registered in the original
@@ -41,6 +67,31 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
   // docs/provider-smoke-test.md — note Google Search grounding hit a
   // 429 RESOURCE_EXHAUSTED quota error on this free-tier key even before
   // any Research Agent run; grounding may need its own quota headroom.
+  //
+  // gemini-3.8-flash confirmed via the official Gemini API model list
+  // (ai.google.dev/gemini-api/docs/models) on 2026-09-15 as the current
+  // "New Stable" Flash release — now the dev-mode-recommended default.
+  // gemini-3.6-flash is NOT deprecated (still listed "Stable" on the same
+  // page) — kept enabled as a secondary/legacy option, just no longer the
+  // preferred pick, in case any existing config still references it.
+  {
+    provider: "GOOGLE",
+    modelId: "gemini-3.8-flash",
+    displayName: "Gemini 3.8 Flash",
+    pricingType: "FREE",
+    supportsWebSearch: true,
+    supportsStructuredOutput: true,
+    supportsToolUse: true,
+    supportsVision: true,
+    supportsImageGeneration: false,
+    supportsReasoning: true,
+    enabled: true,
+    developmentRecommended: true,
+    dataPolicyNote: "通过 Google AI Studio 免费层调用；免费层的输入输出可能被 Google 用于改进产品，请勿用于真实客户敏感信息。",
+    freeTierNote: "Google AI Studio 免费层，按分钟/按天有速率限制；googleSearch 联网检索的免费配额比普通生成更紧张，已实测触发 429。",
+    pricingNote: "超出免费额度或改用计费项目（Vertex AI）时可能产生费用。",
+    lastVerifiedAt: "2026-09-15",
+  },
   {
     provider: "GOOGLE",
     modelId: "gemini-3.6-flash",
@@ -53,7 +104,10 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     supportsImageGeneration: false,
     supportsReasoning: true,
     enabled: true,
-    developmentRecommended: true,
+    // No longer the dev-mode default — superseded by gemini-3.8-flash
+    // above. Still Google's official "Stable" status, not deprecated;
+    // kept enabled as a secondary option only.
+    developmentRecommended: false,
     dataPolicyNote: "通过 Google AI Studio 免费层调用；免费层的输入输出可能被 Google 用于改进产品，请勿用于真实客户敏感信息。",
     freeTierNote: "Google AI Studio 免费层，按分钟/按天有速率限制；googleSearch 联网检索的免费配额比普通生成更紧张，已实测触发 429。",
     pricingNote: "超出免费额度或改用计费项目（Vertex AI）时可能产生费用。",
@@ -74,8 +128,12 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     developmentRecommended: true,
     dataPolicyNote: "通过 Google AI Studio 免费层调用；免费层的输入输出可能被 Google 用于改进产品，请勿用于真实客户敏感信息。",
     freeTierNote: "Google AI Studio 免费层，速率限制比 Flash 更宽松，能力更轻量。",
-    pricingNote: "超出免费额度或改用计费项目（Vertex AI）时可能产生费用。官方已宣布该模型将于 2026-10-16 停用，届时需更新此处的 modelId。",
-    lastVerifiedAt: "2026-08-20",
+    // 2026-09-15 re-verified against the official Gemini API model list
+    // (ai.google.dev/gemini-api/docs/models): still "Stable", no
+    // deprecation/shutdown date listed anywhere. The previous note here
+    // claiming an official 2026-10-16 shutdown was incorrect — removed.
+    pricingNote: "超出免费额度或改用计费项目（Vertex AI）时可能产生费用。",
+    lastVerifiedAt: "2026-09-15",
   },
 
   // --- Groq ----------------------------------------------------------------
@@ -254,6 +312,31 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
     pricingNote: "按输入/输出 token 计费（含独立的缓存读写价格），比 Terra 更贵，需要在你的 OpenAI 账户绑定付款方式并保有余额，价格以 OpenAI 官方定价为准。",
     lastVerifiedAt: "2026-08-27",
   },
+  // gpt-5.6-luna — the cost-optimized tier of the GPT-5.6 series (below
+  // Terra and Sol), confirmed real via the official OpenAI model list
+  // (developers.openai.com/api/docs/models/all) on 2026-09-15. Registered
+  // here so it's available for manual/ADMIN selection, but it is NOT a
+  // production default for any task this round — no verified
+  // reasoning_effort recommendation for it yet, so none is set (falls
+  // back to the API's own default, same as gpt-5/gpt-5-mini below).
+  {
+    provider: "OPENAI",
+    modelId: "gpt-5.6-luna",
+    displayName: "GPT-5.6 Luna (OpenAI)",
+    pricingType: "PAID",
+    supportsWebSearch: false,
+    supportsStructuredOutput: true,
+    supportsToolUse: true,
+    supportsVision: true,
+    supportsImageGeneration: false,
+    supportsReasoning: true,
+    enabled: true,
+    developmentRecommended: false,
+    dataPolicyNote: "通过 OpenAI API 直接调用；按 OpenAI API 数据使用政策，API 数据默认不用于训练模型。",
+    freeTierNote: null,
+    pricingNote: "按输入/输出 token 计费（含独立的缓存读写价格），是 GPT-5.6 系列中最便宜的一档，需要在你的 OpenAI 账户绑定付款方式并保有余额，价格以 OpenAI 官方定价为准。",
+    lastVerifiedAt: "2026-09-15",
+  },
   {
     provider: "OPENAI",
     modelId: "gpt-5",
@@ -280,8 +363,17 @@ export const MODEL_REGISTRY: readonly ModelRegistryEntry[] = [
   // gpt-image-2 in this account's /v1/models listing by 2026-08-21 — this
   // registers gpt-image-2 (dated 2026-04-21, the newest non-preview entry)
   // and confirmed working end-to-end via a real /v1/images/generations
-  // call the same day. Re-verify against platform.openai.com/docs/models
-  // if OpenAI ships a newer generation later.
+  // call the same day.
+  //
+  // Round 2 (2026-09-15) re-check against developers.openai.com/api/docs/
+  // models/all found gpt-image-2 now marked superseded there, with
+  // gpt-image-2.5-sunburst (most capable) and gpt-image-2.5-flare
+  // (fast/everyday) as the current GA production tiers. Live user
+  // decision on being shown this finding: keep gpt-image-2 as the
+  // production default this round — switching a live paid image model is
+  // its own deliberate review (quality/cost/prompt compatibility), not a
+  // side effect of a routing cleanup. Not registered as options yet
+  // either; a future round should evaluate and register them properly.
   {
     provider: "OPENAI",
     modelId: "gpt-image-2",

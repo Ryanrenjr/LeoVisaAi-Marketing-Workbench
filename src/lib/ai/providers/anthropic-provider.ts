@@ -67,24 +67,28 @@ export async function runAnthropicResearch(
     audience: string;
   },
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<AIExecutionResult<GroundedResearchPack>> {
-  return adaptResearch(await runResearchAgent(topic, customInstructions));
+  return adaptResearch(await runResearchAgent(topic, customInstructions, modelId));
 }
 
 export async function runAnthropicContentTask(
   taskType: GenericContentTaskType,
   input: EvidenceInput,
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<
   AIExecutionResult<VideoChannelContent | XiaohongshuContent | XiaohongshuPagesPlan | WechatOutline | WechatArticle>
 > {
-  if (taskType === "VIDEO_WRITING") return adaptContent(await generateVideoChannelContent(input, customInstructions));
+  if (taskType === "VIDEO_WRITING")
+    return adaptContent(await generateVideoChannelContent(input, customInstructions, modelId));
   if (taskType === "XIAOHONGSHU_WRITING")
-    return adaptContent(await generateXiaohongshuContent(input, customInstructions));
+    return adaptContent(await generateXiaohongshuContent(input, customInstructions, modelId));
   if (taskType === "XIAOHONGSHU_PAGES_PLANNING")
-    return adaptContent(await generateXiaohongshuPagesPlan(input, customInstructions));
-  if (taskType === "WECHAT_ARTICLE_WRITING") return adaptContent(await generateWechatArticle(input, customInstructions));
-  return adaptContent(await generateWechatOutline(input, customInstructions));
+    return adaptContent(await generateXiaohongshuPagesPlan(input, customInstructions, modelId));
+  if (taskType === "WECHAT_ARTICLE_WRITING")
+    return adaptContent(await generateWechatArticle(input, customInstructions, modelId));
+  return adaptContent(await generateWechatOutline(input, customInstructions, modelId));
 }
 
 export async function runAnthropicWechatFullArticle(
@@ -92,8 +96,9 @@ export async function runAnthropicWechatFullArticle(
     outline: Pick<WechatOutline, "title_options" | "summary" | "detailed_outline" | "key_claims">;
   },
   customInstructions?: string | null,
+  modelId?: string,
 ): Promise<AIExecutionResult<WechatFullArticle>> {
-  return adaptContent(await generateWechatFullArticle(input, customInstructions));
+  return adaptContent(await generateWechatFullArticle(input, customInstructions, modelId));
 }
 
 function isConfigured(): boolean {

@@ -154,7 +154,7 @@ async function runNativeResearchTask(
 
   const { model } = resolution;
   const customInstructions = await getEmployeeInstruction("researcher");
-  if (model.provider === "ANTHROPIC") return runAnthropicResearch(topic, customInstructions);
+  if (model.provider === "ANTHROPIC") return runAnthropicResearch(topic, customInstructions, model.modelId);
   if (model.provider === "GOOGLE") return runGoogleResearch(topic, model.modelId, customInstructions);
 
   // Registry-level capability filtering should make this unreachable —
@@ -309,7 +309,7 @@ export async function runContentTask(
   const { model } = resolution;
   const employeeId = TASK_TYPE_EMPLOYEE[taskType];
   const customInstructions = await getEmployeeInstruction(employeeId);
-  if (model.provider === "ANTHROPIC") return runAnthropicContentTask(taskType, input, customInstructions);
+  if (model.provider === "ANTHROPIC") return runAnthropicContentTask(taskType, input, customInstructions, model.modelId);
   const provider = model.provider;
 
   if (taskType === "VIDEO_WRITING") {
@@ -420,7 +420,7 @@ export async function runWechatFullArticleTask(
 
   const { model } = resolution;
   const customInstructions = await getEmployeeInstruction("wechat-editor");
-  if (model.provider === "ANTHROPIC") return runAnthropicWechatFullArticle(input, customInstructions);
+  if (model.provider === "ANTHROPIC") return runAnthropicWechatFullArticle(input, customInstructions, model.modelId);
 
   const { labelToId, manifestText } = buildSourceManifest(input.sources);
   const context = buildEvidenceContextBlock(input.topic, input.researchPack, manifestText);

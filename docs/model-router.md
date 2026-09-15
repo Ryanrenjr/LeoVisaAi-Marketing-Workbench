@@ -8,42 +8,55 @@ provider/model, and to prefer free-tier models during development.
 
 ## The product principle: Digital Employee ≠ Model
 
-A digital employee (A 选题策划员 / B 政策研究员 / C 内容编辑 / D 合规审核员 / E 数据分析员) is
-**never permanently tied to one AI model**. The real chain is:
+A digital employee (see `src/lib/boss-language.ts` `DIGITAL_EMPLOYEES` for
+the current A–K roster) is **never permanently tied to one AI model**. The
+real chain is:
 
 ```
 Digital Employee → Task Type → Model Router → Provider → Model
 ```
 
-Example: C 内容编辑 can generate 视频号 with one model, 小红书 with another,
-and 公众号 with a third — three tasks, three independent routing decisions,
-one employee. Do not write code like `ContentAgent = Claude` — always
-route through a task type.
+Example: C 内容编辑 (视频号) and F 公众号编辑 (公众号) can each be routed to a
+different provider/model — independent routing decisions per task type,
+not one model shared across every employee. Do not write code like
+`ContentAgent = Claude` — always route through a task type.
 
 ## Task types
 
-Defined in `src/lib/ai/providers/types.ts`:
+Defined in `src/lib/ai/providers/types.ts` — kept in sync with the current
+digital-employee roster (`src/lib/boss-language.ts`). `PERFORMANCE_ANALYSIS`
+(the old E/J 数据分析员 task) no longer exists — that employee was retired
+entirely by live user instruction; do not re-add it without a new explicit
+instruction.
 
 | Task type | Digital employee | Requires |
 |---|---|---|
 | `TOPIC_PLANNING` | A 选题策划员 | structured output (not wired to any business logic yet — see "What's prepared but not built" below) |
 | `TOPIC_DISCOVERY` | A 选题策划员 | structured output — real news search (`src/lib/ai/topic-discovery.ts`) → candidate topics, never auto-written to `topics` |
-| `RESEARCH` | B 政策研究员 | **real web-search capability** (hard requirement — see below) |
-| `VIDEO_WRITING` | C 内容编辑 | structured output |
-| `XIAOHONGSHU_WRITING` | C 内容编辑 | structured output |
-| `WECHAT_WRITING` (outline) | C 内容编辑 | structured output |
-| `WECHAT_FULL_ARTICLE` | C 内容编辑 | structured output |
-| `COMPLIANCE` | D 合规审核员 | structured output — live; re-checks generated content against its own Research Pack (`src/lib/ai/compliance-schemas.ts`), advisory only |
-| `PERFORMANCE_ANALYSIS` | E 数据分析员 | structured output + **vision** (reads a screenshot — hard requirement, see `supportsVision` in the registry) |
+| `RESEARCH` | B 政策研究员 | structured output only — see "RESEARCH's capability requirement" below, the hard `supportsWebSearch` gate applies only to the native-grounding fallback, not the default Search Router path |
+| `VIDEO_WRITING` / `VIDEO_REVISION` | C 内容编辑 | structured output |
+| `XIAOHONGSHU_WRITING` / `XIAOHONGSHU_REVISION` | D 小红书文案员 | structured output |
+| `XIAOHONGSHU_PAGES_PLANNING` / `XIAOHONGSHU_PAGES_REVISION` | K 小红书图文规划员 | structured output |
+| `WECHAT_WRITING` / `WECHAT_FULL_ARTICLE` | F 公众号编辑 | structured output — legacy pre-`WECHAT_ARTICLE_WRITING` task types, kept but not the live default path |
+| `WECHAT_ARTICLE_WRITING` / `WECHAT_ARTICLE_REVISION` | F 公众号编辑 | structured output |
+| `COMPLIANCE` | G 合规审核员 | structured output — live; re-checks generated content against its own Research Pack (`src/lib/ai/compliance-schemas.ts`), advisory only. Also covers H 终审修改员's post-revision final re-check — both reuse this same task type, there is no separate `FINAL_COMPLIANCE` type |
+| `IMAGE_GENERATION` | E 图片设计员 | the Images API capability (`supportsImageGeneration`), a different endpoint shape from every other task |
 
 ## Providers
 
 `ANTHROPIC`, `GOOGLE`, `GROQ`, `OPENROUTER`, `OPENAI` — `src/lib/ai/providers/`:
 
 - `anthropic-provider.ts` — a thin **adapter**, not a reimplementation.
-  Delegates straight to the existing, untouched `research-agent.ts` /
-  `content-agent.ts`. Their behavior, prompts, and tests are unchanged by
-  this milestone.
+  Delegates to `research-agent.ts` / `content-agent.ts`, passing through
+  the Router's resolved `modelId` as an explicit parameter (fixed in
+  Round 2 — these previously ignored it and always called a hardcoded
+  `MODEL_ALIAS` / `claude-opus-5`, so picking Claude Sonnet 5 in
+  `/admin/ai-models` for e.g. `COMPLIANCE` could silently still run Opus
+  5). `research-agent.ts` / `content-agent.ts` fall back to their own
+  `RESEARCH_MODEL` / `CONTENT_MODEL` env vars only when called directly
+  with no `modelId` — a legacy path for non-Router callers, not something
+  the Router itself relies on. Prompts and grounding/anti-hallucination
+  behavior are otherwise unchanged.
 - `google-provider.ts` — real Gemini calls (`@google/genai`). Research
   uses Gemini's `googleSearch` grounding tool; its grounding chunks are
   mapped into the same shape the Anthropic path produces, so the
@@ -55,12 +68,23 @@ Defined in `src/lib/ai/providers/types.ts`:
 - `openrouter-provider.ts` — real calls via raw HTTP (no dedicated
   OpenRouter SDK exists). Experimental / A-B testing surface. No
   registered OpenRouter model claims web-search capability.
-- `openai-provider.ts` — real calls via raw HTTP (Chat Completions, JSON
-  mode), same shape as `openrouter-provider.ts`. Uses the user's own
-  OpenAI account/billing — no free tier, so both registered models are
-  `PAID` and not `developmentRecommended`; an ADMIN must explicitly set
-  one as the default for a task. No web-search or vision path wired yet,
-  so it never satisfies RESEARCH or PERFORMANCE_ANALYSIS.
+- `openai-provider.ts` — real calls via raw HTTP: Chat Completions
+  (`json_schema` strict mode, re-validated with the caller's Zod schema)
+  for every text task, plus a separate Images endpoint (`gpt-image-2`) for
+  `IMAGE_GENERATION`. Registers the GPT-5.6 family — `gpt-5.6-sol`
+  (flagship, `reasoningEffort: "high"`, production default for
+  `RESEARCH`), `gpt-5.6-terra` (balanced, `reasoningEffort: "medium"`,
+  production default for the content/revision/topic-discovery tasks — see
+  "Production routing" below), and `gpt-5.6-luna` (cost-optimized,
+  registry-only — not a production default for any task) — confirmed
+  against `developers.openai.com/api/docs/models/all` on 2026-09-15. Uses
+  the user's own OpenAI account/billing — no free tier, so every OpenAI
+  entry is `PAID` and not `developmentRecommended`; an ADMIN must
+  explicitly set one as the default for a task. No native web-search or
+  vision-analysis path wired, so it never satisfies the native-grounding
+  RESEARCH fallback (see below) — but an OpenAI model can and does serve
+  RESEARCH via the Search Router path, since that path only needs
+  structured output.
 
 The rest of the application **never** imports a provider SDK or calls
 these files directly — only `router.ts` does.
@@ -111,13 +135,21 @@ the resolved provider. A resolution failure never contacts any provider —
 provider that was actually called and failed
 (`isRouterResolutionFailure()`).
 
-### RESEARCH's hard capability requirement
+### RESEARCH's capability requirement
 
-`isModelSuitableForTask()` rejects any model without
-`supportsWebSearch: true` for `RESEARCH` — enforced by the registry filter
-itself, not by convention. An override that violates this returns exactly
-`"此模型不支持当前研究流程所需的联网能力。"` before any network call. The
-Research Agent never falls back to answering from model memory alone.
+`isModelSuitableForTask()` only requires `supportsStructuredOutput` for
+`RESEARCH`, same as every other task — **not** `supportsWebSearch`. This
+is deliberate: the live default path (Search Router retrieves real
+sources first, the resolved model only analyses them via structured
+output — see `runResearchTask` below) never calls the model's own search
+tool, so an OpenAI model can serve `RESEARCH` there despite having no
+native web-search capability. `supportsWebSearch` still gates the
+separate native-grounding fallback (`runNativeResearchTask`, used only
+when no search provider is configured) — that function itself checks
+`model.provider === "ANTHROPIC" | "GOOGLE"` and returns exactly
+`"此模型不支持当前研究流程所需的联网能力。"` for anything else, before any
+network call. The Research Agent never falls back to answering from model
+memory alone.
 
 ## Paid/mixed-cost warning
 
@@ -152,6 +184,40 @@ status (已连接/未配置 — **never** the key value), the current
 Development Mode state, and the same free-model privacy notice as
 `docs/security-boundaries.md`.
 
+## Production routing (ACTIVE defaults)
+
+Persisted in `model_routing_config` — bootstrapped by
+`supabase/migrations/0032_model_routing_defaults_seed.sql` (`on conflict
+do nothing`, fresh-environment only) and brought to the current values by
+`supabase/migrations/0034_model_routing_active_defaults.sql` (`on
+conflict do update` — an intentional change to already-configured
+production values, not just a bootstrap). An ADMIN can still override any
+of these in `/admin/ai-models`; this table is the deliberate product
+default, not a hard-coded restriction.
+
+| Task type | Provider / Model |
+|---|---|
+| `TOPIC_DISCOVERY` | OPENAI / `gpt-5.6-terra` |
+| `RESEARCH` | OPENAI / `gpt-5.6-sol` (+ Search Router — see above) |
+| `VIDEO_WRITING` / `VIDEO_REVISION` | OPENAI / `gpt-5.6-terra` |
+| `XIAOHONGSHU_WRITING` / `XIAOHONGSHU_REVISION` | OPENAI / `gpt-5.6-terra` |
+| `XIAOHONGSHU_PAGES_PLANNING` / `XIAOHONGSHU_PAGES_REVISION` | OPENAI / `gpt-5.6-terra` |
+| `WECHAT_ARTICLE_WRITING` / `WECHAT_ARTICLE_REVISION` | OPENAI / `gpt-5.6-terra` |
+| `COMPLIANCE` | ANTHROPIC / `claude-sonnet-5` (also covers H's post-revision final re-check — same task type) |
+| `IMAGE_GENERATION` | OPENAI / `gpt-image-2` |
+
+Deliberately left untouched by 0034 (not part of the live pipeline):
+`TOPIC_PLANNING` (no caller yet), `WECHAT_WRITING` / `WECHAT_FULL_ARTICLE`
+(legacy pre-`WECHAT_ARTICLE_WRITING` task types).
+
+**Why COMPLIANCE is a different provider family than content generation:**
+content is authored on OpenAI (Terra), then reviewed by Anthropic (Sonnet
+5) — cross-model independent review, so the same model family that wrote
+a claim isn't also the one grading it. This is not a claim that Claude
+"understands UK law better" — it's about reducing same-model blind spots
+between author and reviewer. See `runComplianceTask` in `router.ts` and
+the compliance-schemas.ts comments.
+
 ## What's prepared but not built
 
 - **`TOPIC_PLANNING`** — registered as a task type so ADMIN can configure
@@ -173,17 +239,46 @@ RESEARCH task," exactly as for any other task.
 
 ## Verification status
 
-See `docs/provider-smoke-test.md` for the end-to-end verification pass —
-migration applied, both Google and Groq connected and health-checked
-live, a real Research Agent run (revealed a real free-tier grounding
-quota limit, reported honestly rather than worked around), and a
-Model Registry audit that found **two separate stale-model-ID issues from
-real API calls, not assumptions**: Groq's `llama-3.3-70b-versatile` /
-`qwen/qwen3-32b` (deprecated, replaced with `openai/gpt-oss-120b` /
-`openai/gpt-oss-20b`) and Google's `gemini-2.5-flash` /
-`gemini-2.5-flash-lite` (rejected live for new API keys, replaced with
-`gemini-3.6-flash` / `gemini-3.5-flash-lite`) — both fixes confirmed
-working with real calls as of 2026-08-20.
+See `docs/provider-smoke-test.md` for the original end-to-end
+verification pass (2026-08-20) — migration applied, both Google and Groq
+connected and health-checked live, a real Research Agent run (revealed a
+real free-tier grounding quota limit, reported honestly rather than
+worked around), and a Model Registry audit that found **two separate
+stale-model-ID issues from real API calls, not assumptions**: Groq's
+`llama-3.3-70b-versatile` / `qwen/qwen3-32b` (deprecated, replaced with
+`openai/gpt-oss-120b` / `openai/gpt-oss-20b`) and Google's
+`gemini-2.5-flash` / `gemini-2.5-flash-lite` (rejected live for new API
+keys, replaced with `gemini-3.6-flash` / `gemini-3.5-flash-lite`).
+
+**Round 2 audit (2026-09-15)** re-verified against each provider's
+current official model list/docs before writing any code (not repo
+comments):
+
+- OpenAI GPT-5.6 family (`gpt-5.6-sol` / `-terra` / `-luna`) — confirmed
+  GA via `developers.openai.com/api/docs/models/all`.
+- Anthropic `claude-sonnet-5` — confirmed via
+  `platform.claude.com/docs/en/about-claude/models/overview` ($2/$10 per
+  MTok in/out, 1M context, structured output/vision/tool use).
+- Google `gemini-3.8-flash` — confirmed GA/"New Stable" via
+  `ai.google.dev/gemini-api/docs/models`; `gemini-3.6-flash` kept enabled
+  as a secondary option (not deprecated), just no longer
+  `developmentRecommended`.
+- Google `gemini-3.5-flash-lite` — confirmed still GA with **no**
+  deprecation/shutdown date on `ai.google.dev/gemini-api/docs/deprecations`;
+  a previous note in this repo incorrectly claimed a 2026-10-16 shutdown
+  and has been removed.
+- OpenAI image models — found `gpt-image-2` now marked superseded on the
+  official model list, with `gpt-image-2.5-sunburst` /
+  `gpt-image-2.5-flare` as the current GA production tiers. Flagged to
+  the live user rather than switched unilaterally; decision was to keep
+  `gpt-image-2` as the `IMAGE_GENERATION` production default this round
+  and defer evaluating the 2.5 family to its own dedicated round — see
+  the comment above the `gpt-image-2` entry in `registry.ts`.
+- Fixed a real correctness bug (not a model-list issue): the Router's
+  resolved `modelId` for Anthropic content-generation and native-research
+  tasks was being silently discarded in favor of a hardcoded
+  `MODEL_ALIAS` (`claude-opus-5` / `CONTENT_MODEL` / `RESEARCH_MODEL`) —
+  see `content-agent.ts`, `research-agent.ts`, `anthropic-provider.ts`.
 
 ## How to add a new model
 
