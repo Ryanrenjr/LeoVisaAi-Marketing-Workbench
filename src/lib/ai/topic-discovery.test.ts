@@ -3,8 +3,10 @@ import {
   buildDiscoveryQueries,
   buildTopicDiscoveryUserPrompt,
   filterCandidatesByValidLabels,
+  poolDiscoveryResults,
   TOPIC_DISCOVERY_SYSTEM_PROMPT,
   TopicCandidateSchema,
+  TopicDiscoveryResultSchema,
 } from "./topic-discovery";
 import type { TopicCandidate } from "./topic-discovery";
 
@@ -51,10 +53,105 @@ describe("buildDiscoveryQueries", () => {
     expect(homeOfficeCount).toBeLessThanOrEqual(queries.length);
   });
 
-  it("auto-discovery (no keyword): keeps the generic monthly sweep unchanged", () => {
+  // Round 3C — TEST 1: 5 distinct editorial-lane queries, up from 3 near-duplicates.
+  it("auto-discovery (no keyword): generates 5 distinct editorial-lane queries", () => {
     const queries = buildDiscoveryQueries(new Date("2026-09-15"));
-    expect(queries.length).toBe(3);
-    expect(queries.some((q) => q.includes("UK immigration rules changes news"))).toBe(true);
+    expect(queries).toHaveLength(5);
+    expect(new Set(queries).size).toBe(5);
+  });
+
+  // TEST 2 — diversity: not 5 synonyms of "Home Office / Immigration Rules"
+  it("auto-discovery (no keyword): the 5 queries cover distinct intents (policy / status / major routes / incidents / fees), not 5 rewordings of the same policy-document search", () => {
+    const queries = buildDiscoveryQueries(new Date("2026-09-15")).map((q) => q.toLowerCase());
+    expect(queries.some((q) => q.includes("policy"))).toBe(true);
+    expect(queries.some((q) => q.includes("evisa") || q.includes("ilr") || q.includes("citizenship"))).toBe(true);
+    expect(queries.some((q) => q.includes("student") || q.includes("skilled worker") || q.includes("sponsor"))).toBe(true);
+    expect(queries.some((q) => q.includes("border") || q.includes("airline") || q.includes("airport") || q.includes("incident"))).toBe(
+      true,
+    );
+    expect(queries.some((q) => q.includes("fee") || q.includes("deadline") || q.includes("misconception") || q.includes("controversy"))).toBe(
+      true,
+    );
+  });
+
+  // TEST 3 — directed search must not regress into the new 5-lane AUTO shape
+  it("directed search (keyword given): still uses Round 3A's directed logic, never the 5-lane AUTO shape", () => {
+    const queries = buildDiscoveryQueries(new Date("2026-09-15"), REAL_FAILURE_KEYWORD);
+    expect(queries.length).toBeLessThanOrEqual(3);
+    expect(queries[0]).toBe(REAL_FAILURE_KEYWORD);
+  });
+});
+
+// Round 3C — TEST 4 / TEST 5: pooling and de-duplicating AUTO-discovery's
+// 5 editorial-lane search executions.
+describe("poolDiscoveryResults", () => {
+  function result(url: string, label: string) {
+    return { url, label };
+  }
+
+  // TEST 4
+  it("de-duplicates the same URL appearing across multiple lanes, keeping only the first occurrence", () => {
+    const executions = [
+      { results: [result("https://www.gov.uk/a", "lane1-a")] },
+      { results: [result("https://www.gov.uk/a", "lane2-a-dup")] },
+      { results: [result("https://www.gov.uk/b", "lane3-b")] },
+    ];
+    const pooled = poolDiscoveryResults(executions);
+    expect(pooled.map((r) => r.label)).toEqual(["lane1-a", "lane3-b"]);
+  });
+
+  it("treats a trailing slash / query string difference as the same URL for dedupe purposes", () => {
+    const executions = [
+      { results: [result("https://www.gov.uk/a/", "first")] },
+      { results: [result("https://www.gov.uk/a", "duplicate")] },
+    ];
+    expect(poolDiscoveryResults(executions).map((r) => r.label)).toEqual(["first"]);
+  });
+
+  // TEST 5 — all 5 lanes must be represented, not just the first lane's results
+  it("interleaves round-robin across all lanes instead of concatenating lane 1's results before any other lane is seen", () => {
+    const executions = [
+      { results: [result("https://a.com/1", "lane1-1"), result("https://a.com/2", "lane1-2"), result("https://a.com/3", "lane1-3")] },
+      { results: [result("https://b.com/1", "lane2-1")] },
+      { results: [result("https://c.com/1", "lane3-1")] },
+      { results: [result("https://d.com/1", "lane4-1")] },
+      { results: [result("https://e.com/1", "lane5-1")] },
+    ];
+    const pooled = poolDiscoveryResults(executions);
+    // Every lane's result must appear, and lane 2-5 must not be pushed to
+    // the very end just because lane 1 happened to return more results.
+    expect(pooled.map((r) => r.label)).toContain("lane2-1");
+    expect(pooled.map((r) => r.label)).toContain("lane5-1");
+    const lane1Index = pooled.findIndex((r) => r.label === "lane1-2");
+    const lane5Index = pooled.findIndex((r) => r.label === "lane5-1");
+    expect(lane5Index).toBeLessThan(lane1Index); // lane1's SECOND result comes after every lane's first
+  });
+
+  it("handles lanes of uneven length without dropping any real result", () => {
+    const executions = [
+      { results: [result("https://a.com/1", "a1"), result("https://a.com/2", "a2")] },
+      { results: [] },
+      { results: [result("https://c.com/1", "c1")] },
+    ];
+    const pooled = poolDiscoveryResults(executions);
+    expect(pooled.map((r) => r.label).sort()).toEqual(["a1", "a2", "c1"].sort());
+  });
+
+  it("returns an empty array when every lane returned nothing", () => {
+    expect(poolDiscoveryResults([{ results: [] }, { results: [] }])).toEqual([]);
+  });
+});
+
+describe("TopicDiscoveryResultSchema (unchanged)", () => {
+  // TEST 13
+  it("still caps at max 6 candidates and has not gained new fields", () => {
+    expect(Object.keys(TopicCandidateSchema.shape).sort()).toEqual(
+      ["audience", "business", "content_pillar", "priority", "question", "reason", "source_label", "title"].sort(),
+    );
+    const tooMany = Array.from({ length: 7 }, () => candidate({}));
+    expect(TopicDiscoveryResultSchema.safeParse({ candidates: tooMany }).success).toBe(false);
+    const sixIsFine = Array.from({ length: 6 }, () => candidate({}));
+    expect(TopicDiscoveryResultSchema.safeParse({ candidates: sixIsFine }).success).toBe(true);
   });
 });
 
@@ -88,11 +185,65 @@ describe("TOPIC_DISCOVERY_SYSTEM_PROMPT", () => {
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain('do not fall back to suggesting "other immigration topics"');
   });
 
-  // TEST 5
-  it("auto-discovery rules: reject first, usually 2-4 candidates, never pad to hit a round number", () => {
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("silently reject anything that's just a news restatement");
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Usually 2–4 candidates, at most 6");
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Never pad the list to hit a round number");
+  // Round 3C — TEST 6: quantity instruction upgraded from "usually 2-4" to "aim 5-6"
+  it("auto-discovery rules: aims for 5-6 candidates, not the old 'usually 2-4'", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Target 5–6 strong candidates when the evidence genuinely supports them");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).not.toContain("Usually 2–4 candidates");
+  });
+
+  // TEST 7 — no forced padding, even with the higher target
+  it("auto-discovery rules: explicitly forbids padding with weak topics just to reach the target", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("but never pad");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("If only 4 clear the bar, give 4; if only 2–3, give 2–3; 0 remains legal");
+  });
+
+  // TEST 9 — editorial slate framing, not a policy-news list
+  it("auto-discovery rules: frames the output as a daily editorial slate, not a policy bulletin/news list", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Auto-discovery: build a daily editorial slate, not a policy bulletin");
+  });
+
+  // TEST 10 — house style: news is the hook, rules are the value, land on "who does this affect / what now"
+  it("auto-discovery rules: states news is the hook not the topic, and requires landing on reader relevance/action", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("News is the hook, not the topic");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Who specifically is affected?");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("What can the reader do after reading?");
+  });
+
+  // Editorial-boundary clarification: a real incident is only a valid
+  // hook when it ties back to a genuine UK immigration/status issue — not
+  // just because it happened in/around the UK or to British residents.
+  // Added after a real smoke test surfaced a general EES-queue/missed-
+  // flight BBC story as a candidate with no UK immigration-status angle.
+  it("auto-discovery rules: a real incident hook must tie back to a genuine UK immigration/status issue, not just happen in/around the UK", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Incident eligibility boundary");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain(
+      "Do not select a general UK news, travel, airline, airport, tourism, EU-border, crime, or social story merely because it happened to British residents or in/around the UK",
+    );
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("general EES queues affecting tourists travelling to Europe");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("an eVisa mismatch causes boarding problems for a UK visa holder");
+  });
+
+  // TEST 11 — diversity rule: don't let one event/route dominate the whole slate
+  it("auto-discovery rules: caps how much the slate can be dominated by one underlying event or visa route", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Editorial mix, not random diversity");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain(
+      "usually cap candidates drawn from the exact same underlying event or the same visa route at 2",
+    );
+  });
+
+  // TEST 12 — no invented stories
+  it("auto-discovery rules: forbids inventing a story/incident/case not present in the search evidence", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Never fabricate a story for effect");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("never invent a client story, an airport incident, a refusal case");
+  });
+
+  it("auto-discovery rules: priority is an editorial judgment call, not just policy formality — weak LOW candidates should be dropped, not kept to pad", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Priority is an editorial call, not a policy-magnitude score");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("should usually be dropped entirely rather than kept to pad the slate");
+  });
+
+  it("still silently rejects bare news restatements before proposing anything (unchanged from Round 3A)", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("silently reject bare news restatements first");
   });
 
   it("never lets a directed search's own keyword numbers be treated as already-confirmed fact", () => {

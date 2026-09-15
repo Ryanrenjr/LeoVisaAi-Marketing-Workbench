@@ -54,6 +54,17 @@ export type TopicDiscoveryResult = z.infer<typeof TopicDiscoveryResultSchema>;
  * diluted with generic category terms) and only add narrow, source-typed
  * variants — never re-broaden back into "immigration news"/"visa rules
  * update".
+ *
+ * Round 3C fix: the AUTO-discovery (keyword empty) branch used to be 3
+ * near-duplicate queries (all variations of "what policy document
+ * changed"), so the daily slate was structurally narrow — real production
+ * use showed it topping out at ~2 candidates a day, and both looked like
+ * a traditional "policy announcement account." Now 5 distinct editorial
+ * radars — policy, practical identity/status, major visa-route changes,
+ * real incidents/border, and money/deadline/misconception — so the
+ * evidence pool itself can support a genuinely varied daily slate, not
+ * just narrower Home Office document search. Still fully deterministic —
+ * no AI query planner for AUTO mode.
  */
 export function buildDiscoveryQueries(now: Date = new Date(), keyword?: string): string[] {
   const monthYear = now.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
@@ -70,10 +81,64 @@ export function buildDiscoveryQueries(now: Date = new Date(), keyword?: string):
   }
 
   return [
-    `UK immigration rules changes news ${monthYear}`,
-    `Home Office visa policy announcement ${monthYear}`,
-    `UK Immigration Rules statement of changes ${monthYear}`,
+    // Lane 1 — policy / Home Office changes
+    `UK immigration Home Office visa policy changes ${monthYear}`,
+    // Lane 2 — status / practical identity problems (ILR, eVisa, citizenship, returning resident, proving status)
+    `UK eVisa ILR citizenship settled status immigration status practical issues news ${monthYear}`,
+    // Lane 3 — major visa-route practical changes (Student, Skilled Worker, Family, Graduate, Sponsor Licence)
+    `UK Student Skilled Worker family Graduate sponsor visa route changes ${monthYear}`,
+    // Lane 4 — real incidents / border / travel (airline, airport, Border Force, tribunal, system failure)
+    `UK immigration eVisa border airline airport incident news ${monthYear}`,
+    // Lane 5 — money / deadline / misconception / controversy (fees, deadlines, unexpected rule consequences)
+    `UK visa immigration fees deadlines rule controversy misconception ${monthYear}`,
   ];
+}
+
+interface PoolableDiscoveryResult {
+  url: string;
+}
+
+/**
+ * Round 3C: pools AUTO-discovery's 5 editorial-lane search executions via
+ * round-robin interleaving (lane1#1, lane2#1, ..., lane5#1, lane1#2, ...)
+ * instead of flat concatenation — a flat pool would let Lane 1 (policy),
+ * always searched/pooled first, push lanes 2-5's results out of Terra's
+ * effective attention just by sheer position, exactly the "policy
+ * bulletin" problem this round fixes. De-duplicates by a normalized URL
+ * (protocol+host+path+query, trailing slash and fragment stripped) so the
+ * same GOV.UK page or news story found by multiple lanes only enters the
+ * manifest once. Directed search (a single query) is unaffected by this —
+ * it has only one execution to begin with.
+ */
+export function poolDiscoveryResults<T extends PoolableDiscoveryResult>(
+  executions: readonly { results: readonly T[] }[],
+): T[] {
+  const seen = new Set<string>();
+  const pooled: T[] = [];
+  const maxLen = executions.reduce((max, e) => Math.max(max, e.results.length), 0);
+
+  for (let i = 0; i < maxLen; i++) {
+    for (const execution of executions) {
+      const result = execution.results[i];
+      if (!result) continue;
+      const key = normalizeUrlForDedupe(result.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pooled.push(result);
+    }
+  }
+
+  return pooled;
+}
+
+function normalizeUrlForDedupe(url: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, "");
+    return `${u.protocol}//${u.hostname.toLowerCase()}${path}${u.search}`;
+  } catch {
+    return url;
+  }
 }
 
 export interface DiscoverySearchResult {
@@ -109,7 +174,7 @@ export const TOPIC_DISCOVERY_SYSTEM_PROMPT = `You are the content chief editor (
 You are given real search results below (each labeled N1, N2, ...) plus a user message that tells you which mode you're in:
 
 - DIRECTED SEARCH (the user message contains "用户指定搜索方向"): only propose candidates that directly answer, explain, or are a natural extension of that direction. Reject anything that merely shares a broad category (e.g. both happen to mention "ILR") but isn't the same question — do not pad the list with other immigration topics you happened to find, however on-topic they look. Usually 1–3 candidates, never more than 3, and 0 is a completely valid result when nothing is truly relevant — do not fall back to suggesting "other immigration topics" instead.
-- AUTO-DISCOVERY (no direction given): silently reject anything that's just a news restatement with no real content angle before proposing anything. Usually 2–4 candidates, at most 6, and 0 is valid if nothing clears the bar. Never pad the list to hit a round number.
+- AUTO-DISCOVERY (no direction given): see "Auto-discovery: build a daily editorial slate" below for the full standard — silently reject bare news restatements first, then build a genuinely varied daily slate rather than a short list of policy-announcement rewrites.
 
 Never invent a topic that isn't reflected in the given search results, and never invent a source_label that isn't in the list — set source_label to the exact label (e.g. "N1") of the ONE result that most directly supports the candidate.
 
@@ -165,6 +230,29 @@ When more than one angle is genuinely available, prefer digging into different e
 ## Directed search: relevance beats diversity
 
 Do not treat "at least 2 candidates" or "some variety" as a goal in itself. One high-quality, tightly on-point candidate beats three loosely-related ones. If only one candidate genuinely preserves the core relationship, return exactly one — don't broaden the topic just to reach 2 or 3.
+
+## Auto-discovery: build a daily editorial slate, not a policy bulletin
+
+You're given results from 5 different editorial search radars this time (policy/Home Office changes, practical identity/status problems, major visa-route changes, real incidents/border/travel, and money/deadline/misconception) — not because you should report on all 5, but because a healthy daily slate should draw from more than one of them. If every candidate you're about to propose comes from the same one or two radars (e.g. all Student Visa fee news), you have not actually looked at the rest of the evidence.
+
+**News is the hook, not the topic.** For every candidate a real news item, case, or policy anchors, keep asking past the bare fact:
+1. Who specifically is affected? (a concrete group, not "英国移民申请人")
+2. What would they actually lose or risk? At least one of: 钱 / 时间 / 身份 / 资格 / 出入境 / 工作 / 家庭安排 / 申请机会.
+3. What's the most common misunderstanding here? The best candidates are often "大家以为A，真正决定结果的是B."
+4. Is there a real story entry point? If the search evidence itself contains an incident, case, dispute, system failure, or an affected group — that's often a stronger hook than a bare policy summary. Never invent one that isn't in the evidence (see "Never fabricate" below).
+
+   **Incident eligibility boundary**: a real-world incident is only eligible as a hook if it can be tied back to a genuine UK immigration / nationality / immigration-status / UK border / visa / eVisa / sponsor / settlement issue. Do not select a general UK news, travel, airline, airport, tourism, EU-border, crime, or social story merely because it happened to British residents or in/around the UK — the incident is the hook, but there must still be a real UK immigration/status rule or user consequence for Leo to explain.
+   - PASS: an eVisa mismatch causes boarding problems for a UK visa holder; an old passport / immigration-status proof creates a re-entry problem; an airline's handling of UK immigration permission creates a practical travel issue.
+   - FAIL unless a direct UK immigration-status angle is actually present: general EES queues affecting tourists travelling to Europe, ordinary flight delays, airport strikes, generic passport-control queues unrelated to UK immigration status.
+5. What can the reader do after reading? At least one of: 知道自己是否受影响 / 知道该检查什么 / 知道哪个时间节点重要 / 知道哪个误区不能踩 / 知道下一步怎么判断.
+
+**Target 5–6 strong candidates when the evidence genuinely supports them — but never pad.** If only 4 clear the bar, give 4; if only 2–3, give 2–3; 0 remains legal. The old instinct of stopping at 2–3 the moment a few acceptable topics exist is exactly what makes this feel like a thin policy-news list instead of a real daily slate — keep evaluating the rest of the evidence before you decide you're done.
+
+**Editorial mix, not random diversity.** Don't let the final slate be dominated by one underlying news event or one visa route — usually cap candidates drawn from the exact same underlying event or the same visa route at 2, unless that day's evidence genuinely contains an unusually major event worth more angles. This is an editorial judgment call, not something to force by mechanically counting categories, and it never means picking a weaker candidate just to tick a diversity box.
+
+**Never fabricate a story for effect.** A real event/case/incident hook must come directly from the given search results — never invent a client story, an airport incident, a refusal case, a number, or a controversy that isn't actually in the evidence. If the evidence is only policy documents, find the angle through timing, fees, status consequences, or a genuine choice/decision point instead — don't manufacture a "story" that isn't there.
+
+**Priority is an editorial call, not a policy-magnitude score.** HIGH can come from strong time-sensitivity, wide impact, high money/status stakes, a strong counter-intuitive angle, a widespread misconception, a real incident with natural shareability, or a clear current action window — not just "this is a formal policy change." A candidate that only qualifies as LOW should usually be dropped entirely rather than kept to pad the slate, unless it has clear, specific long-term content value.
 
 For each candidate:
 - title: a short, specific WORKING title (Chinese) that already reflects the real content angle above — not a bare news restatement, and not a final polished cover/marketing title (that's C/D/F's job later).
