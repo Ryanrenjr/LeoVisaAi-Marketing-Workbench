@@ -70,6 +70,18 @@ export interface EvidenceInput {
   topic: Pick<Topic, "title" | "question" | "business" | "audience" | "content_pillar">;
   researchPack: Pick<ResearchPack, "summary" | "key_findings" | "warnings" | "confidence">;
   sources: ResearchSource[];
+  /**
+   * Only ever populated for XIAOHONGSHU_PAGES_PLANNING (K) — D's
+   * already-generated 小红书 title/caption draft, threaded through purely
+   * so K's P1–Pn plan tells the same story (same opening hook, same
+   * conclusion, same closing direction) as what D already wrote. This is
+   * NOT a new fact source: buildEvidenceContextBlock renders it as
+   * explicitly secondary to the Research Pack, and K's own Skill
+   * (XIAOHONGSHU_IMAGE_PLANNER_SKILL) states the Research Pack wins on any
+   * conflict. Every other task type leaves this undefined; harmless no-op
+   * there since buildEvidenceContextBlock only renders the block when set.
+   */
+  xiaohongshuPostContext?: { titleOptions: string[]; coverTitle: string; caption: string } | null;
 }
 
 function formatError(err: unknown): string {
@@ -138,7 +150,12 @@ async function runContentGeneration<T extends Groundable>(
 
   try {
     const { labelToId, manifestText } = buildSourceManifest(input.sources);
-    const context = buildEvidenceContextBlock(input.topic, input.researchPack, manifestText);
+    const context = buildEvidenceContextBlock(
+      input.topic,
+      input.researchPack,
+      manifestText,
+      input.xiaohongshuPostContext,
+    );
     const userMessage = `${context}\n\n${opts.taskInstruction}`;
 
     const { parsed, usage } = await callStructured({

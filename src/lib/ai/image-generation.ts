@@ -4,25 +4,35 @@
  * split from router.ts. Every image is generated from an already
  * human-reviewed text draft, never from raw research directly — the
  * image designer only ever sees content a human has already looked at
- * once. Three distinct capabilities (live user instruction):
+ * once. Two prompt builders, covering three distinct capabilities:
  *   1. buildCoverImagePrompt — one cover/thumbnail, shared logic for
- *      小红书/视频号封面 and 公众号封面 (same kind of stylized title-card
- *      graphic, just built from whichever platform's draft).
+ *      视频号封面 and 公众号封面 (same kind of stylized title-card graphic,
+ *      just built from whichever platform's draft). Never called for
+ *      XIAOHONGSHU — its P1 carousel image IS its 首图, no separate cover.
  *   2. buildCarouselImagePrompt — one image per 小红书 page (图文), so a
  *      post gets a real multi-page visual set instead of a single cover.
  *
- * includePortrait (小红书/视频号封面 only) attaches a real, ADMIN-uploaded
+ * includePortrait (视频号封面 only) attaches a real, ADMIN-uploaded
  * reference photo of Leo (see src/lib/leo-portraits.ts) to the actual
  * image-generation call (the Images EDIT endpoint, not text-only
  * generation — see generateOpenAIImageEdit in openai-provider.ts) and
  * asks the model to design the cover AROUND that reference, working his
  * real likeness into the scene itself — not a separate pixel-compositing
  * step glued on afterwards.
+ *
+ * STYLE_RULES below is IMAGE_DESIGNER_VISUAL_RULES (src/lib/ai/skills.ts)
+ * — the compact, image-prompt-appropriate subset of E｜图片设计员's formal
+ * Skill (EMPLOYEE_DEFAULT_SKILL["image-designer"]). Every other content-
+ * generation task routes through buildSkillPrompt() so its Skill actually
+ * reaches the model; this file previously hand-rolled its own separate
+ * rules text that had already started drifting from the real Skill (e.g.
+ * still describing a shared 小红书/视频号 cover well after that was
+ * removed from the product) — importing the canonical export instead of
+ * duplicating it is what keeps this from happening again.
  */
+import { IMAGE_DESIGNER_VISUAL_RULES } from "./skills";
 
-const STYLE_RULES = `风格要求：简洁清晰，突出核心信息；如果画面里出现文字，必须简短且不依赖精确拼写；避免蓝紫 AI 科技风、机器人、廉价商务图库、过度光效、夸张移民广告风。
-
-严格禁止：不得伪造 GOV.UK 页面、Home Office 信件、签证、护照、真实客户材料、官方文件截图或真实案例证据——不得生成任何看起来像真实政府文件、证件或官方印章的图像。如果内容需要表现这些，只能用明显的、风格化的解释性图形（如示意图标、抽象图形），绝不能模拟成看似真实的官方文档。`;
+const STYLE_RULES = IMAGE_DESIGNER_VISUAL_RULES;
 
 export function buildCoverImagePrompt(
   topic: { title: string; business: string },

@@ -3,7 +3,21 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requireUser: vi.fn().mockResolvedValue({ id: "operator-1", role: "ADMIN" }) }));
 vi.mock("@/lib/permissions", () => ({ canGenerateContent: () => true, canManageContentAssets: () => true }));
-vi.mock("@/lib/content-versions", () => ({ nextVersionNumber: () => 1 }));
+vi.mock("@/lib/content-versions", () => ({
+  nextVersionNumber: () => 1,
+  getLatestForLineage: (
+    assets: { platform: string; content_type: string; version: number }[],
+    platform: string,
+    contentType: string,
+  ) => {
+    let latest: (typeof assets)[number] | null = null;
+    for (const asset of assets) {
+      if (asset.platform !== platform || asset.content_type !== contentType) continue;
+      if (!latest || asset.version > latest.version) latest = asset;
+    }
+    return latest;
+  },
+}));
 vi.mock("@/lib/content-mapping", () => ({ deriveTitleAndContent: () => ({ title: "标题", content: "正文" }) }));
 vi.mock("@/lib/ai/providers/registry", () => ({ getModel: () => ({ pricingType: "FREE" }) }));
 vi.mock("@/lib/ai/providers/types", () => ({ TASK_TYPE_EMPLOYEE: { XIAOHONGSHU_PAGES_PLANNING: "xiaohongshu-image-planner" } }));
@@ -179,5 +193,62 @@ describe("generatePagesPlan — atomic claim wiring (runId provided)", () => {
     expect(runContentTaskMock).toHaveBeenCalledTimes(1);
     expect(completeGenerationRunTaskMock).toHaveBeenCalledWith("run-1", "content:XIAOHONGSHU:pages");
     expect(failGenerationRunTaskMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Skills round: K reads D's already-generated xiaohongshu_post draft as
+ * context — see EvidenceInput.xiaohongshuPostContext in content-agent.ts
+ * and buildEvidenceContextBlock in content-schemas.ts. This only actually
+ * works if generatePagesPlan genuinely fetches and threads it through.
+ */
+describe("generatePagesPlan — threads D's xiaohongshu_post draft through as context", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    for (const key of Object.keys(tableResults)) delete tableResults[key];
+    for (const key of Object.keys(tableCallIndex)) delete tableCallIndex[key];
+    getTopicByIdMock.mockResolvedValue({ id: "topic-1", status: "RESEARCH_APPROVED" });
+    getLatestResearchPackMock.mockResolvedValue({ id: "pack-1" });
+    getResearchSourcesMock.mockResolvedValue([]);
+    runContentTaskMock.mockResolvedValue(RESOLVED_RESULT);
+  });
+
+  it("passes xiaohongshuPostContext built from D's latest draft when one exists", async () => {
+    getContentAssetsMock.mockResolvedValue([
+      {
+        platform: "XIAOHONGSHU",
+        content_type: "xiaohongshu_post",
+        version: 1,
+        structured_content: { title_options: ["标题一", "标题二"], cover_title: "封面标题", caption: "发布文案" },
+      },
+    ]);
+    queue("content_assets", { data: null, error: null }); // the final insert
+
+    await generatePagesPlan("topic-1");
+
+    expect(runContentTaskMock).toHaveBeenCalledWith(
+      "XIAOHONGSHU_PAGES_PLANNING",
+      expect.objectContaining({
+        xiaohongshuPostContext: {
+          titleOptions: ["标题一", "标题二"],
+          coverTitle: "封面标题",
+          caption: "发布文案",
+        },
+      }),
+      undefined,
+    );
+  });
+
+  it("leaves xiaohongshuPostContext undefined when D has not generated yet (manual click from K's own page)", async () => {
+    getContentAssetsMock.mockResolvedValue([]);
+    queue("content_assets", { data: null, error: null }); // the final insert
+
+    await generatePagesPlan("topic-1");
+
+    expect(runContentTaskMock).toHaveBeenCalledWith(
+      "XIAOHONGSHU_PAGES_PLANNING",
+      expect.objectContaining({ xiaohongshuPostContext: undefined }),
+      undefined,
+    );
   });
 });

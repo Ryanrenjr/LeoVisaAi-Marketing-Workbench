@@ -3,6 +3,7 @@ import {
   VideoChannelContentSchema,
   WechatFullArticleSchema,
   WechatOutlineSchema,
+  WECHAT_ARTICLE_SYSTEM_PROMPT,
   XiaohongshuContentSchema,
   XiaohongshuPagesPlanSchema,
   buildEvidenceContextBlock,
@@ -80,7 +81,7 @@ describe("VideoChannelContentSchema", () => {
 
 describe("XiaohongshuContentSchema", () => {
   const valid = {
-    title_options: ["A", "B", "C"],
+    title_options: ["A", "B", "C", "D", "E"],
     cover_title: "封面标题",
     caption: "正文",
     keywords: ["关键词"],
@@ -89,14 +90,27 @@ describe("XiaohongshuContentSchema", () => {
     expert_review_notes: [],
   };
 
-  it("accepts a well-formed Xiaohongshu content object", () => {
+  it("accepts a well-formed Xiaohongshu content object with exactly 5 title options", () => {
     expect(XiaohongshuContentSchema.safeParse(valid).success).toBe(true);
   });
 
-  it("requires exactly 3 title options", () => {
-    expect(XiaohongshuContentSchema.safeParse({ ...valid, title_options: ["A", "B"] }).success).toBe(
-      false,
-    );
+  it("requires exactly 5 title options — rejects 3", () => {
+    expect(
+      XiaohongshuContentSchema.safeParse({ ...valid, title_options: ["A", "B", "C"] }).success,
+    ).toBe(false);
+  });
+
+  it("requires exactly 5 title options — rejects 4", () => {
+    expect(
+      XiaohongshuContentSchema.safeParse({ ...valid, title_options: ["A", "B", "C", "D"] }).success,
+    ).toBe(false);
+  });
+
+  it("requires exactly 5 title options — rejects 6", () => {
+    expect(
+      XiaohongshuContentSchema.safeParse({ ...valid, title_options: ["A", "B", "C", "D", "E", "F"] })
+        .success,
+    ).toBe(false);
   });
 });
 
@@ -240,5 +254,69 @@ describe("buildEvidenceContextBlock", () => {
     );
     expect(block).not.toContain("业务线：");
     expect(block).not.toContain("目标受众：");
+  });
+
+  const TOPIC = {
+    title: "标题",
+    question: "问题",
+    business: "业务",
+    audience: "受众",
+    content_pillar: null,
+  };
+  const RESEARCH_PACK = { summary: "s", key_findings: [], warnings: "", confidence: "LOW" as const };
+
+  /**
+   * Skills round: K｜小红书图文规划员 reads D's already-generated
+   * title/caption draft as context, threaded through as a 4th optional
+   * arg. Every other caller (video/wechat/xhs post itself) never passes
+   * this, so the block must be entirely absent by default.
+   */
+  it("omits the 小红书发布层 block when xiaohongshuPostContext is not given", () => {
+    const block = buildEvidenceContextBlock(TOPIC, RESEARCH_PACK, "（无来源）");
+    expect(block).not.toContain("已生成的小红书发布层");
+  });
+
+  it("includes D's title options/cover title/caption when xiaohongshuPostContext is given", () => {
+    const block = buildEvidenceContextBlock(TOPIC, RESEARCH_PACK, "（无来源）", {
+      titleOptions: ["标题一", "标题二"],
+      coverTitle: "封面标题",
+      caption: "发布文案内容",
+    });
+    expect(block).toContain("已生成的小红书发布层");
+    expect(block).toContain("标题一");
+    expect(block).toContain("标题二");
+    expect(block).toContain("封面标题");
+    expect(block).toContain("发布文案内容");
+  });
+
+  it("states the Research Pack takes precedence over D's context when they conflict", () => {
+    const block = buildEvidenceContextBlock(TOPIC, RESEARCH_PACK, "（无来源）", {
+      titleOptions: ["标题一"],
+      coverTitle: "封面标题",
+      caption: "文案",
+    });
+    expect(block).toContain("以研究成果为准");
+  });
+});
+
+/**
+ * Skills round: this used to explicitly endorse a fabricated first-person
+ * client anecdote as a legitimate opener ("5月14号晚上...我刚结束一个客户
+ * 会议...") — directly conflicting with GLOBAL_SKILL's "不得编造...客户
+ * 故事". The prompt must no longer contain that example, and must instead
+ * gate any first-person opener on the anecdote genuinely being supplied.
+ */
+describe("WECHAT_ARTICLE_SYSTEM_PROMPT — no longer endorses a fabricated client anecdote", () => {
+  it("does not contain the old fabricated example", () => {
+    expect(WECHAT_ARTICLE_SYSTEM_PROMPT).not.toContain("我刚结束一个客户会议");
+  });
+
+  it("gates a first-person opener on the anecdote actually being supplied in the input", () => {
+    expect(WECHAT_ARTICLE_SYSTEM_PROMPT).toContain("ONLY allowed when a real, already-confirmed personal anecdote is actually supplied");
+  });
+
+  it("still names the fabricated-client-story patterns explicitly as forbidden without real input", () => {
+    expect(WECHAT_ARTICLE_SYSTEM_PROMPT).toContain("昨天一个客户问我");
+    expect(WECHAT_ARTICLE_SYSTEM_PROMPT).toContain("Never invent one yourself");
   });
 });

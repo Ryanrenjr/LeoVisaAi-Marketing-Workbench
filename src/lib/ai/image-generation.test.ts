@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCoverImagePrompt, buildCarouselImagePrompt } from "./image-generation";
+import { IMAGE_DESIGNER_VISUAL_RULES } from "./skills";
 
 const TOPIC = { title: "老永居离境超过2年", business: "永居" };
 
@@ -79,5 +80,35 @@ describe("buildCarouselImagePrompt", () => {
   it("never omits the anti-fabrication rule", () => {
     const prompt = buildCarouselImagePrompt(TOPIC, { title: "t" }, { text: "x", pageNumber: 1, totalPages: 1 });
     expect(prompt).toContain("不得伪造");
+  });
+});
+
+/**
+ * Skills round: E｜图片设计员's formal Skill used to be completely
+ * disconnected from the real image-generation prompt — router.ts's
+ * runImageGenerationTask takes a plain string, never routed through
+ * buildSkillPrompt, and image-generation.ts hand-rolled its own separate
+ * STYLE_RULES text that had already drifted from the real Skill (still
+ * describing a shared 小红书/视频号 cover well after the product removed
+ * it). These tests prove the built prompts now actually derive from the
+ * canonical skills.ts export, not an independently-maintained copy.
+ */
+describe("buildCoverImagePrompt / buildCarouselImagePrompt — genuinely wired to IMAGE_DESIGNER_VISUAL_RULES", () => {
+  it("buildCoverImagePrompt includes a distinctive IMAGE_DESIGNER_VISUAL_RULES phrase", () => {
+    const prompt = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "视频号");
+    expect(prompt).toContain("不得新增任何未经 Research Pack 支持的法律事实或政策结论");
+  });
+
+  it("buildCarouselImagePrompt includes the same canonical rules text", () => {
+    const prompt = buildCarouselImagePrompt(TOPIC, { title: "t" }, { text: "x", pageNumber: 1, totalPages: 3 });
+    expect(prompt).toContain("不得新增任何未经 Research Pack 支持的法律事实或政策结论");
+  });
+});
+
+/** Skills round: P1 is the 小红书 首图 — no separate cover exists or should ever be generated for it. */
+describe("IMAGE_DESIGNER_VISUAL_RULES — explicit about 小红书's P1 being the 首图, no extra cover", () => {
+  it("states P1 is the 首图 and no additional 小红书封面 is generated", () => {
+    expect(IMAGE_DESIGNER_VISUAL_RULES).toContain("P1 本身就是首图/封面");
+    expect(IMAGE_DESIGNER_VISUAL_RULES).toContain("不生成任何额外的独立小红书封面");
   });
 });

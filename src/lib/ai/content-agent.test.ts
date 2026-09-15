@@ -175,7 +175,7 @@ describe("generateVideoChannelContent", () => {
 describe("generateXiaohongshuContent", () => {
   it("returns grounded content on success", async () => {
     mockParseOnce({
-      title_options: ["A", "B", "C"],
+      title_options: ["A", "B", "C", "D", "E"],
       cover_title: "封面",
       caption: "正文",
       keywords: ["关键词"],

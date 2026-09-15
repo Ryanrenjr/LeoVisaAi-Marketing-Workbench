@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSkillPrompt, EMPLOYEE_DEFAULT_SKILL, GLOBAL_SKILL } from "./skills";
+import { buildSkillPrompt, EMPLOYEE_DEFAULT_SKILL, GLOBAL_SKILL, IMAGE_DESIGNER_VISUAL_RULES } from "./skills";
 import type { EmployeeId } from "../boss-language";
 
 const ALL_EMPLOYEES: EmployeeId[] = [
@@ -61,5 +61,27 @@ describe("buildSkillPrompt — composition order", () => {
     expect(globalIndex).toBeGreaterThanOrEqual(0);
     expect(employeeIndex).toBeGreaterThan(globalIndex);
     expect(taskIndex).toBeGreaterThan(employeeIndex);
+  });
+});
+
+/**
+ * IMAGE_DESIGNER_VISUAL_RULES must be a true single source, not a second
+ * copy kept in sync by hand — EMPLOYEE_DEFAULT_SKILL["image-designer"]
+ * (the human/ADMIN-facing handbook) literally embeds it via template
+ * interpolation, and image-generation.ts imports the exact same constant
+ * for the real image-generation prompt. This test proves the embed is
+ * real (not just a comment promising the two stay in sync): editing
+ * IMAGE_DESIGNER_VISUAL_RULES's text changes what the handbook displays
+ * too, because it's the same string object, not a paraphrase of it.
+ */
+describe("IMAGE_DESIGNER_VISUAL_RULES — true single source, literally embedded in the Skill handbook", () => {
+  it("EMPLOYEE_DEFAULT_SKILL['image-designer'] contains IMAGE_DESIGNER_VISUAL_RULES verbatim", () => {
+    expect(EMPLOYEE_DEFAULT_SKILL["image-designer"]).toContain(IMAGE_DESIGNER_VISUAL_RULES);
+  });
+
+  it("is genuinely non-empty and states the no-fabricated-official-documents rule", () => {
+    expect(IMAGE_DESIGNER_VISUAL_RULES.length).toBeGreaterThan(0);
+    expect(IMAGE_DESIGNER_VISUAL_RULES).toContain("不得伪造");
+    expect(IMAGE_DESIGNER_VISUAL_RULES).toContain("GOV.UK");
   });
 });

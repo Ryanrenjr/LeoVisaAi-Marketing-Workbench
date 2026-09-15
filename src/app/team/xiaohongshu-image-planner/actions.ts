@@ -10,7 +10,7 @@ import {
   getResearchSources,
   getTopicById,
 } from "@/lib/topics";
-import { nextVersionNumber } from "@/lib/content-versions";
+import { nextVersionNumber, getLatestForLineage } from "@/lib/content-versions";
 import { deriveTitleAndContent } from "@/lib/content-mapping";
 import { runContentTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
@@ -25,13 +25,19 @@ import type { ModelRef } from "@/lib/ai/providers/types";
  * Live user instruction (correction): K does not generate the images
  * itself — that button lives on E｜图片设计员's own page, reading K's plan
  * (see generateXiaohongshuCarousel in team/image-designer/actions.ts).
- * Deliberately separate from Employee D（小红书标题文案员）, which only
- * writes title/caption — see docs/digital-employee-skills.md "K｜小红书图文规划员".
+ * Deliberately a separate write from Employee D（小红书标题文案员）, which
+ * writes title/caption — but K now reads D's already-generated draft as
+ * context (not a fact source, purely for narrative consistency — see the
+ * `xiaohongshuPostContext` doc comment below) — see
+ * docs/digital-employee-skills.md "K｜小红书图文规划员".
  */
 
 /**
- * "生成图文规划" — writes the P1–Pn page plan (xiaohongshu_pages), independent
- * of D's title/caption draft.
+ * "生成图文规划" — writes the P1–Pn page plan (xiaohongshu_pages). Reads
+ * D's already-generated title/caption draft (if one exists yet) purely to
+ * keep the same opening hook/conclusion/closing direction — the Research
+ * Pack stays the only fact source; see buildEvidenceContextBlock's
+ * xiaohongshuPostContext handling in content-schemas.ts.
  *
  * `since` (a generation_runs.created_at timestamp — same convention as
  * generateContent/generateVideoCover/etc.) makes a retry idempotent: if
@@ -90,7 +96,27 @@ export async function generatePagesPlan(
   if (!researchPack) return { ok: false, error: "未找到已批准的研究成果，无法生成内容。" };
   const sources = await getResearchSources(researchPack.id);
 
-  const result = await runContentTask("XIAOHONGSHU_PAGES_PLANNING", { topic, researchPack, sources }, override);
+  // D may already have generated (round 9 P0's content step runs D then K
+  // sequentially, precisely so this is available by the time K runs) —
+  // thread her draft through purely for narrative consistency, never as a
+  // fact source (see EvidenceInput's doc comment in content-agent.ts and
+  // K's own Skill). A manual click from K's own page before D has run
+  // simply gets no context here and plans independently, same as before.
+  const existingAssets = await getContentAssets(topicId);
+  const xhsPost = getLatestForLineage(existingAssets, "XIAOHONGSHU", "xiaohongshu_post");
+  const xiaohongshuPostContext = xhsPost
+    ? {
+        titleOptions: (xhsPost.structured_content?.title_options as string[] | undefined) ?? [],
+        coverTitle: String(xhsPost.structured_content?.cover_title ?? ""),
+        caption: String(xhsPost.structured_content?.caption ?? ""),
+      }
+    : undefined;
+
+  const result = await runContentTask(
+    "XIAOHONGSHU_PAGES_PLANNING",
+    { topic, researchPack, sources, xiaohongshuPostContext },
+    override,
+  );
 
   if (isRouterResolutionFailure(result)) {
     await supabase.from("topic_activity_log").insert({

@@ -241,37 +241,82 @@ describe("runImageGenerationStep — per-platform dispatch, no shared cover, fai
  * revision/final verification. It's now part of this same content step,
  * so its P1–Pn page text actually goes through review — see
  * latestGeneratedAssets's doc comment in pipeline-actions.ts.
+ *
+ * Skills round: K's Skill reads D's already-generated xiaohongshu_post
+ * draft as context, so XIAOHONGSHU_WRITING must finish before
+ * XIAOHONGSHU_PAGES_PLANNING starts — but that is the ONLY ordering
+ * requirement. VIDEO_WRITING/WECHAT_ARTICLE_WRITING must not be held up
+ * waiting for K: they run through a separate generateContent call, in
+ * parallel with the XHS branch, not gated behind it.
  */
-describe("runContentGenerationStep — folds 小红书图文规划 into the content step for XIAOHONGSHU", () => {
+describe("runContentGenerationStep — XIAOHONGSHU_WRITING → XIAOHONGSHU_PAGES_PLANNING ordering only, other platforms unaffected", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("calls only generateContent when XIAOHONGSHU is not selected", async () => {
+  it("calls only generateContent (with the full platform list) when XIAOHONGSHU is not selected", async () => {
     generateContentMock.mockResolvedValue(undefined);
 
     await runContentGenerationStep("topic-1", ["VIDEO_CHANNEL"], "2026-01-01T00:00:00Z", "run-1");
 
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
     expect(generateContentMock).toHaveBeenCalledWith("topic-1", ["VIDEO_CHANNEL"], "2026-01-01T00:00:00Z", "run-1");
     expect(generatePagesPlanMock).not.toHaveBeenCalled();
   });
 
-  it("calls both generateContent and generatePagesPlan in parallel when XIAOHONGSHU is selected", async () => {
-    generateContentMock.mockResolvedValue(undefined);
-    generatePagesPlanMock.mockResolvedValue({ ok: true });
+  it("calls generateContent scoped to just XIAOHONGSHU, waits for it, then calls generatePagesPlan, when XIAOHONGSHU is the only platform", async () => {
+    const order: string[] = [];
+    generateContentMock.mockImplementation(async () => {
+      order.push("generateContent");
+    });
+    generatePagesPlanMock.mockImplementation(async () => {
+      order.push("generatePagesPlan");
+      return { ok: true };
+    });
 
     await runContentGenerationStep("topic-1", ["XIAOHONGSHU"], "2026-01-01T00:00:00Z", "run-1");
 
+    expect(generateContentMock).toHaveBeenCalledTimes(1);
     expect(generateContentMock).toHaveBeenCalledWith("topic-1", ["XIAOHONGSHU"], "2026-01-01T00:00:00Z", "run-1");
     expect(generatePagesPlanMock).toHaveBeenCalledWith("topic-1", undefined, "2026-01-01T00:00:00Z", "run-1");
+    expect(order).toEqual(["generateContent", "generatePagesPlan"]);
   });
 
-  it("throws when generateContent rejects, even if generatePagesPlan succeeds", async () => {
-    generateContentMock.mockRejectedValue(new Error("内容生成失败：视频号：model timeout"));
+  it("when ALL platforms are selected, generates VIDEO_CHANNEL/WECHAT and XIAOHONGSHU as two separate generateContent calls, and does NOT make the non-XHS call wait for K", async () => {
+    const order: string[] = [];
+    generateContentMock.mockImplementation(async (_topicId: string, platforms: string[]) => {
+      // The XHS-only call resolves slower than the video/wechat call would
+      // in reality (it's chained into generatePagesPlan afterwards) — here
+      // we just need to prove the non-XHS call is never made to wait on
+      // anything from the XHS branch. A microtask delay on the XHS call is
+      // enough to show the non-XHS branch isn't blocked by it.
+      if (platforms.includes("XIAOHONGSHU")) await Promise.resolve();
+      order.push(`generateContent:${platforms.join(",")}`);
+    });
+    generatePagesPlanMock.mockImplementation(async () => {
+      order.push("generatePagesPlan");
+      return { ok: true };
+    });
+
+    await runContentGenerationStep("topic-1", ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"], undefined, "run-1");
+
+    expect(generateContentMock).toHaveBeenCalledTimes(2);
+    expect(generateContentMock).toHaveBeenCalledWith("topic-1", ["VIDEO_CHANNEL", "WECHAT_OFFICIAL_ACCOUNT"], undefined, "run-1");
+    expect(generateContentMock).toHaveBeenCalledWith("topic-1", ["XIAOHONGSHU"], undefined, "run-1");
+    // The non-XHS call is not chained after anything XHS-related — it's
+    // dispatched as an independent parallel branch.
+    expect(order).toContain("generateContent:VIDEO_CHANNEL,WECHAT_OFFICIAL_ACCOUNT");
+    // generatePagesPlan still only runs after ITS OWN XHS generateContent call.
+    expect(order.indexOf("generateContent:XIAOHONGSHU")).toBeLessThan(order.indexOf("generatePagesPlan"));
+  });
+
+  it("throws when the XHS-scoped generateContent call rejects, and never calls generatePagesPlan at all (not just 'ignores its result')", async () => {
+    generateContentMock.mockRejectedValue(new Error("内容生成失败：小红书：model timeout"));
     generatePagesPlanMock.mockResolvedValue({ ok: true });
 
     await expect(runContentGenerationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/内容生成失败/);
+    expect(generatePagesPlanMock).not.toHaveBeenCalled();
   });
 
-  it("throws when generatePagesPlan reports ok:false, even if generateContent succeeds", async () => {
+  it("throws when generatePagesPlan reports ok:false, even though generateContent succeeded", async () => {
     generateContentMock.mockResolvedValue(undefined);
     generatePagesPlanMock.mockResolvedValue({ ok: false, error: "检查图文规划是否已生成失败，请重试：connection reset" });
 

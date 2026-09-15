@@ -42,7 +42,7 @@ export type VideoChannelContent = z.infer<typeof VideoChannelContentSchema>;
  * other's draft, same as video/wechat's independence from each other.
  */
 export const XiaohongshuContentSchema = z.object({
-  title_options: z.array(z.string()).length(3),
+  title_options: z.array(z.string()).length(5),
   cover_title: z.string(),
   caption: z.string(),
   keywords: z.array(z.string()),
@@ -284,7 +284,9 @@ export const XHS_PAGES_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
 
 You are planning the page-by-page image-text content for a Xiaohongshu (小红书) 图文 post — a set of image cards, each with its own short text, that together tell the whole story. You write ONLY the plan; you never generate the images yourself — a separate employee (the image designer) turns your plan into the actual P1–Pn images. This must be independently adapted for Xiaohongshu's behavior — do NOT simply convert a video script into page breaks. Prioritize: search intent, saveability, checklists, decision frameworks, scenario comparison, timelines, and common misunderstandings. Produce around 6 pages (5–7 is fine). Each page becomes ONE image card, generated straight from that page's text — so keep every page short: one clear headline/point plus at most 2-3 short supporting lines, never a full paragraph. If a page has more to say than that, split it into two pages instead of cramming it in. Each page's text should also end with a brief design-direction cue for whoever generates the image (e.g. "用对比表格呈现新旧规则" / "放一个时间轴标出关键日期") — this guides the image designer, not just what to say but roughly how to visualize it. Real published carousels mark each interior page with a small page-number badge for orientation (e.g. "第4页" / "P7") — you don't need to write that literally into the page text (the image designer adds it as a standard composition element), but keep each page's content self-contained enough that a reader landing on it out of order via that badge still understands roughly where they are in the story.
 
-Output format for \`pages\` — this is the part every provider must get exactly right: it is a flat JSON array of PLAIN STRINGS, one string per page, nothing else. Do NOT return an array of objects (e.g. {"text": "...", "design_direction": "..."}), and do NOT add a page for anything other than real page content. The design-direction cue is not a separate field — write it as the last sentence of that same page's string, in the same string, exactly like every other sentence on that page. \`source_references\` and \`expert_review_notes\` are separate top-level arrays (possibly empty, but never omitted) — same shape as every other content-generation task in this app, not nested inside \`pages\`.`;
+Output format for \`pages\` — this is the part every provider must get exactly right: it is a flat JSON array of PLAIN STRINGS, one string per page, nothing else. Do NOT return an array of objects (e.g. {"text": "...", "design_direction": "..."}), and do NOT add a page for anything other than real page content. The design-direction cue is not a separate field — write it as the last sentence of that same page's string, in the same string, exactly like every other sentence on that page. \`source_references\` and \`expert_review_notes\` are separate top-level arrays (possibly empty, but never omitted) — same shape as every other content-generation task in this app, not nested inside \`pages\`.
+
+If the context below includes a "已生成的小红书发布层" section, that is the title/caption another role already wrote for this same post — use it only to keep your opening hook, core conclusion, and closing direction consistent with theirs. It is never a fact source: the Research Pack above always wins if the two disagree, and you must not extend or restate a claim from that section unless the Research Pack itself supports it.`;
 
 export const WECHAT_OUTLINE_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
 
@@ -304,7 +306,7 @@ export const WECHAT_ARTICLE_SYSTEM_PROMPT = `${CONTENT_AGENT_SHARED_RULES}
 You are writing a complete, publish-ready WeChat Official Account (公众号) article directly from the Research Pack — there is no separate outline step. Write it as a numbered thought-leadership analysis, not a plain Q&A explainer:
 
 full_article structure:
-1. Opens with a concrete news hook — the actual event, date, who/what — 2-4 sentences, scene-setting, not a policy summary. A first-person anecdote opener is also a real, legitimate alternative (e.g. "5月14号晚上...我刚结束一个客户会议，路过...看见...") when it genuinely fits the topic — but it's a framing device (category B editorial texture), never a vehicle for a new factual claim that isn't in the Research Pack.
+1. Opens with a concrete news hook — the actual event, date, who/what — 2-4 sentences, scene-setting, not a policy summary. A first-person anecdote opener ("昨天一个客户问我..." / "我刚见完一个客户..." / "最近有个客户..." / "我在机场遇到..." / "前几天有人来咨询...") is ONLY allowed when a real, already-confirmed personal anecdote is actually supplied — either directly in the Research Pack/input context, or via the ADMIN custom instructions appended below. Never invent one yourself to sound more like a real practitioner — this is exactly the "客户故事" fabrication GLOBAL_SKILL forbids. Without a real supplied anecdote, open instead with the news event itself, an official policy change, a plain user-scenario framing, a direct question, or a rule-contrast opener ("很多人以为...，但实际上...").
 2. Immediately reframes it through the company's practitioner lens: not just "what happened" but "what this actually signals" — 1-2 sentences stating the real thesis of the piece.
 3. The body is broken into numbered sections using Chinese numerals ("一、" "二、" "三、" ...) directly followed by a short section title on the same line (e.g. "一、说结果：工党输了什么？") — this is what real published articles actually use; do not use "## 01" digit-style numbering. Each section covers: the underlying dynamics/context, what specifically changes or is at stake, who is affected and how, and concrete next steps. Vary the count to fit the topic (3-6 sections is typical) — never pad with a section that has nothing real to say. When you name a specific outlet or report as the source of a fact (e.g. 卫报, 路透社, 内政部报告, 上议院委员会报告), say so directly in the prose ("《卫报》报道称..." / "内政事务委员会报告提到...") rather than writing generically "有报道指出" — this is how the real articles read, and it's what source_references is grounding.
 4. At least one section must break its advice down BY AUDIENCE SEGMENT (e.g. 对留学生 / 对雇主 / 对正在申请XX签证的人 / 对家庭团聚申请人 — pick the segments that actually apply to this topic), each with one concrete, actionable takeaway — not the same generic advice repeated for everyone.
@@ -335,6 +337,12 @@ export function buildEvidenceContextBlock(
     confidence: ResearchConfidence;
   },
   manifestText: string,
+  /**
+   * Only ever passed for XIAOHONGSHU_PAGES_PLANNING (K) — see
+   * EvidenceInput's doc comment in content-agent.ts. Undefined for every
+   * other task, in which case this block is simply omitted.
+   */
+  xiaohongshuPostContext?: { titleOptions: string[]; coverTitle: string; caption: string } | null,
 ): string {
   const lines = [
     `选题标题：${topic.title}`,
@@ -353,6 +361,15 @@ export function buildEvidenceContextBlock(
     "",
     "=== 可引用的真实来源（仅可使用以下标签，不得编造新来源或URL）===",
     manifestText,
+    xiaohongshuPostContext
+      ? [
+          "",
+          "=== 已生成的小红书发布层（保持故事线一致用，不是新的事实来源——如与上面的研究成果冲突，以研究成果为准）===",
+          `候选标题：\n${xiaohongshuPostContext.titleOptions.map((t) => `- ${t}`).join("\n")}`,
+          `封面主标题：${xiaohongshuPostContext.coverTitle}`,
+          `发布文案：${xiaohongshuPostContext.caption}`,
+        ].join("\n")
+      : null,
   ].filter((l): l is string => l !== null);
   return lines.join("\n");
 }

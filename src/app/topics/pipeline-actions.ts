@@ -80,36 +80,54 @@ async function latestGeneratedAssets(topicId: string, platforms: ContentPlatform
  * as part of this same logical step (round 9 P0 fix: this used to be a
  * separate "planning" step positioned after compliance/revision/final
  * verification, which meant the P1–Pn page text skipped that entire
- * review chain — see latestGeneratedAssets's doc comment). The two run in
- * parallel; either one failing stops this step, same "isolate then fail
- * closed" pattern as runImageGenerationStep below. `since` (this run's
- * created_at) makes a retry skip whichever sub-task already succeeded in
- * this run — see generateContent's/generatePagesPlan's own doc comments.
- * `runId` additionally gives each an atomic claim (round 6) so two
- * concurrent requests can't both call the AI for the same sub-task.
+ * review chain — see latestGeneratedAssets's doc comment).
+ *
+ * K's Skill now reads D's already-generated xiaohongshu_post draft as
+ * context (EvidenceInput.xiaohongshuPostContext, threaded through in
+ * generatePagesPlan) purely to keep the same opening hook/conclusion
+ * across the title+caption and the P1–Pn plan — so XIAOHONGSHU_WRITING
+ * must finish before XIAOHONGSHU_PAGES_PLANNING starts. That is the ONLY
+ * ordering requirement: VIDEO_WRITING and WECHAT_ARTICLE_WRITING have no
+ * dependency on K and must not be held up waiting for it. So the XHS
+ * platform is generated on its own (`generateContent(topicId,
+ * ["XIAOHONGSHU"], ...)`), immediately chained into `generatePagesPlan`,
+ * while every other selected platform runs through a separate
+ * `generateContent` call for the rest — the two branches run in parallel
+ * via Promise.allSettled, same "isolate then fail closed" pattern as
+ * runImageGenerationStep below. generateContent's own internals (parallel
+ * across whatever platform list it's given) are untouched either way.
+ * Still one logical GenerationRunner step (no new step shown in the UI).
+ * `since` (this run's created_at) makes a retry skip whichever sub-task
+ * already succeeded in this run — see generateContent's/
+ * generatePagesPlan's own doc comments. `runId` additionally gives each an
+ * atomic claim (round 6) so two concurrent requests can't both call the AI
+ * for the same sub-task.
  */
 export async function runContentGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string, runId?: string): Promise<void> {
-  const tasks: { label: string; promise: Promise<void> }[] = [
-    { label: "文案", promise: generateContent(topicId, platforms, since, runId) },
-  ];
-  if (platforms.includes("XIAOHONGSHU")) {
-    tasks.push({
-      label: "小红书图文规划",
-      promise: generatePagesPlan(topicId, undefined, since, runId).then((result) => {
-        if (!result.ok) throw new Error(result.error ?? "图文规划生成失败。");
-      }),
-    });
+  const nonXhsPlatforms = platforms.filter((p) => p !== "XIAOHONGSHU");
+  const tasks: Promise<void>[] = [];
+
+  if (nonXhsPlatforms.length > 0) {
+    tasks.push(generateContent(topicId, nonXhsPlatforms, since, runId));
   }
 
-  const settled = await Promise.allSettled(tasks.map((t) => t.promise));
-  const failures = settled
-    .map((result, i) => ({ label: tasks[i].label, result }))
-    .filter(({ result }) => result.status === "rejected");
+  if (platforms.includes("XIAOHONGSHU")) {
+    tasks.push(
+      (async () => {
+        await generateContent(topicId, ["XIAOHONGSHU"], since, runId);
+        const result = await generatePagesPlan(topicId, undefined, since, runId);
+        if (!result.ok) {
+          throw new Error(`内容生成失败：小红书图文规划：${result.error ?? "图文规划生成失败。"}`);
+        }
+      })(),
+    );
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  const failures = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
   if (failures.length > 0) {
-    const detail = failures
-      .map(({ label, result }) => `${label}：${(result as PromiseRejectedResult).reason instanceof Error ? (result as PromiseRejectedResult).reason.message : String((result as PromiseRejectedResult).reason)}`)
-      .join("；");
-    throw new Error(`内容生成失败：${detail}`);
+    const detail = failures.map((f) => (f.reason instanceof Error ? f.reason.message : String(f.reason))).join("；");
+    throw new Error(detail);
   }
 }
 

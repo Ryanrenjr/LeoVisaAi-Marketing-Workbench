@@ -505,7 +505,13 @@ export const DEMO_CONTENT_ASSETS: ContentAsset[] = [
     title: "（示例）留学生打工时长速查表",
     content: "（示例正文）学期内 vs 假期，打工时长到底怎么算？",
     structured_content: {
-      title_options: ["（示例）留学生打工时长速查表", "（示例）打工超时会怎样？", "（示例）学期vs假期打工规则"],
+      title_options: [
+        "（示例）留学生打工时长速查表",
+        "（示例）打工超时会怎样？",
+        "（示例）学期vs假期打工规则",
+        "（示例）打工时长真的按周算吗？",
+        "（示例）留学生兼职别踩这个坑",
+      ],
       cover_title: "打工时长速查表",
       pages: [
         "（示例）P1 封面：学期内 vs 假期，打工时长怎么算？",

@@ -276,7 +276,12 @@ async function runGenericContentTask<T extends Groundable>(
   customInstructions?: string | null,
 ): Promise<AIExecutionResult<T>> {
   const { labelToId, manifestText } = buildSourceManifest(input.sources);
-  const context = buildEvidenceContextBlock(input.topic, input.researchPack, manifestText);
+  const context = buildEvidenceContextBlock(
+    input.topic,
+    input.researchPack,
+    manifestText,
+    input.xiaohongshuPostContext,
+  );
   const userMessage = `${context}\n\n${config.taskInstruction}`;
 
   const result = await dispatchStructured(provider, modelId, {
