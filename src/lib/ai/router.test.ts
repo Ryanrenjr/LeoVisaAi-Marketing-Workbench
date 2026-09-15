@@ -48,8 +48,14 @@ vi.mock("./providers/openrouter-provider", () => ({
 }));
 vi.mock("../search/router", () => ({ runResearchSearch: runResearchSearchMock }));
 
-const { runResearchTask, runContentTask, runWechatFullArticleTask, isRouterResolutionFailure, isDevelopmentMode } =
-  await import("./router");
+const {
+  runResearchTask,
+  runContentTask,
+  runWechatFullArticleTask,
+  runTopicDiscoveryTask,
+  isRouterResolutionFailure,
+  isDevelopmentMode,
+} = await import("./router");
 
 const TOPIC = { title: "t", question: "q", business: "b", audience: "a" };
 const EVIDENCE_INPUT = {
@@ -451,5 +457,147 @@ describe("runWechatFullArticleTask", () => {
     const result = await runWechatFullArticleTask({ ...EVIDENCE_INPUT, outline });
     expect(generateGoogleStructuredMock).toHaveBeenCalled();
     expect(result.ok).toBe(true);
+  });
+});
+
+// Round 3A — A｜选题策划员 real-failure fixes: keyword must actually reach
+// the model, and an invalid source_label must be filtered rather than
+// trusted or allowed to fail the whole task.
+describe("runTopicDiscoveryTask", () => {
+  const REAL_FAILURE_KEYWORD = "英国永居申请费£3,226，Home Office处理成本为什么只有约£310？";
+
+  function searchResult(label: string, title: string, snippet: string) {
+    return {
+      title,
+      url: `https://example.com/${label}`,
+      snippet,
+      publisher: "example.com",
+      publishedDate: null,
+      pageAge: null,
+      retrievedAt: "2026-09-15T00:00:00.000Z",
+      provider: "TAVILY" as const,
+    };
+  }
+
+  const THREE_RESULT_SEARCH = {
+    ok: true as const,
+    provider: "TAVILY" as const,
+    executions: [
+      {
+        provider: "TAVILY" as const,
+        query: REAL_FAILURE_KEYWORD,
+        results: [
+          searchResult("N1", "Home Office immigration fees: processing costs", "processing cost detail"),
+          searchResult("N2", "十年永居：离境180天规则详解", "absence rules for long residence"),
+          searchResult("N3", "学生签证资金要求最新变化", "student visa funds requirement"),
+        ],
+        latencyMs: 100,
+        success: true,
+        error: null,
+      },
+    ],
+  };
+
+  it("surfaces the user's original keyword to the model, not just the search results (the real bug: the model never saw it before)", async () => {
+    runResearchSearchMock.mockResolvedValueOnce(THREE_RESULT_SEARCH);
+    generateGoogleStructuredMock.mockResolvedValueOnce({
+      ok: true,
+      data: { candidates: [] },
+      error: null,
+      provider: "GOOGLE",
+      modelId: "gemini-3.8-flash",
+      inputTokens: 1,
+      outputTokens: 1,
+      latencyMs: 1,
+    });
+
+    await runTopicDiscoveryTask(REAL_FAILURE_KEYWORD);
+
+    const call = generateGoogleStructuredMock.mock.calls[0][0];
+    expect(call.userMessage).toContain(REAL_FAILURE_KEYWORD);
+  });
+
+  it("builds directed-search queries from the keyword (not the generic monthly news sweep) and passes them to the Search Router", async () => {
+    runResearchSearchMock.mockResolvedValueOnce(THREE_RESULT_SEARCH);
+    generateGoogleStructuredMock.mockResolvedValueOnce({
+      ok: true,
+      data: { candidates: [] },
+      error: null,
+      provider: "GOOGLE",
+      modelId: "gemini-3.8-flash",
+      inputTokens: 1,
+      outputTokens: 1,
+      latencyMs: 1,
+    });
+
+    await runTopicDiscoveryTask(REAL_FAILURE_KEYWORD);
+
+    const queriesArg = runResearchSearchMock.mock.calls[0][0] as string[];
+    expect(queriesArg[0]).toBe(REAL_FAILURE_KEYWORD);
+    for (const q of queriesArg) expect(q).not.toContain("UK visa rules update");
+  });
+
+  it("filters out a candidate with a hallucinated source_label (N99) while keeping valid ones — one bad label doesn't fail the whole task", async () => {
+    runResearchSearchMock.mockResolvedValueOnce(THREE_RESULT_SEARCH);
+    generateGoogleStructuredMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        candidates: [
+          {
+            title: "永居收费为什么可能远高于处理成本？",
+            question: "q",
+            business: "永居 / ILR",
+            audience: "准备申请ILR的人",
+            content_pillar: "myth_busting",
+            priority: "HIGH",
+            source_label: "N1",
+            reason: "r",
+          },
+          {
+            title: "fabricated",
+            question: "q",
+            business: "b",
+            audience: "a",
+            content_pillar: null,
+            priority: "LOW",
+            source_label: "N99",
+            reason: "r",
+          },
+        ],
+      },
+      error: null,
+      provider: "GOOGLE",
+      modelId: "gemini-3.8-flash",
+      inputTokens: 1,
+      outputTokens: 1,
+      latencyMs: 1,
+    });
+
+    const result = await runTopicDiscoveryTask(REAL_FAILURE_KEYWORD);
+
+    expect(result.ok).toBe(true);
+    if (result.ok && result.data) {
+      expect(result.data.candidates).toHaveLength(1);
+      expect(result.data.candidates[0].source_label).toBe("N1");
+    }
+  });
+
+  it("returns zero candidates as-is when the model finds nothing strongly relevant — does not force a fallback recommendation", async () => {
+    runResearchSearchMock.mockResolvedValueOnce(THREE_RESULT_SEARCH);
+    generateGoogleStructuredMock.mockResolvedValueOnce({
+      ok: true,
+      data: { candidates: [] },
+      error: null,
+      provider: "GOOGLE",
+      modelId: "gemini-3.8-flash",
+      inputTokens: 1,
+      outputTokens: 1,
+      latencyMs: 1,
+    });
+
+    const result = await runTopicDiscoveryTask(REAL_FAILURE_KEYWORD);
+
+    expect(result.ok).toBe(true);
+    if (result.ok && result.data) expect(result.data.candidates).toEqual([]);
   });
 });

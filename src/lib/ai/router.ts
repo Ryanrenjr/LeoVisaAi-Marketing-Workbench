@@ -51,6 +51,7 @@ import {
   buildDiscoveryManifest,
   buildDiscoveryQueries,
   buildTopicDiscoveryUserPrompt,
+  filterCandidatesByValidLabels,
 } from "./topic-discovery";
 import type { TopicDiscoveryResult } from "./topic-discovery";
 import { getEmployeeInstruction } from "../employee-instructions";
@@ -512,12 +513,23 @@ export async function runTopicDiscoveryTask(
 
   const { model } = modelResolution;
   const customInstructions = await getEmployeeInstruction("planner");
-  return dispatchStructuredAnyProvider(model.provider, model.modelId, {
+  const genResult = await dispatchStructuredAnyProvider(model.provider, model.modelId, {
     systemPrompt: appendCustomInstructions(buildSkillPrompt("planner", TOPIC_DISCOVERY_SYSTEM_PROMPT), customInstructions),
-    userMessage: buildTopicDiscoveryUserPrompt(manifestText),
+    userMessage: buildTopicDiscoveryUserPrompt(manifestText, keyword),
     schema: TopicDiscoveryResultSchema,
     maxTokens: 4000,
   });
+
+  if (!genResult.ok || !genResult.data) return genResult;
+
+  // Defensive re-validation (Round 3A) — drop any candidate whose
+  // source_label isn't one of this search's real labels, rather than
+  // trusting the prompt alone or failing the whole task over one bad label.
+  const validLabels = labeled.map((l) => l.label);
+  return {
+    ...genResult,
+    data: { candidates: filterCandidatesByValidLabels(genResult.data.candidates, validLabels) },
+  };
 }
 
 /**
