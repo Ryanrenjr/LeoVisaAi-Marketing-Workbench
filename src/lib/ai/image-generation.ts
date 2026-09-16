@@ -34,6 +34,26 @@ import { IMAGE_DESIGNER_VISUAL_RULES } from "./skills";
 
 const STYLE_RULES = IMAGE_DESIGNER_VISUAL_RULES;
 
+/**
+ * The only place this app can honestly put Leo's real likeness is
+ * includePortrait's reference-image path (视频号封面, when a portrait has
+ * been uploaded) — that's the one case the model is actually given his
+ * real photo to work from. Every other image (公众号封面, and every 小红书
+ * carousel page — neither has ever had reference-image support) has
+ * nothing to base a likeness on, so a face the model draws there can only
+ * ever be an invented one. This used to be left to a single unconditional
+ * "if you draw him, use the real photo, don't invent a face" line shared
+ * across every prompt (IMAGE_DESIGNER_VISUAL_RULES) — sound advice when a
+ * reference photo is attached, but toothless without one, since the model
+ * sometimes drew an invented face anyway (live incident, 2026-09-16: a
+ * 公众号封面 and one 小红书 page each came back with a clearly-wrong face).
+ * Forbidding a real-looking face outright, rather than conditioning
+ * compliance on the model choosing to follow "don't invent one", is the
+ * only way to make the no-reference case actually safe.
+ */
+const NO_REAL_FACE_INSTRUCTION =
+  '\n\n这张图没有附带李尔王本人的参考照片，所以不能画出他的写实肖像或任何看起来像是他本人特写的人脸——这项"使用真实照片"的能力目前只在视频号封面里、确实附带参考图时才启用。如果画面确实需要人物元素，只能用完全抽象化/图标化的剪影或插画风格人形（不呈现具体五官、不构成对任何真实人物的写实描绘），不要凭空创作一张"像是他"的脸。';
+
 export function buildCoverImagePrompt(
   topic: { title: string; business: string },
   content: { title: string; text: string },
@@ -45,7 +65,7 @@ export function buildCoverImagePrompt(
 ): string {
   const portraitInstruction = includePortrait
     ? `\n\n附带的参考图是李尔王本人的真实照片。请把他自然地融合进这张封面里——保留他的真实长相、发型、体态，不要改变成另一个人，也不要卡通化/插画化他的脸；但周围的背景、色调、光影、构图可以按封面主题重新设计，让他看起来像是"站在/出现在"这个设计好的场景里，而不是一张原始照片被直接贴上去。整体版式：他固定占画面右侧或右下方（半身或胸像），左侧或上方留给品牌标签、主标题、数据行。整体背景使用深色、英伦主题的场景/纹理（深蓝、深墨绿、近黑、黑金一类，可暗示英国相关的抽象元素如护照封面色、地图轮廓、建筑剪影），呼应参考照片本身的深色背景，让人物和背景融为一体，不要出现人物区域和背景区域明显割裂、拼接的痕迹。`
-    : "";
+    : NO_REAL_FACE_INSTRUCTION;
 
   const brandBadge = contentBrand
     ? `\n\n如果构图还有余量，可以在画面顶部或左上角放一个不起眼的小栏目标签（文字为"${contentBrand}"，字号明显小于主标题）——这是锦上添花，不是必须元素，真实发布的封面很多并不带这个标签，主标题和视觉焦点永远优先于它。`
@@ -86,5 +106,5 @@ ${STYLE_RULES}
 
 在画面左上角放一个小的页码标签（如"第 ${page.pageNumber} 页"或"P${page.pageNumber}"），字号小、不抢主标题的视觉焦点，方便读者知道自己看到了这组图文的第几页。
 
-构图：竖版构图，与同一篇笔记里的其他页保持一致的视觉风格（配色、字体气质、排版逻辑），让人一眼看出这是同一组图文的第 ${page.pageNumber} 页。`;
+构图：竖版构图，与同一篇笔记里的其他页保持一致的视觉风格（配色、字体气质、排版逻辑），让人一眼看出这是同一组图文的第 ${page.pageNumber} 页。${NO_REAL_FACE_INSTRUCTION}`;
 }

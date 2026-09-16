@@ -18,15 +18,29 @@ describe("buildCoverImagePrompt", () => {
     expect(prompt).toContain("GOV.UK");
   });
 
-  it("says nothing about a reference photo by default", () => {
+  it("does not tell the model to fuse in an attached reference photo by default (there isn't one)", () => {
     const prompt = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "视频号");
-    expect(prompt).not.toContain("真实照片");
+    expect(prompt).not.toContain("参考图是李尔王本人的真实照片");
   });
 
   it("when includePortrait is true, tells the model to fuse the attached reference photo in, preserving his real likeness", () => {
     const prompt = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "视频号", true);
     expect(prompt).toContain("参考图是李尔王本人的真实照片");
     expect(prompt).toContain("保留他的真实长相");
+  });
+
+  /**
+   * Live incident (2026-09-16): 公众号封面 always calls this with
+   * includePortrait:false (no reference photo ever attached), but the
+   * model sometimes drew an invented face anyway — nothing in the prompt
+   * actually forbade it, IMAGE_DESIGNER_VISUAL_RULES's old blanket "if you
+   * draw him, use the real photo" line only mattered when a photo was
+   * actually there to use.
+   */
+  it("when includePortrait is false, explicitly forbids a real-looking face instead of just saying nothing", () => {
+    const prompt = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "公众号", false);
+    expect(prompt).toContain("不能画出他的写实肖像");
+    expect(prompt).not.toContain("参考图是李尔王本人的真实照片");
   });
 
   it("does not instruct the model to draw any specific data rows when no highlights are given", () => {
@@ -80,6 +94,17 @@ describe("buildCarouselImagePrompt", () => {
   it("never omits the anti-fabrication rule", () => {
     const prompt = buildCarouselImagePrompt(TOPIC, { title: "t" }, { text: "x", pageNumber: 1, totalPages: 1 });
     expect(prompt).toContain("不得伪造");
+  });
+
+  /**
+   * Live incident (2026-09-16): a 小红书 carousel page came back with an
+   * invented face — this function has never had reference-image support
+   * (no includePortrait param at all), so every page must explicitly
+   * forbid a real-looking face, not just rely on the model refraining.
+   */
+  it("explicitly forbids a real-looking face — this function never attaches a reference photo", () => {
+    const prompt = buildCarouselImagePrompt(TOPIC, { title: "t" }, { text: "x", pageNumber: 3, totalPages: 6 });
+    expect(prompt).toContain("不能画出他的写实肖像");
   });
 });
 
