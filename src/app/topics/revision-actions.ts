@@ -12,7 +12,12 @@ import {
 } from "@/lib/topics";
 import { canManageContentAssets } from "@/lib/permissions";
 import { nextVersionNumber } from "@/lib/content-versions";
-import { buildWechatBrandFooter, deriveTitleAndContent, CONTENT_TYPE_REVISION } from "@/lib/content-mapping";
+import {
+  buildWechatBrandFooter,
+  buildExistingContentTextForRevision,
+  deriveTitleAndContent,
+  CONTENT_TYPE_REVISION,
+} from "@/lib/content-mapping";
 import { getBrandConfig } from "@/lib/brand-config";
 import { runContentRevisionTask, isRouterResolutionFailure } from "@/lib/ai/router";
 import { getModel } from "@/lib/ai/providers/registry";
@@ -85,7 +90,7 @@ export async function reviseContentAsset(
       topic,
       researchPack,
       sources,
-      existingContentText: asset.content,
+      existingContentText: buildExistingContentTextForRevision(asset),
       findings: latestReview.findings,
     },
     override,

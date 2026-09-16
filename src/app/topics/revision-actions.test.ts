@@ -7,6 +7,7 @@ vi.mock("@/lib/content-versions", () => ({ nextVersionNumber: () => 2 }));
 vi.mock("@/lib/content-mapping", () => ({
   deriveTitleAndContent: () => ({ title: "标题", content: "正文" }),
   buildWechatBrandFooter: () => "footer",
+  buildExistingContentTextForRevision: (asset: { content: string }) => asset.content,
   CONTENT_TYPE_REVISION: { video_script: "VIDEO_REVISION" },
 }));
 vi.mock("@/lib/brand-config", () => ({ getBrandConfig: vi.fn().mockResolvedValue({ contentBrand: "LeoVisa" }) }));

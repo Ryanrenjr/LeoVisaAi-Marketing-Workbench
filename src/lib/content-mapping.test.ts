@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildExistingContentTextForRevision,
   buildPublishFacingTextForCompliance,
   buildWechatBrandFooter,
   deriveTitleAndContent,
@@ -164,6 +165,54 @@ describe("buildPublishFacingTextForCompliance", () => {
     expect(text).not.toContain("source-id-should-not-leak");
     expect(text).not.toContain("note-should-not-leak");
     expect(text).not.toContain("detail-should-not-leak");
+  });
+});
+
+/**
+ * 2026-09-16 production incident: revision-actions.ts used to pass
+ * `asset.content` (full_article + closing_note + brand_footer already
+ * joined) as "the existing draft to preserve" into the revision prompt.
+ * The revision model faithfully echoed the trailing brand_footer text
+ * (最后核验 date + company disclaimer) back into its own closing_note, and
+ * revision-actions.ts then appended a freshly-built brand_footer on top
+ * regardless — duplicating the whole block and tripping compliance's
+ * Evidence Layer (an "unverifiable" duplicate date claim), which stopped
+ * the pipeline at final verification. Excluding brand_footer here means
+ * the revision model never sees it, so it can't copy it.
+ */
+describe("buildExistingContentTextForRevision", () => {
+  it("excludes brand_footer for a current-shape WeChat article, keeping only full_article + closing_note", () => {
+    const text = buildExistingContentTextForRevision({
+      platform: "WECHAT_OFFICIAL_ACCOUNT",
+      content: "正文内容\n\n结尾话术\n\n最后核验：2026-09-16\n\n本文由 Leo Visa Service 整理。",
+      structured_content: {
+        title: "标题",
+        full_article: "正文内容",
+        closing_note: "结尾话术",
+        brand_footer: "最后核验：2026-09-16\n\n本文由 Leo Visa Service 整理。",
+      },
+    });
+    expect(text).toBe("正文内容\n\n结尾话术");
+    expect(text).not.toContain("最后核验");
+    expect(text).not.toContain("Leo Visa Service");
+  });
+
+  it("falls back to asset.content for a legacy WeChat asset with no closing_note field", () => {
+    const text = buildExistingContentTextForRevision({
+      platform: "WECHAT_OFFICIAL_ACCOUNT",
+      content: "旧版正文",
+      structured_content: { title: "旧标题", full_article: "旧版正文" },
+    });
+    expect(text).toBe("旧版正文");
+  });
+
+  it("falls back to asset.content for every non-WeChat platform, unchanged", () => {
+    const text = buildExistingContentTextForRevision({
+      platform: "VIDEO_CHANNEL",
+      content: "口播稿正文",
+      structured_content: { title: "标题", full_script: "口播稿正文" },
+    });
+    expect(text).toBe("口播稿正文");
   });
 });
 

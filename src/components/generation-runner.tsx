@@ -27,6 +27,20 @@ import type { ContentPlatform } from "@/lib/types";
 /** A step's executor gets this many total attempts (1 real + 2 automatic retries) before a transient error (429, network blip) is surfaced to a human — cheap because subtask-level idempotency (see executors below, and generateContent/generateVideoCover/etc.'s `since` param) means a retry skips whatever already succeeded instead of re-running it. */
 const STEP_ATTEMPT_DELAYS_MS = [2000, 5000];
 
+/**
+ * Every step Server Action below now returns `{ ok: false, error }` instead
+ * of throwing (2026-09-16 production incident: Next.js redacts a thrown
+ * Server Action error's message in production — the operator only ever saw
+ * "Minified React error #441", never the real Chinese reason a step
+ * stopped). Throwing here, in plain client-side code, never crosses that
+ * boundary, so the message survives intact into runFrom's catch block below
+ * exactly the way it always visually behaved locally under `next dev`.
+ */
+function unwrapStep<T extends object>(result: ({ ok: true } & T) | { ok: false; error: string }): T {
+  if (!result.ok) throw new Error(result.error);
+  return result as T;
+}
+
 async function withStepRetry(run: () => Promise<void>): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -256,26 +270,30 @@ export function GenerationRunner({
     const since = run.createdAt;
     const runId = run.id;
     const executors: Record<StepKey, () => Promise<void>> = {
-      content: () => runContentGenerationStep(topicId, run.platforms, since, runId),
+      content: async () => {
+        unwrapStep(await runContentGenerationStep(topicId, run.platforms, since, runId));
+      },
       compliance: async () => {
-        await runComplianceStep(topicId, run.platforms, runId);
+        unwrapStep(await runComplianceStep(topicId, run.platforms, runId));
       },
       // Determined fresh from the DB every time (see runRevisionStep's doc
       // comment) — correct whether this is a normal run or a resume that
       // landed exactly between compliance finishing and revision starting.
       revision: async () => {
-        const { skipped } = await runRevisionStep(topicId, run.platforms, runId);
+        const { skipped } = unwrapStep(await runRevisionStep(topicId, run.platforms, runId));
         setSkippedSteps((prev) => ({ ...prev, revision: skipped }));
       },
       // G looks once more at whatever H just revised (see
       // runFinalVerificationStep's doc comment) — a still-flagged result
-      // here throws and stops the whole pipeline rather than looping back
-      // into another automatic revision.
+      // here throws (client-side, via unwrapStep) and stops the whole
+      // pipeline rather than looping back into another automatic revision.
       finalVerification: async () => {
-        const { skipped } = await runFinalVerificationStep(topicId, run.platforms, runId);
+        const { skipped } = unwrapStep(await runFinalVerificationStep(topicId, run.platforms, runId));
         setSkippedSteps((prev) => ({ ...prev, finalVerification: skipped }));
       },
-      images: () => runImageGenerationStep(topicId, run.platforms, since, runId),
+      images: async () => {
+        unwrapStep(await runImageGenerationStep(topicId, run.platforms, since, runId));
+      },
     };
 
     async function runFrom(from: number) {

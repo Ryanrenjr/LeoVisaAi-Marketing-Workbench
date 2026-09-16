@@ -22,6 +22,27 @@ import { getLatestLeoPortrait } from "@/lib/leo-portraits";
 import type { ContentAsset, ContentPlatform, ContentType } from "@/lib/types";
 
 /**
+ * Every step below runs as a Server Action invoked directly from
+ * GenerationRunner (a Client Component). Next.js redacts a thrown Error's
+ * message for any Server Action in production — the browser only ever sees
+ * a generic "Minified React error #441" plus a digest, and the real
+ * message (which every step here composes carefully, in Chinese, for the
+ * operator to read) only reaches the server-side log. A caught production
+ * incident (2026-09-16: 终审复核发现问题仍未解决 stopped the pipeline as
+ * designed, but the operator only saw an unreadable React error) showed
+ * this affects every failure path here, not just one. So every step
+ * returns its failure instead of throwing — GenerationRunner reads
+ * `result.error` directly and throws client-side (never crossing the
+ * Server Action boundary, so nothing gets redacted) to preserve its
+ * existing retry behavior.
+ */
+type StepResult<T extends object = object> = ({ ok: true } & T) | { ok: false; error: string };
+
+function stepFailure(err: unknown, fallback: string): { ok: false; error: string } {
+  return { ok: false, error: err instanceof Error ? err.message : fallback };
+}
+
+/**
  * "选题确认之后，直接从内容到最后一步整合" + "工作的时候要加上百分比" (live
  * user instructions) — the steps below (content → 合规审核 → 校对 →
  * 终审复核 → 生图) are the granular building blocks a CLIENT component
@@ -103,31 +124,41 @@ async function latestGeneratedAssets(topicId: string, platforms: ContentPlatform
  * atomic claim (round 6) so two concurrent requests can't both call the AI
  * for the same sub-task.
  */
-export async function runContentGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string, runId?: string): Promise<void> {
-  const nonXhsPlatforms = platforms.filter((p) => p !== "XIAOHONGSHU");
-  const tasks: Promise<void>[] = [];
+export async function runContentGenerationStep(
+  topicId: string,
+  platforms: ContentPlatform[],
+  since?: string,
+  runId?: string,
+): Promise<StepResult> {
+  try {
+    const nonXhsPlatforms = platforms.filter((p) => p !== "XIAOHONGSHU");
+    const tasks: Promise<void>[] = [];
 
-  if (nonXhsPlatforms.length > 0) {
-    tasks.push(generateContent(topicId, nonXhsPlatforms, since, runId));
-  }
+    if (nonXhsPlatforms.length > 0) {
+      tasks.push(generateContent(topicId, nonXhsPlatforms, since, runId));
+    }
 
-  if (platforms.includes("XIAOHONGSHU")) {
-    tasks.push(
-      (async () => {
-        await generateContent(topicId, ["XIAOHONGSHU"], since, runId);
-        const result = await generatePagesPlan(topicId, undefined, since, runId);
-        if (!result.ok) {
-          throw new Error(`内容生成失败：小红书图文规划：${result.error ?? "图文规划生成失败。"}`);
-        }
-      })(),
-    );
-  }
+    if (platforms.includes("XIAOHONGSHU")) {
+      tasks.push(
+        (async () => {
+          await generateContent(topicId, ["XIAOHONGSHU"], since, runId);
+          const result = await generatePagesPlan(topicId, undefined, since, runId);
+          if (!result.ok) {
+            throw new Error(`内容生成失败：小红书图文规划：${result.error ?? "图文规划生成失败。"}`);
+          }
+        })(),
+      );
+    }
 
-  const settled = await Promise.allSettled(tasks);
-  const failures = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
-  if (failures.length > 0) {
-    const detail = failures.map((f) => (f.reason instanceof Error ? f.reason.message : String(f.reason))).join("；");
-    throw new Error(detail);
+    const settled = await Promise.allSettled(tasks);
+    const failures = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failures.length > 0) {
+      const detail = failures.map((f) => (f.reason instanceof Error ? f.reason.message : String(f.reason))).join("；");
+      return { ok: false, error: detail };
+    }
+    return { ok: true };
+  } catch (err) {
+    return stepFailure(err, "内容生成失败。");
   }
 }
 
@@ -148,31 +179,41 @@ export async function runContentGenerationStep(topicId: string, platforms: Conte
  * 图片设理员's own page still default to no portrait, since there it's a
  * deliberate per-click choice with its own checkbox).
  */
-export async function runImageGenerationStep(topicId: string, platforms: ContentPlatform[], since?: string, runId?: string): Promise<void> {
-  const portrait = await getLatestLeoPortrait();
-  const tasks: { label: string; promise: Promise<{ ok: boolean; error?: string }> }[] = [];
-  if (platforms.includes("VIDEO_CHANNEL")) {
-    tasks.push({ label: "视频封面", promise: generateVideoCover(topicId, portrait !== null, undefined, since, runId) });
-  }
-  if (platforms.includes("WECHAT_OFFICIAL_ACCOUNT")) {
-    tasks.push({ label: "公众号封面", promise: generateWechatCover(topicId, undefined, since, runId) });
-  }
-  if (platforms.includes("XIAOHONGSHU")) {
-    tasks.push({ label: "小红书图文", promise: generateXiaohongshuCarousel(topicId, undefined, since, runId) });
-  }
+export async function runImageGenerationStep(
+  topicId: string,
+  platforms: ContentPlatform[],
+  since?: string,
+  runId?: string,
+): Promise<StepResult> {
+  try {
+    const portrait = await getLatestLeoPortrait();
+    const tasks: { label: string; promise: Promise<{ ok: boolean; error?: string }> }[] = [];
+    if (platforms.includes("VIDEO_CHANNEL")) {
+      tasks.push({ label: "视频封面", promise: generateVideoCover(topicId, portrait !== null, undefined, since, runId) });
+    }
+    if (platforms.includes("WECHAT_OFFICIAL_ACCOUNT")) {
+      tasks.push({ label: "公众号封面", promise: generateWechatCover(topicId, undefined, since, runId) });
+    }
+    if (platforms.includes("XIAOHONGSHU")) {
+      tasks.push({ label: "小红书图文", promise: generateXiaohongshuCarousel(topicId, undefined, since, runId) });
+    }
 
-  const settled = await Promise.allSettled(tasks.map((t) => t.promise));
-  // A silently-discarded {ok:false} here used to mean "配图少生成两张，前端
-  // 100%完成" — every failure now stops the pipeline instead of being
-  // treated as a no-op success.
-  const failures = settled
-    .map((result, i) => ({ label: tasks[i].label, result }))
-    .filter(({ result }) => result.status === "rejected" || !result.value.ok);
-  if (failures.length > 0) {
-    const detail = failures
-      .map(({ label, result }) => `${label}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "生成失败")}`)
-      .join("；");
-    throw new Error(`配图生成失败：${detail}`);
+    const settled = await Promise.allSettled(tasks.map((t) => t.promise));
+    // A silently-discarded {ok:false} here used to mean "配图少生成两张，前端
+    // 100%完成" — every failure now stops the pipeline instead of being
+    // treated as a no-op success.
+    const failures = settled
+      .map((result, i) => ({ label: tasks[i].label, result }))
+      .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+    if (failures.length > 0) {
+      const detail = failures
+        .map(({ label, result }) => `${label}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "生成失败")}`)
+        .join("；");
+      return { ok: false, error: `配图生成失败：${detail}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return stepFailure(err, "配图生成失败。");
   }
 }
 
@@ -211,32 +252,36 @@ export async function runComplianceStep(
   topicId: string,
   platforms: ContentPlatform[],
   runId?: string,
-): Promise<{ anyFlagged: boolean }> {
-  const latestAssets = await latestGeneratedAssets(topicId, platforms);
-  const reviews = await getComplianceReviews(topicId);
-  const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
-  const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
+): Promise<StepResult<{ anyFlagged: boolean }>> {
+  try {
+    const latestAssets = await latestGeneratedAssets(topicId, platforms);
+    const reviews = await getComplianceReviews(topicId);
+    const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
+    const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
 
-  const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id, undefined, runId)));
+    const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id, undefined, runId)));
 
-  const failures = settled
-    .map((result, i) => ({ asset: pendingAssets[i], result }))
-    .filter(({ result }) => result.status === "rejected" || !result.value.ok);
-  if (failures.length > 0) {
-    const detail = failures
-      .map(
-        ({ asset, result }) =>
-          `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "审核失败")}`,
-      )
-      .join("；");
-    throw new Error(`合规审核未能完成，已停止：${detail}`);
+    const failures = settled
+      .map((result, i) => ({ asset: pendingAssets[i], result }))
+      .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+    if (failures.length > 0) {
+      const detail = failures
+        .map(
+          ({ asset, result }) =>
+            `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "审核失败")}`,
+        )
+        .join("；");
+      return { ok: false, error: `合规审核未能完成，已停止：${detail}` };
+    }
+
+    const anyFlagged = await computeAnyFlagged(topicId, platforms);
+
+    revalidatePath(`/topics/${topicId}`);
+    revalidatePath("/team/compliance");
+    return { ok: true, anyFlagged };
+  } catch (err) {
+    return stepFailure(err, "合规审核未能完成。");
   }
-
-  const anyFlagged = await computeAnyFlagged(topicId, platforms);
-
-  revalidatePath(`/topics/${topicId}`);
-  revalidatePath("/team/compliance");
-  return { anyFlagged };
 }
 
 /**
@@ -255,42 +300,46 @@ export async function runRevisionStep(
   topicId: string,
   platforms: ContentPlatform[],
   runId?: string,
-): Promise<{ skipped: boolean }> {
-  const anyFlagged = await computeAnyFlagged(topicId, platforms);
-  if (!anyFlagged) return { skipped: true };
+): Promise<StepResult<{ skipped: boolean }>> {
+  try {
+    const anyFlagged = await computeAnyFlagged(topicId, platforms);
+    if (!anyFlagged) return { ok: true, skipped: true };
 
-  const latestAssets = await latestGeneratedAssets(topicId, platforms);
-  const reviews = await getComplianceReviews(topicId);
-  const latestReviewByAssetId = new Map<string, (typeof reviews)[number]>();
-  for (const review of reviews) {
-    if (!latestReviewByAssetId.has(review.content_asset_id)) {
-      latestReviewByAssetId.set(review.content_asset_id, review);
+    const latestAssets = await latestGeneratedAssets(topicId, platforms);
+    const reviews = await getComplianceReviews(topicId);
+    const latestReviewByAssetId = new Map<string, (typeof reviews)[number]>();
+    for (const review of reviews) {
+      if (!latestReviewByAssetId.has(review.content_asset_id)) {
+        latestReviewByAssetId.set(review.content_asset_id, review);
+      }
     }
+
+    const flagged = latestAssets.filter((asset) => {
+      const review = latestReviewByAssetId.get(asset.id);
+      return review !== undefined && review.overall_risk !== "LOW";
+    });
+
+    const settled = await Promise.allSettled(flagged.map((asset) => reviseContentAsset(asset.id, undefined, runId)));
+    const failures = settled
+      .map((result, i) => ({ asset: flagged[i], result }))
+      .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+    if (failures.length > 0) {
+      const detail = failures
+        .map(
+          ({ asset, result }) =>
+            `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "修改失败")}`,
+        )
+        .join("；");
+      return { ok: false, error: `校对修改失败：${detail}` };
+    }
+
+    revalidatePath(`/topics/${topicId}`);
+    revalidatePath("/team/reviser");
+    revalidatePath("/team/integrator");
+    return { ok: true, skipped: false };
+  } catch (err) {
+    return stepFailure(err, "校对修改失败。");
   }
-
-  const flagged = latestAssets.filter((asset) => {
-    const review = latestReviewByAssetId.get(asset.id);
-    return review !== undefined && review.overall_risk !== "LOW";
-  });
-
-  const settled = await Promise.allSettled(flagged.map((asset) => reviseContentAsset(asset.id, undefined, runId)));
-  const failures = settled
-    .map((result, i) => ({ asset: flagged[i], result }))
-    .filter(({ result }) => result.status === "rejected" || !result.value.ok);
-  if (failures.length > 0) {
-    const detail = failures
-      .map(
-        ({ asset, result }) =>
-          `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "修改失败")}`,
-      )
-      .join("；");
-    throw new Error(`校对修改失败：${detail}`);
-  }
-
-  revalidatePath(`/topics/${topicId}`);
-  revalidatePath("/team/reviser");
-  revalidatePath("/team/integrator");
-  return { skipped: false };
 }
 
 /**
@@ -316,70 +365,74 @@ export async function runRevisionStep(
  * compliance_reviews directly (not via the existing fail-open
  * getComplianceReviews helper — this is the one thing standing between
  * "pipeline says success" and "genuinely unresolved compliance risk", so a
- * read failure here must throw, not be silently swallowed into "looks
- * clean"). Checking every in-scope asset's CURRENT review (not just the
- * ones reviewed in this call) means a retry after a stop here re-derives
- * the same stop from the DB instead of silently passing once nothing is
- * newly "pending".
+ * read failure here must fail closed (returned as `{ ok: false }`), not be
+ * silently swallowed into "looks clean"). Checking every in-scope asset's
+ * CURRENT review (not just the ones reviewed in this call) means a retry
+ * after a stop here re-derives the same stop from the DB instead of
+ * silently passing once nothing is newly "pending".
  */
 export async function runFinalVerificationStep(
   topicId: string,
   platforms: ContentPlatform[],
   runId?: string,
-): Promise<{ skipped: boolean }> {
-  const latestAssets = await latestGeneratedAssets(topicId, platforms);
-  const reviews = await getComplianceReviews(topicId);
-  const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
-  const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
+): Promise<StepResult<{ skipped: boolean }>> {
+  try {
+    const latestAssets = await latestGeneratedAssets(topicId, platforms);
+    const reviews = await getComplianceReviews(topicId);
+    const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
+    const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
 
-  if (pendingAssets.length > 0) {
-    const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id, undefined, runId)));
-    const failures = settled
-      .map((result, i) => ({ asset: pendingAssets[i], result }))
-      .filter(({ result }) => result.status === "rejected" || !result.value.ok);
-    if (failures.length > 0) {
-      const detail = failures
-        .map(
-          ({ asset, result }) =>
-            `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "复核失败")}`,
-        )
-        .join("；");
-      throw new Error(`终审复核未能完成，已停止：${detail}`);
-    }
-  }
-
-  if (latestAssets.length > 0) {
-    const supabase = await createClient();
-    const { data: freshReviews, error: freshReviewsError } = await supabase
-      .from("compliance_reviews")
-      .select("content_asset_id, overall_risk")
-      .in(
-        "content_asset_id",
-        latestAssets.map((asset) => asset.id),
-      )
-      .order("created_at", { ascending: false });
-    if (freshReviewsError) throw new Error(`终审复核结果读取失败，已停止：${freshReviewsError.message}`);
-
-    const latestRiskByAssetId = new Map<string, string>();
-    for (const review of freshReviews ?? []) {
-      if (!latestRiskByAssetId.has(review.content_asset_id)) {
-        latestRiskByAssetId.set(review.content_asset_id, review.overall_risk);
+    if (pendingAssets.length > 0) {
+      const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id, undefined, runId)));
+      const failures = settled
+        .map((result, i) => ({ asset: pendingAssets[i], result }))
+        .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+      if (failures.length > 0) {
+        const detail = failures
+          .map(
+            ({ asset, result }) =>
+              `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "复核失败")}`,
+          )
+          .join("；");
+        return { ok: false, error: `终审复核未能完成，已停止：${detail}` };
       }
     }
 
-    const stillFlagged = latestAssets.filter((asset) => {
-      const risk = latestRiskByAssetId.get(asset.id);
-      return risk !== undefined && risk !== "LOW";
-    });
-    if (stillFlagged.length > 0) {
-      const detail = stillFlagged.map((asset) => CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform).join("、");
-      throw new Error(`终审复核发现问题仍未解决（${detail}），需要人工检查，已停止自动流程。`);
-    }
-  }
+    if (latestAssets.length > 0) {
+      const supabase = await createClient();
+      const { data: freshReviews, error: freshReviewsError } = await supabase
+        .from("compliance_reviews")
+        .select("content_asset_id, overall_risk")
+        .in(
+          "content_asset_id",
+          latestAssets.map((asset) => asset.id),
+        )
+        .order("created_at", { ascending: false });
+      if (freshReviewsError) return { ok: false, error: `终审复核结果读取失败，已停止：${freshReviewsError.message}` };
 
-  revalidatePath(`/topics/${topicId}`);
-  revalidatePath("/team/compliance");
-  return { skipped: pendingAssets.length === 0 };
+      const latestRiskByAssetId = new Map<string, string>();
+      for (const review of freshReviews ?? []) {
+        if (!latestRiskByAssetId.has(review.content_asset_id)) {
+          latestRiskByAssetId.set(review.content_asset_id, review.overall_risk);
+        }
+      }
+
+      const stillFlagged = latestAssets.filter((asset) => {
+        const risk = latestRiskByAssetId.get(asset.id);
+        return risk !== undefined && risk !== "LOW";
+      });
+      if (stillFlagged.length > 0) {
+        const detail = stillFlagged.map((asset) => CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform).join("、");
+        return { ok: false, error: `终审复核发现问题仍未解决（${detail}），需要人工检查，已停止自动流程。` };
+      }
+    }
+
+    revalidatePath(`/topics/${topicId}`);
+    revalidatePath("/team/compliance");
+    return { ok: true, skipped: pendingAssets.length === 0 };
+  } catch (err) {
+    return stepFailure(err, "终审复核未能完成。");
+  }
 }
 
 const SELECTABLE_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU", "WECHAT_OFFICIAL_ACCOUNT"];

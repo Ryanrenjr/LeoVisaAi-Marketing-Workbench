@@ -86,7 +86,9 @@ describe("runComplianceStep — fail closed", () => {
     });
     getComplianceReviewsMock.mockResolvedValue([]); // the failed call never wrote a row
 
-    await expect(runComplianceStep("topic-1", ALL_PLATFORMS)).rejects.toThrow(/合规审核未能完成/);
+    const result = await runComplianceStep("topic-1", ALL_PLATFORMS);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/合规审核未能完成/);
   });
 
   it("also stops when a review call rejects outright (not just returns ok:false)", async () => {
@@ -96,7 +98,9 @@ describe("runComplianceStep — fail closed", () => {
     });
     getComplianceReviewsMock.mockResolvedValue([]);
 
-    await expect(runComplianceStep("topic-1", ALL_PLATFORMS)).rejects.toThrow(/合规审核未能完成/);
+    const result = await runComplianceStep("topic-1", ALL_PLATFORMS);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/合规审核未能完成/);
   });
 
   it("succeeds and reports anyFlagged correctly when every review genuinely runs", async () => {
@@ -107,8 +111,8 @@ describe("runComplianceStep — fail closed", () => {
       review(WECHAT_ASSET.id, "LOW"),
     ]);
 
-    const { anyFlagged } = await runComplianceStep("topic-1", ALL_PLATFORMS);
-    expect(anyFlagged).toBe(true);
+    const result = await runComplianceStep("topic-1", ALL_PLATFORMS);
+    expect(result).toEqual({ ok: true, anyFlagged: true });
   });
 
   it("skips assets that already have a compliance_reviews row — retry after a partial failure doesn't re-review what already succeeded", async () => {
@@ -156,7 +160,7 @@ describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed
     ]);
 
     const result = await runRevisionStep("topic-1", ALL_PLATFORMS);
-    expect(result).toEqual({ skipped: true });
+    expect(result).toEqual({ ok: true, skipped: true });
     expect(reviseContentAssetMock).not.toHaveBeenCalled();
   });
 
@@ -169,16 +173,18 @@ describe("runRevisionStep — resume-safe (re-derives from DB, not client-passed
     reviseContentAssetMock.mockResolvedValue({ ok: true });
 
     const result = await runRevisionStep("topic-1", ALL_PLATFORMS);
-    expect(result).toEqual({ skipped: false });
+    expect(result).toEqual({ ok: true, skipped: false });
     expect(reviseContentAssetMock).toHaveBeenCalledTimes(1);
     expect(reviseContentAssetMock).toHaveBeenCalledWith(XHS_ASSET.id, undefined, undefined);
   });
 
-  it("throws when a revision call fails, instead of silently leaving the flagged issue unresolved", async () => {
+  it("reports failure when a revision call fails, instead of silently leaving the flagged issue unresolved", async () => {
     getComplianceReviewsMock.mockResolvedValue([review(XHS_ASSET.id, "HIGH")]);
     reviseContentAssetMock.mockResolvedValue({ ok: false, error: "model refused" });
 
-    await expect(runRevisionStep("topic-1", ALL_PLATFORMS)).rejects.toThrow(/校对修改失败/);
+    const result = await runRevisionStep("topic-1", ALL_PLATFORMS);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/校对修改失败/);
   });
 });
 
@@ -212,18 +218,20 @@ describe("runImageGenerationStep — per-platform dispatch, no shared cover, fai
     expect(generateWechatCoverMock).not.toHaveBeenCalled();
   });
 
-  it("throws when generateXiaohongshuCarousel reports ok:false, even though some pages generated", async () => {
+  it("reports failure when generateXiaohongshuCarousel reports ok:false, even though some pages generated", async () => {
     // Live audit finding (P0, round 3): the carousel generator used to
     // report ok:(generated > 0), which meant a partial failure (e.g. 1 of 3
     // pages) looked like success here — this step's !result.value.ok check
     // only works if the generator itself is honest about partial failure.
     generateXiaohongshuCarouselMock.mockResolvedValue({ ok: false, error: "page 2 failed", generated: 1 });
 
-    await expect(runImageGenerationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/配图生成失败/);
+    const result = await runImageGenerationStep("topic-1", ["XIAOHONGSHU"]);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/配图生成失败/);
   });
 
   it("succeeds when every task genuinely reports ok:true", async () => {
-    await expect(runImageGenerationStep("topic-1", ["XIAOHONGSHU"])).resolves.toBeUndefined();
+    await expect(runImageGenerationStep("topic-1", ["XIAOHONGSHU"])).resolves.toEqual({ ok: true });
   });
 
   it("runs all three tasks in parallel when every platform is selected", async () => {
@@ -308,19 +316,23 @@ describe("runContentGenerationStep — XIAOHONGSHU_WRITING → XIAOHONGSHU_PAGES
     expect(order.indexOf("generateContent:XIAOHONGSHU")).toBeLessThan(order.indexOf("generatePagesPlan"));
   });
 
-  it("throws when the XHS-scoped generateContent call rejects, and never calls generatePagesPlan at all (not just 'ignores its result')", async () => {
+  it("reports failure when the XHS-scoped generateContent call rejects, and never calls generatePagesPlan at all (not just 'ignores its result')", async () => {
     generateContentMock.mockRejectedValue(new Error("内容生成失败：小红书：model timeout"));
     generatePagesPlanMock.mockResolvedValue({ ok: true });
 
-    await expect(runContentGenerationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/内容生成失败/);
+    const result = await runContentGenerationStep("topic-1", ["XIAOHONGSHU"]);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/内容生成失败/);
     expect(generatePagesPlanMock).not.toHaveBeenCalled();
   });
 
-  it("throws when generatePagesPlan reports ok:false, even though generateContent succeeded", async () => {
+  it("reports failure when generatePagesPlan reports ok:false, even though generateContent succeeded", async () => {
     generateContentMock.mockResolvedValue(undefined);
     generatePagesPlanMock.mockResolvedValue({ ok: false, error: "检查图文规划是否已生成失败，请重试：connection reset" });
 
-    await expect(runContentGenerationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/检查图文规划是否已生成失败/);
+    const result = await runContentGenerationStep("topic-1", ["XIAOHONGSHU"]);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/检查图文规划是否已生成失败/);
   });
 });
 
@@ -353,20 +365,22 @@ describe("runFinalVerificationStep — reviews only newly revised assets, never 
 
     const result = await runFinalVerificationStep("topic-1", ["XIAOHONGSHU"]);
 
-    expect(result).toEqual({ skipped: false });
+    expect(result).toEqual({ ok: true, skipped: false });
     expect(runComplianceReviewMock).toHaveBeenCalledTimes(1);
     expect(runComplianceReviewMock).toHaveBeenCalledWith("xhs-v2", undefined, undefined);
     expect(reviseContentAssetMock).not.toHaveBeenCalled();
   });
 
-  it("stops the pipeline (throws) instead of continuing when the revised version is still MEDIUM/HIGH, and never auto-revises again", async () => {
+  it("stops the pipeline (reports failure) instead of continuing when the revised version is still MEDIUM/HIGH, and never auto-revises again", async () => {
     const revised = assetWithId("xhs-v2", "XIAOHONGSHU", "xiaohongshu_post", 2);
     getContentAssetsMock.mockResolvedValue([revised]);
     getComplianceReviewsMock.mockResolvedValue([]);
     runComplianceReviewMock.mockResolvedValue({ ok: true });
     freshReviewsResult = { data: [{ content_asset_id: "xhs-v2", overall_risk: "HIGH" }], error: null };
 
-    await expect(runFinalVerificationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/终审复核发现问题仍未解决/);
+    const result = await runFinalVerificationStep("topic-1", ["XIAOHONGSHU"]);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/终审复核发现问题仍未解决/);
     expect(reviseContentAssetMock).not.toHaveBeenCalled();
   });
 
@@ -378,17 +392,19 @@ describe("runFinalVerificationStep — reviews only newly revised assets, never 
 
     const result = await runFinalVerificationStep("topic-1", ["XIAOHONGSHU"]);
 
-    expect(result).toEqual({ skipped: true });
+    expect(result).toEqual({ ok: true, skipped: true });
     expect(runComplianceReviewMock).not.toHaveBeenCalled();
   });
 
-  it("fails closed (throws) when the fresh compliance_reviews re-check itself errors, instead of assuming everything is clean", async () => {
+  it("fails closed (reports failure) when the fresh compliance_reviews re-check itself errors, instead of assuming everything is clean", async () => {
     const original = asset("XIAOHONGSHU", "xiaohongshu_post");
     getContentAssetsMock.mockResolvedValue([original]);
     getComplianceReviewsMock.mockResolvedValue([review(original.id, "LOW")]);
     freshReviewsResult = { data: null, error: { message: "connection reset" } };
 
-    await expect(runFinalVerificationStep("topic-1", ["XIAOHONGSHU"])).rejects.toThrow(/终审复核结果读取失败/);
+    const result = await runFinalVerificationStep("topic-1", ["XIAOHONGSHU"]);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/终审复核结果读取失败/);
   });
 });
 

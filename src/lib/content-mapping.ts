@@ -136,6 +136,44 @@ export function deriveTitleAndContent(
 }
 
 /**
+ * What a revision task should see as "the existing draft to preserve
+ * unchanged" — almost always just `asset.content`, EXCEPT for
+ * WECHAT_OFFICIAL_ACCOUNT, whose `content` column (see
+ * deriveTitleAndContent above) has the deterministic `brand_footer`
+ * (`最后核验：<date>` + the configured company disclaimer, built by
+ * buildWechatBrandFooter — never written by the model) already joined onto
+ * the end.
+ *
+ * A live incident (2026-09-16) showed why that matters: revision-actions.ts
+ * shows the model this text verbatim under "现有草稿，只改标出的问题，其余
+ * 保持不变" — with the footer sitting right there as part of "the existing
+ * draft", the revision model dutifully preserved it inside its own
+ * `closing_note` (even though its base system prompt separately says "the
+ * brand footer is appended separately, do not write it yourself" — a rule
+ * written for first-time generation, where the model has never seen a
+ * footer to copy). revision-actions.ts then appends a freshly-built
+ * `buildWechatBrandFooter` on top regardless, producing a published draft
+ * with the entire footer block duplicated — which is also exactly the kind
+ * of "unverifiable claim" compliance's Evidence Layer is designed to catch,
+ * so the duplicate stopped the whole generation run at final verification.
+ * Excluding `brand_footer` here means the model never sees it, so it has
+ * nothing to copy.
+ */
+export function buildExistingContentTextForRevision(asset: {
+  platform: ContentPlatform;
+  content: string;
+  structured_content: Record<string, unknown> | null;
+}): string {
+  const c = asset.structured_content;
+  if (asset.platform === "WECHAT_OFFICIAL_ACCOUNT" && c && "closing_note" in c) {
+    return [c.full_article, c.closing_note]
+      .filter((part): part is string => typeof part === "string" && part.length > 0)
+      .join("\n\n");
+  }
+  return asset.content;
+}
+
+/**
  * Merges a human edit (plain title + body) back into the structured
  * content shape, so the tab view stays consistent with what was edited.
  * Only the title/body fields change — sources and expert_review_notes
