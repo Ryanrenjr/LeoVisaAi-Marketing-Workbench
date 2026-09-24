@@ -4,9 +4,15 @@ import {
   buildTopicDiscoveryUserPrompt,
   filterCandidatesByValidLabels,
   poolDiscoveryResults,
+  hasSufficientAutoEvidence,
+  MIN_AUTO_UNIQUE_RESULTS,
+  MIN_AUTO_LANES_WITH_RESULTS,
   TOPIC_DISCOVERY_SYSTEM_PROMPT,
   TopicCandidateSchema,
   TopicDiscoveryResultSchema,
+  DirectedTopicDiscoveryResultSchema,
+  AutoTopicDiscoveryResultSchema,
+  AutoSparseTopicDiscoveryResultSchema,
 } from "./topic-discovery";
 import type { TopicCandidate } from "./topic-discovery";
 
@@ -72,6 +78,43 @@ describe("buildDiscoveryQueries", () => {
     expect(queries.some((q) => q.includes("fee") || q.includes("deadline") || q.includes("misconception") || q.includes("controversy"))).toBe(
       true,
     );
+  });
+
+  // Round 3D — TEST 6: the CURRENT POLICY lane still carries the current month/year.
+  it("auto-discovery: the current-policy lane (Lane 1) still carries the current month and year", () => {
+    const queries = buildDiscoveryQueries(new Date("2026-09-15"));
+    expect(queries[0]).toContain("September 2026");
+  });
+
+  // TEST 7 — the real-incident lane keeps a recent-intent date too.
+  it("auto-discovery: the real-incident lane (Lane 4) still carries a recent-intent date", () => {
+    const queries = buildDiscoveryQueries(new Date("2026-09-15"));
+    const incidentLane = queries.find((q) => q.toLowerCase().includes("incident"));
+    expect(incidentLane).toBeDefined();
+    expect(incidentLane).toContain("September 2026");
+  });
+
+  // TEST 5 — at least 2 of the 5 lanes are evergreen: no month/year date at all.
+  it("auto-discovery: at least 2 of the 5 lanes are evergreen — no month/year appended", () => {
+    const queries = buildDiscoveryQueries(new Date("2026-09-15"));
+    const withoutDate = queries.filter((q) => !q.includes("2026") && !q.includes("September"));
+    expect(withoutDate.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("auto-discovery: the evergreen lanes still cover practical-status and money/myth intents, not just dropped dates", () => {
+    const queries = buildDiscoveryQueries(new Date("2026-09-15"));
+    const evergreen = queries.filter((q) => !q.includes("2026") && !q.includes("September")).map((q) => q.toLowerCase());
+    expect(evergreen.some((q) => q.includes("ilr") || q.includes("evisa") || q.includes("citizenship") || q.includes("status"))).toBe(true);
+    expect(evergreen.some((q) => q.includes("fee") || q.includes("processing cost") || q.includes("myth") || q.includes("misconception"))).toBe(
+      true,
+    );
+  });
+
+  it("auto-discovery: changes month/year in the dated lanes when the date changes, proving it's not hard-coded", () => {
+    const septQueries = buildDiscoveryQueries(new Date("2026-09-15"));
+    const octQueries = buildDiscoveryQueries(new Date("2026-10-01"));
+    expect(septQueries[0]).not.toBe(octQueries[0]);
+    expect(octQueries[0]).toContain("October 2026");
   });
 
   // TEST 3 — directed search must not regress into the new 5-lane AUTO shape
@@ -155,6 +198,91 @@ describe("TopicDiscoveryResultSchema (unchanged)", () => {
   });
 });
 
+// Round 3D — AUTO and DIRECTED now use different structured-output
+// schemas, because the old shared max(6)-only schema never told the
+// model a floor existed: a real production run kept returning 2
+// candidates for AUTO, which was always schema-legal even though the
+// prompt said "aim for 5-6."
+describe("AUTO vs DIRECTED candidate-count schemas", () => {
+  function candidates(n: number) {
+    return Array.from({ length: n }, () => candidate({}));
+  }
+
+  // TEST 1
+  it("AUTO and DIRECTED are genuinely different schema objects with different bounds", () => {
+    expect(AutoTopicDiscoveryResultSchema).not.toBe(DirectedTopicDiscoveryResultSchema);
+    expect(AutoTopicDiscoveryResultSchema.safeParse({ candidates: candidates(3) }).success).toBe(false);
+    expect(DirectedTopicDiscoveryResultSchema.safeParse({ candidates: candidates(3) }).success).toBe(true);
+  });
+
+  // TEST 2 — normal AUTO (evidence sufficient): schema min 5, max 6
+  it("AutoTopicDiscoveryResultSchema requires a hard floor of 5 and a ceiling of 6", () => {
+    expect(AutoTopicDiscoveryResultSchema.safeParse({ candidates: candidates(4) }).success).toBe(false);
+    expect(AutoTopicDiscoveryResultSchema.safeParse({ candidates: candidates(5) }).success).toBe(true);
+    expect(AutoTopicDiscoveryResultSchema.safeParse({ candidates: candidates(6) }).success).toBe(true);
+    expect(AutoTopicDiscoveryResultSchema.safeParse({ candidates: candidates(7) }).success).toBe(false);
+    // 2 candidates — the exact real production failure — is no longer schema-legal for the normal AUTO path.
+    expect(AutoTopicDiscoveryResultSchema.safeParse({ candidates: candidates(2) }).success).toBe(false);
+  });
+
+  // TEST 3 — DIRECTED stays max 3, completely unaffected by AUTO's new floor
+  it("DirectedTopicDiscoveryResultSchema still allows 0-3 and rejects more than 3, regardless of AUTO's min(5)", () => {
+    expect(DirectedTopicDiscoveryResultSchema.safeParse({ candidates: candidates(0) }).success).toBe(true);
+    expect(DirectedTopicDiscoveryResultSchema.safeParse({ candidates: candidates(1) }).success).toBe(true);
+    expect(DirectedTopicDiscoveryResultSchema.safeParse({ candidates: candidates(3) }).success).toBe(true);
+    expect(DirectedTopicDiscoveryResultSchema.safeParse({ candidates: candidates(4) }).success).toBe(false);
+  });
+
+  // TEST 4 — the sparse fallback never forces fabrication
+  it("AutoSparseTopicDiscoveryResultSchema allows 0-6, never forcing a floor", () => {
+    expect(AutoSparseTopicDiscoveryResultSchema.safeParse({ candidates: candidates(0) }).success).toBe(true);
+    expect(AutoSparseTopicDiscoveryResultSchema.safeParse({ candidates: candidates(2) }).success).toBe(true);
+    expect(AutoSparseTopicDiscoveryResultSchema.safeParse({ candidates: candidates(6) }).success).toBe(true);
+    expect(AutoSparseTopicDiscoveryResultSchema.safeParse({ candidates: candidates(7) }).success).toBe(false);
+  });
+});
+
+// Round 3D — deterministic evidence-sufficiency check that decides
+// whether AUTO gets the hard 5-6 schema or the sparse 0-6 fallback.
+describe("hasSufficientAutoEvidence", () => {
+  it("is sufficient when pooled results >= 5 and >= 3 lanes have results", () => {
+    expect(MIN_AUTO_UNIQUE_RESULTS).toBe(5);
+    expect(MIN_AUTO_LANES_WITH_RESULTS).toBe(3);
+    expect(hasSufficientAutoEvidence(5, [2, 2, 1, 0, 0])).toBe(true);
+    expect(hasSufficientAutoEvidence(10, [4, 3, 2, 1, 0])).toBe(true);
+  });
+
+  it("is NOT sufficient when pooled results are below the floor, even with many lanes covered", () => {
+    expect(hasSufficientAutoEvidence(4, [1, 1, 1, 1, 0])).toBe(false);
+  });
+
+  it("is NOT sufficient when volume looks fine but it all came from too few lanes (e.g. one lane dominating)", () => {
+    // 6 total results, but only 2 lanes actually returned anything.
+    expect(hasSufficientAutoEvidence(6, [4, 2, 0, 0, 0])).toBe(false);
+  });
+
+  it("is NOT sufficient when there is barely any evidence at all", () => {
+    expect(hasSufficientAutoEvidence(0, [0, 0, 0, 0, 0])).toBe(false);
+    expect(hasSufficientAutoEvidence(2, [1, 1, 0, 0, 0])).toBe(false);
+  });
+});
+
+describe("buildTopicDiscoveryUserPrompt: sparse-evidence note", () => {
+  it("includes the honesty note only when options.sparse is true", () => {
+    const sparse = buildTopicDiscoveryUserPrompt("[N1] x", undefined, { sparse: true });
+    const normal = buildTopicDiscoveryUserPrompt("[N1] x", undefined, { sparse: false });
+    const defaulted = buildTopicDiscoveryUserPrompt("[N1] x");
+    expect(sparse).toContain("不要为了凑数编造");
+    expect(normal).not.toContain("不要为了凑数编造");
+    expect(defaulted).not.toContain("不要为了凑数编造");
+  });
+
+  it("never adds the sparse note to a directed search, even if sparse were mistakenly passed", () => {
+    const prompt = buildTopicDiscoveryUserPrompt("[N1] x", REAL_FAILURE_KEYWORD, { sparse: true });
+    expect(prompt).not.toContain("不要为了凑数编造");
+  });
+});
+
 describe("buildTopicDiscoveryUserPrompt", () => {
   // TEST 2
   it("directed search: the final prompt surfaces the user's original keyword", () => {
@@ -185,16 +313,21 @@ describe("TOPIC_DISCOVERY_SYSTEM_PROMPT", () => {
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain('do not fall back to suggesting "other immigration topics"');
   });
 
-  // Round 3C — TEST 6: quantity instruction upgraded from "usually 2-4" to "aim 5-6"
-  it("auto-discovery rules: aims for 5-6 candidates, not the old 'usually 2-4'", () => {
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Target 5–6 strong candidates when the evidence genuinely supports them");
+  // Round 3D — quantity is now a real schema constraint (see the
+  // AutoTopicDiscoveryResultSchema tests below), not prompt-wording alone;
+  // this just confirms the prompt frames 5-6 as the normal case.
+  it("auto-discovery rules: frames 5-6 as the normal case, not the old 'usually 2-4' / 'aim for' wording", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain(
+      "The platform requires 5–6 candidates whenever the evidence is reasonably sufficient — this is the normal case, not an aspiration",
+    );
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).not.toContain("Usually 2–4 candidates");
   });
 
-  // TEST 7 — no forced padding, even with the higher target
-  it("auto-discovery rules: explicitly forbids padding with weak topics just to reach the target", () => {
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("but never pad");
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("If only 4 clear the bar, give 4; if only 2–3, give 2–3; 0 remains legal");
+  // TEST 4 (prompt-side) — sparse fallback is explicitly conditional on the signal from the user prompt, not a default excuse.
+  it("auto-discovery rules: only allows fewer than 5 when the sparse-evidence signal is present, never as a default", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Sparse-evidence exception");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("if the user message tells you evidence is sparse this run");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Never fabricate a topic or lower the evidence bar just to force a count");
   });
 
   // TEST 9 — editorial slate framing, not a policy-news list
@@ -202,11 +335,13 @@ describe("TOPIC_DISCOVERY_SYSTEM_PROMPT", () => {
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Auto-discovery: build a daily editorial slate, not a policy bulletin");
   });
 
-  // TEST 10 — house style: news is the hook, rules are the value, land on "who does this affect / what now"
-  it("auto-discovery rules: states news is the hook not the topic, and requires landing on reader relevance/action", () => {
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("News is the hook, not the topic");
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Who specifically is affected?");
-    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("What can the reader do after reading?");
+  // TEST 10 — the daily-slate baseline: WHO / QUESTION / STAKE-OR-ACTION / EVIDENCE
+  it("auto-discovery rules: WHO + QUESTION + STAKE-OR-ACTION + EVIDENCE form the baseline gate, framed as 'worthy of editorial consideration'", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain('The auto-discovery bar is "worthy of editorial consideration," not "already approved for publication."');
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("**WHO**");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("**QUESTION**");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("**STAKE OR ACTION**");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("**EVIDENCE**");
   });
 
   // Editorial-boundary clarification: a real incident is only a valid
@@ -237,9 +372,34 @@ describe("TOPIC_DISCOVERY_SYSTEM_PROMPT", () => {
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("never invent a client story, an airport incident, a refusal case");
   });
 
+  // TEST 12 (priority) — LOW defaults to elimination
   it("auto-discovery rules: priority is an editorial judgment call, not just policy formality — weak LOW candidates should be dropped, not kept to pad", () => {
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("Priority is an editorial call, not a policy-magnitude score");
     expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("should usually be dropped entirely rather than kept to pad the slate");
+  });
+
+  // TEST 11 — MEDIUM explicitly welcome in the daily slate, not just tolerated
+  it("auto-discovery rules: MEDIUM priority is explicitly welcome in a healthy daily slate, not merely allowed", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("A healthy 5–6 slate is not all HIGH");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("MEDIUM is a real, welcome part of the slate");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("2–3 HIGH plus 2–3 MEDIUM");
+  });
+
+  // TEST 9 — counter-intuitive tension downgraded from hard gate to bonus
+  it("auto-discovery rules: counter-intuitive tension is a bonus, not a hard requirement for every candidate", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain(
+      "A counter-intuitive gap or tension (e.g. a large fee vs. a small stated processing cost) is a strong BONUS whenever it's genuinely there — it is NOT a hard requirement",
+    );
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("do not reject a solid practical candidate just because it lacks tension");
+    // The old numbered "must clear this bar" list no longer forces it as item 3.
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).not.toContain("3. Is there a counter-intuitive gap or tension?");
+  });
+
+  // Same-source multi-angle allowance, with the exact real-world example the product owner gave
+  it("auto-discovery rules: allows up to 2 genuinely different angles from one strong source, using the student-visa-funds example", () => {
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("One strong source can honestly yield up to 2 different candidates");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("生活费要求涨到多少");
+    expect(TOPIC_DISCOVERY_SYSTEM_PROMPT).toContain("11月30日前后递签，到底按哪个标准");
   });
 
   it("still silently rejects bare news restatements before proposing anything (unchanged from Round 3A)", () => {

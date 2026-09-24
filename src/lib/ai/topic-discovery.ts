@@ -33,10 +33,59 @@ export const TopicCandidateSchema = z.object({
 });
 export type TopicCandidate = z.infer<typeof TopicCandidateSchema>;
 
-export const TopicDiscoveryResultSchema = z.object({
-  candidates: z.array(TopicCandidateSchema).max(6),
+/**
+ * Round 3D — AUTO and DIRECTED now use different structured-output
+ * schemas, because a real production run showed AUTO-discovery
+ * (5-lane search confirmed working) still returning only 2 candidates:
+ * the "aim for 5–6" instruction was prompt-only, and `max(6)` alone never
+ * told the model a *floor* existed — 2 was always schema-legal. The
+ * count is now a real structured-output constraint, not a suggestion.
+ *
+ * - Directed search stays exactly as Round 3A/3B specified: 0–3, never
+ *   forced, relevance over quantity.
+ * - Auto-discovery, when the deterministic evidence-sufficiency check
+ *   below finds enough real search results, is REQUIRED to return 5–6 —
+ *   the model can no longer stop early just because a couple of
+ *   "acceptable" topics already exist.
+ * - Auto-discovery, when evidence is genuinely sparse, falls back to a
+ *   0–6 schema (paired with an explicit "don't fabricate" note in the
+ *   user prompt) so a thin evidence day is never forced into a fake 5–6.
+ */
+export const DirectedTopicDiscoveryResultSchema = z.object({
+  candidates: z.array(TopicCandidateSchema).min(0).max(3),
 });
+
+export const AutoTopicDiscoveryResultSchema = z.object({
+  candidates: z.array(TopicCandidateSchema).min(5).max(6),
+});
+
+export const AutoSparseTopicDiscoveryResultSchema = z.object({
+  candidates: z.array(TopicCandidateSchema).min(0).max(6),
+});
+
+/** Backward-compatible alias for callers that only need "the discovery result shape" (e.g. type annotations) — real dispatch always picks one of the three schemas above based on mode + evidence sufficiency. All three infer to the same TypeScript shape. */
+export const TopicDiscoveryResultSchema = AutoSparseTopicDiscoveryResultSchema;
 export type TopicDiscoveryResult = z.infer<typeof TopicDiscoveryResultSchema>;
+
+/** Deliberately small and deterministic (Round 3D) — no AI scoring, just whether the pooled evidence pool is large and lane-diverse enough to plausibly support a real 5–6 candidate slate. */
+export const MIN_AUTO_UNIQUE_RESULTS = 5;
+export const MIN_AUTO_LANES_WITH_RESULTS = 3;
+
+/**
+ * Decides whether AUTO-discovery should be held to the hard 5–6 schema
+ * or fall back to the sparse 0–6 one. `pooledResultCount` is the
+ * de-duplicated result count across all lanes (see poolDiscoveryResults);
+ * `perLaneResultCounts` is each lane's own raw result count (pre-dedupe)
+ * so a search that returned results but only from 1–2 lanes doesn't
+ * still get forced into 5–6 just because raw volume looks fine.
+ */
+export function hasSufficientAutoEvidence(
+  pooledResultCount: number,
+  perLaneResultCounts: readonly number[],
+): boolean {
+  const lanesWithResults = perLaneResultCounts.filter((count) => count > 0).length;
+  return pooledResultCount >= MIN_AUTO_UNIQUE_RESULTS && lanesWithResults >= MIN_AUTO_LANES_WITH_RESULTS;
+}
 
 /**
  * Fixed, deterministic — not LLM-generated — mirrors research-queries.ts
@@ -65,9 +114,23 @@ export type TopicDiscoveryResult = z.infer<typeof TopicDiscoveryResultSchema>;
  * evidence pool itself can support a genuinely varied daily slate, not
  * just narrower Home Office document search. Still fully deterministic —
  * no AI query planner for AUTO mode.
+ *
+ * Round 3D fix: even with 5 distinct lanes, mechanically appending the
+ * current month/year to every one of them still locked the whole system
+ * onto "what happened this month" — but "今日选题" (what's worth making
+ * today) is not the same question as "what news broke today." Evergreen
+ * practical-status and fee/myth questions (ILR lapse, eVisa mistakes,
+ * processing-cost vs. fee gaps, absence rules) are exactly the kind of
+ * durable content this account needs daily and don't require a fresh
+ * news hook to be worth making. So only the genuinely time-sensitive
+ * lanes (current policy, recent route changes, real incidents) carry a
+ * date; the two evergreen lanes (practical status, money/myth) search
+ * without one — still real search → real evidence, never invented from
+ * the model's own memory.
  */
 export function buildDiscoveryQueries(now: Date = new Date(), keyword?: string): string[] {
   const monthYear = now.toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  const year = now.getFullYear().toString();
   const trimmedKeyword = keyword?.trim();
 
   if (trimmedKeyword) {
@@ -81,16 +144,16 @@ export function buildDiscoveryQueries(now: Date = new Date(), keyword?: string):
   }
 
   return [
-    // Lane 1 — policy / Home Office changes
+    // Lane 1 — CURRENT POLICY (time-boxed to this month: policy/Home Office announcements)
     `UK immigration Home Office visa policy changes ${monthYear}`,
-    // Lane 2 — status / practical identity problems (ILR, eVisa, citizenship, returning resident, proving status)
-    `UK eVisa ILR citizenship settled status immigration status practical issues news ${monthYear}`,
-    // Lane 3 — major visa-route practical changes (Student, Skilled Worker, Family, Graduate, Sponsor Licence)
-    `UK Student Skilled Worker family Graduate sponsor visa route changes ${monthYear}`,
-    // Lane 4 — real incidents / border / travel (airline, airport, Border Force, tribunal, system failure)
+    // Lane 2 — PRACTICAL STATUS / EVERGREEN (no date: recurring identity problems — ILR, eVisa, citizenship, returning resident, proving status)
+    `UK eVisa ILR citizenship settled status returning resident proof of immigration status practical issues`,
+    // Lane 3 — MAJOR ROUTES / CURRENT (this year: Student, Skilled Worker, Family, Graduate, Sponsor Licence changes)
+    `UK Student Skilled Worker family Graduate sponsor visa route changes ${year}`,
+    // Lane 4 — REAL INCIDENT / RECENT (time-boxed to this month: airline, airport, Border Force, tribunal, system failure)
     `UK immigration eVisa border airline airport incident news ${monthYear}`,
-    // Lane 5 — money / deadline / misconception / controversy (fees, deadlines, unexpected rule consequences)
-    `UK visa immigration fees deadlines rule controversy misconception ${monthYear}`,
+    // Lane 5 — MONEY / MYTH / EVERGREEN (no date: fees, processing cost, absence rules, deadlines, common misconceptions)
+    `UK visa immigration fees ILR processing cost absence rules deadlines common myths misconceptions`,
   ];
 }
 
@@ -194,9 +257,10 @@ A news fact ("英国永居申请费为£3,226") is not a content angle. A weak c
 
 1. Who specifically cares? A concrete group (e.g. "未来半年准备申请ILR的人") — not a vague label like "英国华人".
 2. Why do they need to see this now? At least one of: 时间节点 / 金钱成本 / 身份后果 / 申请风险 / 政策变化 / 常见误解 / 明显选择题.
-3. Is there a counter-intuitive gap or tension? (e.g. a large fee vs. a small stated processing cost is a natural one.)
-4. What does the reader walk away with? At least one of: 知道该什么时候申请 / 知道自己是否受影响 / 避免一个误区 / 看懂一条制度逻辑 / 知道下一步怎么判断.
-5. If it's just the news headline translated into Chinese with a question mark added — reject it.
+3. What does the reader walk away with? At least one of: 知道该什么时候申请 / 知道自己是否受影响 / 避免一个误区 / 看懂一条制度逻辑 / 知道下一步怎么判断.
+4. If it's just the news headline translated into Chinese with a question mark added — reject it.
+
+A counter-intuitive gap or tension (e.g. a large fee vs. a small stated processing cost) is a strong BONUS whenever it's genuinely there — it is NOT a hard requirement. A well-targeted deadline/eligibility/how-to/checklist candidate that clearly satisfies 1–3 above is a valid candidate even with no contrast or surprise; do not reject a solid practical candidate just because it lacks tension.
 
 ## Evidence boundary — the user's own search direction is NOT verified fact
 
@@ -233,26 +297,35 @@ Do not treat "at least 2 candidates" or "some variety" as a goal in itself. One 
 
 ## Auto-discovery: build a daily editorial slate, not a policy bulletin
 
-You're given results from 5 different editorial search radars this time (policy/Home Office changes, practical identity/status problems, major visa-route changes, real incidents/border/travel, and money/deadline/misconception) — not because you should report on all 5, but because a healthy daily slate should draw from more than one of them. If every candidate you're about to propose comes from the same one or two radars (e.g. all Student Visa fee news), you have not actually looked at the rest of the evidence.
+You're given results from 5 different editorial search radars this time — three time-boxed to recent news (current policy, recent visa-route changes, real incidents) and two evergreen (practical status problems, money/fee/myth questions that don't need a fresh news hook to be worth making). A healthy daily slate draws from more than one of them. If every candidate you're about to propose comes from the same one or two radars (e.g. all Student Visa fee news), you have not actually looked at the rest of the evidence.
 
-**News is the hook, not the topic.** For every candidate a real news item, case, or policy anchors, keep asking past the bare fact:
-1. Who specifically is affected? (a concrete group, not "英国移民申请人")
-2. What would they actually lose or risk? At least one of: 钱 / 时间 / 身份 / 资格 / 出入境 / 工作 / 家庭安排 / 申请机会.
-3. What's the most common misunderstanding here? The best candidates are often "大家以为A，真正决定结果的是B."
-4. Is there a real story entry point? If the search evidence itself contains an incident, case, dispute, system failure, or an affected group — that's often a stronger hook than a bare policy summary. Never invent one that isn't in the evidence (see "Never fabricate" below).
+**"今日选题" (today's topics) is NOT the same question as "今天发生了什么新闻" (what news broke today).** A durable, evergreen practical-status or myth/fee question found via search is just as valid a candidate as a fresh policy announcement — recency is not a quality requirement. Every candidate still requires real search evidence either way (see "Never fabricate" below) — evergreen means the topic itself doesn't need to be news, not that you can skip having a real source for it.
 
-   **Incident eligibility boundary**: a real-world incident is only eligible as a hook if it can be tied back to a genuine UK immigration / nationality / immigration-status / UK border / visa / eVisa / sponsor / settlement issue. Do not select a general UK news, travel, airline, airport, tourism, EU-border, crime, or social story merely because it happened to British residents or in/around the UK — the incident is the hook, but there must still be a real UK immigration/status rule or user consequence for Leo to explain.
-   - PASS: an eVisa mismatch causes boarding problems for a UK visa holder; an old passport / immigration-status proof creates a re-entry problem; an airline's handling of UK immigration permission creates a practical travel issue.
-   - FAIL unless a direct UK immigration-status angle is actually present: general EES queues affecting tourists travelling to Europe, ordinary flight delays, airport strikes, generic passport-control queues unrelated to UK immigration status.
-5. What can the reader do after reading? At least one of: 知道自己是否受影响 / 知道该检查什么 / 知道哪个时间节点重要 / 知道哪个误区不能踩 / 知道下一步怎么判断.
+**The auto-discovery bar is "worthy of editorial consideration," not "already approved for publication."** These candidates go to a human who clicks ✓ or ✗ on each one afterward — you are building them a menu to choose from, not making the final call yourself. A candidate clears the baseline when it has all four of:
+1. **WHO** — a concrete group who specifically cares (not "英国移民申请人").
+2. **QUESTION** — their actual question, not a bare topic label.
+3. **STAKE OR ACTION** — at least one of 钱 / 时间 / 身份 / 资格 / 风险, OR a clear action the reader can take after reading.
+4. **EVIDENCE** — a real search result actually supports this direction.
 
-**Target 5–6 strong candidates when the evidence genuinely supports them — but never pad.** If only 4 clear the bar, give 4; if only 2–3, give 2–3; 0 remains legal. The old instinct of stopping at 2–3 the moment a few acceptable topics exist is exactly what makes this feel like a thin policy-news list instead of a real daily slate — keep evaluating the rest of the evidence before you decide you're done.
+Counter-intuitive tension, a real story/incident hook, controversy, or a surprising fact are all strong BONUSES that make a candidate more compelling — none of them is required. Don't reject a solid, specific deadline/eligibility/how-to/checklist candidate just because it has no contrast or drama.
+
+**News is still a hook worth using when it's there.** For any candidate anchored by a real incident, case, or dispute in the evidence:
+
+**Incident eligibility boundary**: a real-world incident is only eligible as a hook if it can be tied back to a genuine UK immigration / nationality / immigration-status / UK border / visa / eVisa / sponsor / settlement issue. Do not select a general UK news, travel, airline, airport, tourism, EU-border, crime, or social story merely because it happened to British residents or in/around the UK — the incident is the hook, but there must still be a real UK immigration/status rule or user consequence for Leo to explain.
+- PASS: an eVisa mismatch causes boarding problems for a UK visa holder; an old passport / immigration-status proof creates a re-entry problem; an airline's handling of UK immigration permission creates a practical travel issue.
+- FAIL unless a direct UK immigration-status angle is actually present: general EES queues affecting tourists travelling to Europe, ordinary flight delays, airport strikes, generic passport-control queues unrelated to UK immigration status.
+
+**The platform requires 5–6 candidates whenever the evidence is reasonably sufficient — this is the normal case, not an aspiration.** Whenever you're given enough real search results across enough of the 5 lanes (the normal case), find 5–6 real candidates that each clear the WHO/QUESTION/STAKE-OR-ACTION/EVIDENCE baseline above. Do not stop at 2–3 the moment a couple of "perfect" topics exist — keep working the rest of the evidence; a candidate worth showing an editor for a ✓/✗ decision does not need to be a guaranteed must-publish HIGH topic. **Sparse-evidence exception**: if the user message tells you evidence is sparse this run, it is legitimate — even expected — to return fewer than 5, or 0. Never fabricate a topic or lower the evidence bar just to force a count in that case.
+
+**A healthy 5–6 slate is not all HIGH.** A normal day looks more like 2–3 HIGH plus 2–3 MEDIUM than six HIGH topics. MEDIUM is a real, welcome part of the slate — a candidate with a narrower audience, no urgency, but genuine practical value or evergreen content-bank value belongs at MEDIUM, not excluded. Only skip a candidate that would score LOW; don't keep it just to reach the count. When evidence supports it, a useful structure is roughly: 1–2 current-policy candidates, 1 practical status/identity candidate, 1 misconception/counter-intuitive candidate, 1 money/deadline/decision candidate, and optionally one real-incident or one employer/Sponsor-Licence candidate — this is editorial guidance, not a field-by-field quota to force.
+
+**One strong source can honestly yield up to 2 different candidates — but only if the audience or the actual question genuinely differs.** E.g. the same Student Visa funds rule change can support both "生活费要求涨到多少" (the number/eligibility question) and "11月30日前后递签，到底按哪个标准" (the timing/decision question) as two real, different candidates — that's fine. It is NOT fine to reword the same angle three times ("涨了吗" / "涨多少" / "会不会涨") and call it 3 candidates — see "Editorial mix" below.
 
 **Editorial mix, not random diversity.** Don't let the final slate be dominated by one underlying news event or one visa route — usually cap candidates drawn from the exact same underlying event or the same visa route at 2, unless that day's evidence genuinely contains an unusually major event worth more angles. This is an editorial judgment call, not something to force by mechanically counting categories, and it never means picking a weaker candidate just to tick a diversity box.
 
 **Never fabricate a story for effect.** A real event/case/incident hook must come directly from the given search results — never invent a client story, an airport incident, a refusal case, a number, or a controversy that isn't actually in the evidence. If the evidence is only policy documents, find the angle through timing, fees, status consequences, or a genuine choice/decision point instead — don't manufacture a "story" that isn't there.
 
-**Priority is an editorial call, not a policy-magnitude score.** HIGH can come from strong time-sensitivity, wide impact, high money/status stakes, a strong counter-intuitive angle, a widespread misconception, a real incident with natural shareability, or a clear current action window — not just "this is a formal policy change." A candidate that only qualifies as LOW should usually be dropped entirely rather than kept to pad the slate, unless it has clear, specific long-term content value.
+**Priority is an editorial call, not a policy-magnitude score.** HIGH can come from strong time-sensitivity, wide impact, high money/status stakes, a strong counter-intuitive angle, a widespread misconception, a real incident with natural shareability, or a clear current action window — not just "this is a formal policy change." MEDIUM is for solid, specific, practical value without urgency — keep it, don't discard it. A candidate that only qualifies as LOW should usually be dropped entirely rather than kept to pad the slate, unless it has clear, specific long-term content value.
 
 For each candidate:
 - title: a short, specific WORKING title (Chinese) that already reflects the real content angle above — not a bare news restatement, and not a final polished cover/marketing title (that's C/D/F's job later).
@@ -276,15 +349,30 @@ Output only the structured candidates requested — no extra commentary outside 
  * Office处理成本为什么只有约£310？" could drift to whatever else showed up
  * in the search results. The keyword is now surfaced explicitly and
  * marked as the highest-priority direction, not as verified evidence.
+ *
+ * Round 3D: `options.sparse` (auto-discovery only) signals that
+ * hasSufficientAutoEvidence() found too little real evidence to plausibly
+ * support 5–6 real candidates this run — the caller pairs this with
+ * AutoSparseTopicDiscoveryResultSchema (0–6, not the hard 5–6 floor) and
+ * this note tells the model returning fewer, or 0, is the honest answer,
+ * not a failure to fix by inventing topics.
  */
-export function buildTopicDiscoveryUserPrompt(manifestText: string, keyword?: string): string {
+export function buildTopicDiscoveryUserPrompt(
+  manifestText: string,
+  keyword?: string,
+  options?: { sparse?: boolean },
+): string {
   const trimmedKeyword = keyword?.trim();
 
   if (trimmedKeyword) {
     return `=== 用户指定搜索方向（最高优先级）===\n${trimmedKeyword}\n\n这是用户想要搜索的方向本身，不是已经核实的事实——里面出现的任何具体数字/说法都只是待验证的线索，不能当作已确认结论直接写进候选题。\n\n=== 搜索结果 ===\n${manifestText}\n\n只能围绕上面这个方向找角度，不得因为搜索结果里出现了其他移民话题就偏移过去。`;
   }
 
-  return `=== 今日自动选题模式（近期新闻检索结果）===\n${manifestText}\n\n没有人指定具体方向，这是自动扫描到的近期新闻。请先在内部判断哪些真的值得占用一个发布名额，淘汰只是新闻复述、没有真实内容角度的结果，再从留下的里面给出候选。`;
+  const sparseNote = options?.sparse
+    ? "\n\n本次搜索雷达覆盖或去重后的证据数量有限，可能不足以支撑5–6个真正合格的候选。如果确实找不到足够多真正合格的方向，如实返回较少数量（甚至0个），不要为了凑数编造或降低标准。"
+    : "";
+
+  return `=== 今日自动选题模式（近期新闻检索结果）===\n${manifestText}\n\n没有人指定具体方向，这是自动扫描到的近期新闻。请先在内部判断哪些真的值得占用一个发布名额，淘汰只是新闻复述、没有真实内容角度的结果，再从留下的里面给出候选。${sparseNote}`;
 }
 
 /**
