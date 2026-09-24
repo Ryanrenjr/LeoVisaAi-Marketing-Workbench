@@ -358,10 +358,11 @@ export async function runRevisionStep(
  * and a retry after this step already ran once doesn't re-review assets
  * it already reviewed.
  *
- * Stop rule: this NEVER calls reviseContentAsset again — a still-flagged
- * result after revision means a human needs to look, not another automatic
- * revision pass (that's exactly how compliance → revision → compliance →
- * revision loops happen). The final MEDIUM/HIGH check re-reads
+ * A still-flagged result is revised and reviewed again automatically, up to
+ * two additional passes. The hard cap prevents an unbounded compliance →
+ * revision loop while allowing the normal case (one stubborn residual
+ * phrase) to complete without human intervention. The final MEDIUM/HIGH
+ * check re-reads
  * compliance_reviews directly (not via the existing fail-open
  * getComplianceReviews helper — this is the one thing standing between
  * "pipeline says success" and "genuinely unresolved compliance risk", so a
@@ -377,29 +378,45 @@ export async function runFinalVerificationStep(
   runId?: string,
 ): Promise<StepResult<{ skipped: boolean }>> {
   try {
-    const latestAssets = await latestGeneratedAssets(topicId, platforms);
-    const reviews = await getComplianceReviews(topicId);
-    const reviewedAssetIds = new Set(reviews.map((review) => review.content_asset_id));
-    const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
+    const maxAdditionalRevisionPasses = 2;
+    let didWork = false;
 
-    if (pendingAssets.length > 0) {
-      const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id, undefined, runId)));
-      const failures = settled
-        .map((result, i) => ({ asset: pendingAssets[i], result }))
-        .filter(({ result }) => result.status === "rejected" || !result.value.ok);
-      if (failures.length > 0) {
-        const detail = failures
-          .map(
-            ({ asset, result }) =>
-              `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "复核失败")}`,
-          )
-          .join("；");
-        return { ok: false, error: `终审复核未能完成，已停止：${detail}` };
-      }
-    }
+    for (let pass = 0; pass <= maxAdditionalRevisionPasses; pass++) {
+      const latestAssets = await latestGeneratedAssets(topicId, platforms);
+      if (latestAssets.length === 0) break;
 
-    if (latestAssets.length > 0) {
       const supabase = await createClient();
+      const { data: existingReviews, error: existingReviewsError } = await supabase
+        .from("compliance_reviews")
+        .select("content_asset_id, overall_risk")
+        .in(
+          "content_asset_id",
+          latestAssets.map((asset) => asset.id),
+        )
+        .order("created_at", { ascending: false });
+      if (existingReviewsError) {
+        return { ok: false, error: `终审复核结果读取失败，已停止：${existingReviewsError.message}` };
+      }
+
+      const reviewedAssetIds = new Set((existingReviews ?? []).map((review) => review.content_asset_id));
+      const pendingAssets = latestAssets.filter((asset) => !reviewedAssetIds.has(asset.id));
+      if (pendingAssets.length > 0) {
+        didWork = true;
+        const settled = await Promise.allSettled(pendingAssets.map((asset) => runComplianceReview(asset.id, undefined, runId)));
+        const failures = settled
+          .map((result, i) => ({ asset: pendingAssets[i], result }))
+          .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+        if (failures.length > 0) {
+          const detail = failures
+            .map(
+              ({ asset, result }) =>
+                `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "复核失败")}`,
+            )
+            .join("；");
+          return { ok: false, error: `终审复核未能完成，已停止：${detail}` };
+        }
+      }
+
       const { data: freshReviews, error: freshReviewsError } = await supabase
         .from("compliance_reviews")
         .select("content_asset_id, overall_risk")
@@ -408,7 +425,9 @@ export async function runFinalVerificationStep(
           latestAssets.map((asset) => asset.id),
         )
         .order("created_at", { ascending: false });
-      if (freshReviewsError) return { ok: false, error: `终审复核结果读取失败，已停止：${freshReviewsError.message}` };
+      if (freshReviewsError) {
+        return { ok: false, error: `终审复核结果读取失败，已停止：${freshReviewsError.message}` };
+      }
 
       const latestRiskByAssetId = new Map<string, string>();
       for (const review of freshReviews ?? []) {
@@ -421,15 +440,36 @@ export async function runFinalVerificationStep(
         const risk = latestRiskByAssetId.get(asset.id);
         return risk !== undefined && risk !== "LOW";
       });
-      if (stillFlagged.length > 0) {
+      if (stillFlagged.length === 0) {
+        revalidatePath(`/topics/${topicId}`);
+        revalidatePath("/team/compliance");
+        return { ok: true, skipped: !didWork };
+      }
+
+      if (pass === maxAdditionalRevisionPasses) {
         const detail = stillFlagged.map((asset) => CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform).join("、");
-        return { ok: false, error: `终审复核发现问题仍未解决（${detail}），需要人工检查，已停止自动流程。` };
+        return { ok: false, error: `终审复核经 ${maxAdditionalRevisionPasses + 1} 轮自动修订后仍有问题（${detail}），已停止以避免无限循环。` };
+      }
+
+      didWork = true;
+      const revisions = await Promise.allSettled(stillFlagged.map((asset) => reviseContentAsset(asset.id, undefined, runId)));
+      const revisionFailures = revisions
+        .map((result, i) => ({ asset: stillFlagged[i], result }))
+        .filter(({ result }) => result.status === "rejected" || !result.value.ok);
+      if (revisionFailures.length > 0) {
+        const detail = revisionFailures
+          .map(
+            ({ asset, result }) =>
+              `${CONTENT_PLATFORM_LABEL[asset.platform as ContentPlatform] ?? asset.platform}：${result.status === "rejected" ? String(result.reason) : (result.value.error ?? "修订失败")}`,
+          )
+          .join("；");
+        return { ok: false, error: `终审自动修订未能完成，已停止：${detail}` };
       }
     }
 
     revalidatePath(`/topics/${topicId}`);
     revalidatePath("/team/compliance");
-    return { ok: true, skipped: pendingAssets.length === 0 };
+    return { ok: true, skipped: !didWork };
   } catch (err) {
     return stepFailure(err, "终审复核未能完成。");
   }

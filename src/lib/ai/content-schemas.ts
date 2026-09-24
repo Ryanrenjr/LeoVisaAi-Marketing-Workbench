@@ -471,7 +471,14 @@ export type GenericContentTaskType = keyof typeof CONTENT_TASK_CONFIG;
 // revised draft like any other version before it's published.
 // ---------------------------------------------------------------------
 
-const REVISION_ADDENDUM = `You are now REVISING an existing draft, not writing a new one from scratch. A compliance reviewer already flagged specific issues in it (quoted exactly, below). Fix ONLY those flagged issues — keep wording, structure, tone, and length unchanged everywhere else unless a change is strictly necessary to fix a flagged issue. Do not introduce any new claim beyond what the original draft and the Research Pack already support. Output the complete revised piece in the same structured format as the original, not just the changed parts.`;
+const REVISION_ADDENDUM = `You are now REVISING an existing draft, not writing a new one from scratch. A compliance reviewer already flagged specific issues in it (quoted exactly, below). Fix EVERY flagged issue — keep wording, structure, tone, and length unchanged everywhere else unless a change is strictly necessary to fix a flagged issue.
+
+For each finding:
+- The quoted problematic wording must not survive verbatim or as a close paraphrase that preserves the same unsupported assertion.
+- For unsupported_claim or outdated_or_unverifiable, keep a factual statement only when the Approved Research Pack explicitly supports both the claim and any named source, document, date, or authority. Otherwise remove the unsupported detail or the entire sentence. Never replace it with a newly invented attribution.
+- For individualized_advice, rewrite it as neutral general information without instructions or eligibility conclusions addressed to the reader.
+
+Do not introduce any new claim beyond what the Research Pack supports. Before returning, silently check the complete result against every numbered finding and remove any residue. Output the complete revised piece in the same structured format as the original, not just the changed parts.`;
 
 export const VIDEO_REVISION_SYSTEM_PROMPT = `${VIDEO_SYSTEM_PROMPT}\n\n${REVISION_ADDENDUM}`;
 export const XHS_REVISION_SYSTEM_PROMPT = `${XHS_SYSTEM_PROMPT}\n\n${REVISION_ADDENDUM}`;
@@ -487,7 +494,7 @@ export function buildRevisionContextBlock(
     "=== 需要修改的现有草稿 ===",
     existingContentText,
     "",
-    "=== 合规审核员标出的问题（只修复下面这些，其余保持不变）===",
+    "=== 合规审核员标出的问题（必须逐条彻底消除，其余保持不变）===",
     ...findings.map((f, i) => `${i + 1}. [${f.issue_type}] 原文："${f.quote}"\n   问题：${f.explanation}`),
   ];
   return lines.join("\n");

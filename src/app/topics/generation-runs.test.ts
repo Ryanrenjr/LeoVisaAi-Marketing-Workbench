@@ -35,6 +35,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: fro
 function chainable(result: { data?: unknown; error?: unknown }) {
   const builder: Record<string, unknown> = {
     eq: () => builder,
+    in: () => builder,
     order: () => builder,
     limit: () => builder,
     select: () => builder,
@@ -54,7 +55,11 @@ import {
   completeGenerationRun,
   failGenerationRun,
   retryGenerationRun,
+  runFinalVerificationStep,
 } from "./pipeline-actions";
+import { getContentAssets } from "@/lib/topics";
+import { runComplianceReview } from "./compliance-actions";
+import { reviseContentAsset } from "./revision-actions";
 
 /**
  * Live audit finding (P0, round 2): these four functions used to write to
@@ -174,5 +179,40 @@ describe("generation_runs bookkeeping — fail closed on DB errors", () => {
       expect(run.status).toBe("running");
       expect(run.error).toBeNull();
     });
+  });
+});
+
+describe("final verification automatic remediation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("revises a still-flagged draft and reviews the new version again without human intervention", async () => {
+    const flaggedAsset = {
+      id: "wechat-v2",
+      topic_id: "topic-1",
+      platform: "WECHAT_OFFICIAL_ACCOUNT",
+      content_type: "wechat_article",
+      version: 2,
+      created_at: "2026-01-01T00:00:00Z",
+    };
+    const correctedAsset = { ...flaggedAsset, id: "wechat-v3", version: 3, created_at: "2026-01-01T00:01:00Z" };
+
+    vi.mocked(getContentAssets).mockResolvedValueOnce([flaggedAsset] as never).mockResolvedValueOnce([flaggedAsset, correctedAsset] as never);
+    vi.mocked(reviseContentAsset).mockResolvedValue({ ok: true });
+    vi.mocked(runComplianceReview).mockResolvedValue({ ok: true });
+
+    fromMock
+      .mockReturnValueOnce(chainable({ data: [{ content_asset_id: "wechat-v2", overall_risk: "HIGH" }], error: null }))
+      .mockReturnValueOnce(chainable({ data: [{ content_asset_id: "wechat-v2", overall_risk: "HIGH" }], error: null }))
+      .mockReturnValueOnce(chainable({ data: [], error: null }))
+      .mockReturnValueOnce(chainable({ data: [{ content_asset_id: "wechat-v3", overall_risk: "LOW" }], error: null }));
+
+    await expect(runFinalVerificationStep("topic-1", ["WECHAT_OFFICIAL_ACCOUNT"], "run-1")).resolves.toEqual({
+      ok: true,
+      skipped: false,
+    });
+    expect(reviseContentAsset).toHaveBeenCalledWith("wechat-v2", undefined, "run-1");
+    expect(runComplianceReview).toHaveBeenCalledWith("wechat-v3", undefined, "run-1");
   });
 });

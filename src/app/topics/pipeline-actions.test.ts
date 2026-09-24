@@ -10,11 +10,12 @@ let freshReviewsResult: { data: { content_asset_id: string; overall_risk: string
   data: [],
   error: null,
 };
+let freshReviewsQueue: typeof freshReviewsResult[] = [];
 function complianceReviewsChainable() {
   const builder: Record<string, unknown> = {
     select: () => builder,
     in: () => builder,
-    order: () => Promise.resolve(freshReviewsResult),
+    order: () => Promise.resolve(freshReviewsQueue.shift() ?? freshReviewsResult),
   };
   return builder;
 }
@@ -350,10 +351,11 @@ function assetWithId(id: string, platform: ContentAsset["platform"], contentType
  * pipeline — not silently continue — when the revised version is still
  * flagged.
  */
-describe("runFinalVerificationStep — reviews only newly revised assets, never auto-revises", () => {
+describe("runFinalVerificationStep — bounded automatic remediation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     freshReviewsResult = { data: [], error: null };
+    freshReviewsQueue = [];
   });
 
   it("continues without throwing when the revised version's review comes back LOW", async () => {
@@ -361,7 +363,10 @@ describe("runFinalVerificationStep — reviews only newly revised assets, never 
     getContentAssetsMock.mockResolvedValue([revised]);
     getComplianceReviewsMock.mockResolvedValue([]); // the new version has no review yet — pending
     runComplianceReviewMock.mockResolvedValue({ ok: true });
-    freshReviewsResult = { data: [{ content_asset_id: "xhs-v2", overall_risk: "LOW" }], error: null };
+    freshReviewsQueue = [
+      { data: [], error: null },
+      { data: [{ content_asset_id: "xhs-v2", overall_risk: "LOW" }], error: null },
+    ];
 
     const result = await runFinalVerificationStep("topic-1", ["XIAOHONGSHU"]);
 
@@ -371,17 +376,23 @@ describe("runFinalVerificationStep — reviews only newly revised assets, never 
     expect(reviseContentAssetMock).not.toHaveBeenCalled();
   });
 
-  it("stops the pipeline (reports failure) instead of continuing when the revised version is still MEDIUM/HIGH, and never auto-revises again", async () => {
+  it("automatically revises and rechecks when the first revised version is still HIGH", async () => {
     const revised = assetWithId("xhs-v2", "XIAOHONGSHU", "xiaohongshu_post", 2);
-    getContentAssetsMock.mockResolvedValue([revised]);
-    getComplianceReviewsMock.mockResolvedValue([]);
+    const corrected = assetWithId("xhs-v3", "XIAOHONGSHU", "xiaohongshu_post", 3);
+    getContentAssetsMock.mockResolvedValueOnce([revised]).mockResolvedValueOnce([revised, corrected]);
     runComplianceReviewMock.mockResolvedValue({ ok: true });
-    freshReviewsResult = { data: [{ content_asset_id: "xhs-v2", overall_risk: "HIGH" }], error: null };
+    reviseContentAssetMock.mockResolvedValue({ ok: true });
+    freshReviewsQueue = [
+      { data: [], error: null },
+      { data: [{ content_asset_id: "xhs-v2", overall_risk: "HIGH" }], error: null },
+      { data: [], error: null },
+      { data: [{ content_asset_id: "xhs-v3", overall_risk: "LOW" }], error: null },
+    ];
 
     const result = await runFinalVerificationStep("topic-1", ["XIAOHONGSHU"]);
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.error).toMatch(/终审复核发现问题仍未解决/);
-    expect(reviseContentAssetMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: true, skipped: false });
+    expect(reviseContentAssetMock).toHaveBeenCalledWith("xhs-v2", undefined, undefined);
+    expect(runComplianceReviewMock).toHaveBeenCalledWith("xhs-v3", undefined, undefined);
   });
 
   it("does nothing (no AI call) when revision never ran — the original asset already has its LOW review", async () => {
