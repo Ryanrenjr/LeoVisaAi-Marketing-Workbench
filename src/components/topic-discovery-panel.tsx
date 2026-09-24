@@ -125,7 +125,7 @@ export function TopicDiscoveryPanel({
     setCandidates(result.candidates);
   }
 
-  const buttonLabel = keyword.trim() ? `搜索「${keyword.trim()}」相关选题` : "一键搜选题";
+  const buttonLabel = keyword.trim() ? "搜索相关选题" : "一键搜选题";
 
   return (
     <section className="flex flex-col gap-3">
