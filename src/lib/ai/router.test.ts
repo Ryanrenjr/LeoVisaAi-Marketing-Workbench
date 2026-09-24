@@ -968,6 +968,7 @@ describe("runResearchOptimizationTask", () => {
     await runResearchOptimizationTask(TOPIC, PREVIOUS_PACK);
 
     expect(generateGoogleStructuredMock).toHaveBeenCalledTimes(2);
+    expect(generateGoogleStructuredMock.mock.calls[1][0]).toMatchObject({ maxTokens: 8000 });
   });
 
   it("never shows the audit call the previous round's score_total, score_breakdown, or reasons", async () => {

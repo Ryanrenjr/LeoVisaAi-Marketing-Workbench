@@ -538,7 +538,11 @@ export async function runResearchOptimizationTask(
     systemPrompt: buildSkillPrompt("researcher", RESEARCH_AUDIT_SYSTEM_PROMPT),
     userMessage: auditUserMessage,
     schema: ResearchAuditClaimSchema,
-    maxTokens: 2000,
+    // Claude's structured-output reasoning shares this budget with the
+    // final JSON. 2,000 repeatedly ended with stop_reason=max_tokens before
+    // the six score objects were emitted, discarding otherwise successful
+    // optimization content. Keep parity with the content pass.
+    maxTokens: 8000,
   });
 
   const auditUsage: ResearchAuditUsage = {
