@@ -71,6 +71,8 @@ describe("buildCoverImagePrompt", () => {
     expect(portrait).toContain("竖版构图");
     const landscape = buildCoverImagePrompt(TOPIC, { title: "t", text: "x" }, "公众号", false, [], undefined, "landscape");
     expect(landscape).toContain("横版通栏构图");
+    expect(landscape).toContain("1922×818");
+    expect(landscape).toContain("中央约 60% 的安全区");
   });
 });
 

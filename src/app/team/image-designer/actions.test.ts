@@ -15,6 +15,10 @@ vi.mock("@/lib/ai/image-generation", () => ({
 vi.mock("@/lib/ai/providers/registry", () => ({ getModel: () => ({ pricingType: "FREE" }) }));
 vi.mock("@/lib/ai/providers/types", () => ({ TASK_TYPE_EMPLOYEE: { IMAGE_GENERATION: "image-designer" } }));
 vi.mock("@/lib/ai/usage-log", () => ({ writeUsageLog: vi.fn().mockResolvedValue({ usageLogFailed: false }) }));
+const resizeGeneratedImageBase64Mock = vi.fn().mockResolvedValue("resized-base64");
+vi.mock("@/lib/image-processing", () => ({
+  resizeGeneratedImageBase64: (...args: unknown[]) => resizeGeneratedImageBase64Mock(...args),
+}));
 
 /** Chainable + thenable Supabase query-builder stub for the content_images idempotency checks (hasExistingImage / carousel's existingImages query). Each `.from("content_images")` call consumes the next queued result. */
 const contentImagesResults: { data?: unknown; error?: unknown }[] = [];
@@ -231,6 +235,22 @@ describe("cover idempotency checks fail closed on a DB error, instead of assumin
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/检查封面是否已生成失败/);
     expect(runImageGenerationTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("generateWechatCover: saves an exact 1922 x 818 processed image", async () => {
+    getContentAssetsMock.mockResolvedValue([wechatArticleAsset()]);
+    runImageGenerationTaskMock.mockResolvedValue(resolvedResult());
+    saveGeneratedContentImageMock.mockResolvedValue({ ok: true });
+
+    const result = await generateWechatCover("topic-1");
+
+    expect(result).toEqual({ ok: true });
+    expect(runImageGenerationTaskMock).toHaveBeenCalledWith(expect.any(String), undefined, undefined, "1536x1024");
+    expect(resizeGeneratedImageBase64Mock).toHaveBeenCalledWith("base64", { width: 1922, height: 818 });
+    expect(saveGeneratedContentImageMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ imageBase64: "resized-base64" }),
+    );
   });
 });
 

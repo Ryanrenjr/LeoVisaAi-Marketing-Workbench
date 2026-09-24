@@ -16,6 +16,7 @@ import { writeUsageLog } from "@/lib/ai/usage-log";
 import { getEmployeeInstruction } from "@/lib/employee-instructions";
 import { appendCustomInstructions } from "@/lib/ai/prompt-addendum";
 import { saveGeneratedContentImage } from "@/lib/content-images";
+import { resizeGeneratedImageBase64, type ImageDimensions } from "@/lib/image-processing";
 import { claimGenerationRunTask, completeGenerationRunTask, failGenerationRunTask } from "@/lib/generation-run-tasks";
 import type { ModelRef } from "@/lib/ai/providers/types";
 import type { ContentAsset } from "@/lib/types";
@@ -97,7 +98,10 @@ export async function generateWechatCover(
   }
 
   return withTaskClaim(runId, "image:wechat_cover", () =>
-    runCoverGeneration(topic, source, "公众号", user.id, override, false, "1536x1024", "landscape"),
+    runCoverGeneration(topic, source, "公众号", user.id, override, false, "1536x1024", "landscape", {
+      width: 1922,
+      height: 818,
+    }),
   );
 }
 
@@ -169,6 +173,7 @@ async function runCoverGeneration(
   includePortrait = false,
   size: "1024x1024" | "1024x1536" | "1536x1024" = "1024x1536",
   orientation: "portrait" | "landscape" = "portrait",
+  outputDimensions?: ImageDimensions,
 ): Promise<{ ok: boolean; error?: string }> {
   const supabase = await createClient();
 
@@ -226,7 +231,15 @@ async function runCoverGeneration(
 
   if (!result.ok || !result.data) return { ok: false, error: result.error ?? "生成失败。" };
 
-  const [imageBase64] = result.data.images;
+  let [imageBase64] = result.data.images;
+  if (outputDimensions) {
+    try {
+      imageBase64 = await resizeGeneratedImageBase64(imageBase64, outputDimensions);
+    } catch (error) {
+      console.error("[image-generation] resize failed:", error);
+      return { ok: false, error: "图片已生成，但转换发布尺寸失败，请重试。" };
+    }
+  }
   const saved = await saveGeneratedContentImage(supabase, {
     topicId: topic.id,
     contentAssetId: source.id,
