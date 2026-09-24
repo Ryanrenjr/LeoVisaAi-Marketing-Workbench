@@ -451,9 +451,20 @@ const SELECTABLE_PLATFORMS: ContentPlatform[] = ["VIDEO_CHANNEL", "XIAOHONGSHU",
  * (nothing survives next to it — see CLAUDE.md rule 4), there's nothing
  * ambiguous about "which topic is generating."
  */
-export async function approveAndGoHome(topicId: string, researchPackId: string, formData: FormData) {
+export interface ApproveAndGenerateState {
+  error: string | null;
+}
+
+export async function approveAndGoHome(
+  topicId: string,
+  researchPackId: string,
+  _previousState: ApproveAndGenerateState,
+  formData: FormData,
+): Promise<ApproveAndGenerateState> {
   const approved = await approveResearchOnly(topicId, researchPackId);
-  if (!approved) return;
+  if (!approved) {
+    return { error: "研究审批未能完成，请刷新页面后重试。" };
+  }
 
   const choice = String(formData.get("platforms") ?? "ALL");
   const platformSuffix =

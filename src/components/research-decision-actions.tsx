@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { researchDecisionTier } from "@/lib/ai/research-pack";
 import { discardTopic } from "@/app/topics/actions";
-import { approveAndGoHome } from "@/app/topics/pipeline-actions";
 import { PendingSubmitButton } from "./pending-submit-button";
-import { PlatformChoiceRadios } from "./platform-choice-radios";
 import { Button } from "./ui/button";
 import { OptimizeResearchButton, AcceptSuggestedTopicRevisionButton } from "./optimize-research-buttons";
+import { ApproveResearchForm } from "./approve-research-form";
 import type { SuggestedTopicRevision } from "@/lib/types";
 
 /**
@@ -117,10 +116,7 @@ export function ResearchDecisionActions({
                 淘汰
               </PendingSubmitButton>
             </form>
-            <form action={approveAndGoHome.bind(null, topicId, researchPackId)} className="flex flex-[2] flex-col gap-2">
-              <PlatformChoiceRadios />
-              <PendingSubmitButton className="w-full">通过，开始生成</PendingSubmitButton>
-            </form>
+            <ApproveResearchForm topicId={topicId} researchPackId={researchPackId} />
           </div>
         )}
         {canOptimize && <OptimizeResearchButton topicId={topicId} label="继续优化研究" variant="secondary" />}
