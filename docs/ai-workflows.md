@@ -28,8 +28,74 @@ splitting it across `docs/architecture.md` and `docs/phase-3/4-plan.md`.
    "AI architecture") — logged to `ai_usage_log` (and, when the external
    Search path ran, `search_usage_log` too), and saved to `research_packs`
    / `research_sources`. The topic moves to `RESEARCH_READY`.
-5. An EXPERT reviews the pack and either 批准研究 (→ `RESEARCH_APPROVED`,
-   unlocking Content generation) or 请求修改 (→ back to `RESEARCHING`).
+5. The research review page (`/topics/[id]/research/review`, also embedded
+   in the Topic Detail page's 研究包 tab) shows the pack's six-dimension
+   score and a deterministic "研究诊断" (which dimensions are actually
+   dragging the score down, straight from `score_breakdown.reason` — never
+   a second AI call just to restate it). What the operator can do next
+   depends on the score, mirroring B's own Skill thresholds exactly (see
+   "11. 总分对应结果" in `docs/digital-employee-skills.md`):
+   - **90-100**: "通过，开始生成" is the primary action → `RESEARCH_APPROVED`,
+     unlocking Content generation.
+   - **80-89**: same "通过，开始生成" is available, with a caution that
+     limiting language must survive into the content.
+   - **70-79 / below 70**: "通过，开始生成" is not offered as a normal
+     action at all — the primary actions are "优化研究" (see below) and
+     "修改选题" (a plain link to editing the topic by hand).
+   This boundary is enforced server-side, not just by hiding the button:
+   `approveResearchOnly()` (`research-actions.ts`) and the `approve_research`
+   Postgres function it calls (`supabase/migrations/0036_research_optimization_and_score_gate.sql`)
+   both refuse to approve a pack scoring below 80 — a direct RPC call
+   bypassing the UI hits the same wall.
+
+## Research 优化 — B's second-stage mode
+
+"优化研究" (`optimizeResearch`, `research-actions.ts`) is not a second
+research system — it's B taking another, more targeted look at the SAME
+topic, aimed specifically at whatever the six-dimension score exposed
+last time, instead of repeating the same cold-start search:
+
+1. `buildOptimizationSearchQueries()` (`research-queries.ts`) looks at
+   which dimensions scored below 80% of their max and generates up to 6
+   targeted queries — `official_sources` low → domain-restricted GOV.UK/
+   Home Office queries; `policy_timeline` low → implementation-date/
+   transitional-arrangement queries; `scope_exceptions` low → existing-
+   holder/exception queries. A dimension that's already healthy spends no
+   query budget. `fact_accuracy` / `data_reliability` / `external_safety`
+   never get a query template — a search can't fix how the existing
+   evidence is reasoned about or written up.
+2. `runResearchOptimizationTask()` (`router.ts`) runs those queries through
+   the same Search Router → lane-aware official-extraction pipeline as a
+   normal research run, then dispatches to the Model Router with
+   `RESEARCH_OPTIMIZATION_SYSTEM_PROMPT` (`research-optimization.ts`) —
+   the previous pack's full summary/findings/warnings/confidence/per-
+   dimension score+reason, plus the new evidence. The model works through
+   each low-scoring dimension and must land on one of three honest
+   outcomes, never simply a higher number:
+   - the new evidence genuinely closes the gap → the score should
+     honestly reflect that;
+   - the new evidence doesn't close it, and on reflection the topic's own
+     title/question claims more than any evidence supports → the model
+     sets `topic_revision_suggestion` (a proposed title/question + a
+     one-sentence reason), never rewriting the topic itself;
+   - the government/Home Office genuinely hasn't published an answer yet
+     → the model writes "NOT YET CONFIRMABLE" rather than speculating, and
+     the score for that dimension stays low, honestly.
+3. The result is saved as a **brand-new** `research_packs` row (a new
+   `research_runs` row tagged `run_type: 'optimization'`) — the previous
+   pack is never touched or deleted. `getLatestResearchPack()` already
+   picks whichever pack is newest for a topic, the same mechanism a manual
+   re-run has always relied on, so history comes for free. The review page
+   shows a lightweight "已优化 N 次" hint, not a version browser.
+4. If the new pack carries a `topic_revision_suggestion`, the review page
+   shows the original title next to the suggested one with the model's
+   reason, and offers "采用建议并重新研究" (`acceptSuggestedTopicRevision`
+   updates the topic's title/question, logs the decision, then re-runs a
+   normal research pass on the revised topic) or "保留原标题继续研究" (runs
+   `optimizeResearch` again unchanged).
+5. Optimization never touches `topics.status` — it's a same-stage
+   refinement, not a pipeline transition. Approving still requires the
+   separate, explicit "通过，开始生成" click once the score clears 80.
 
 ## Workflow 2 — Content generation (C 内容编辑)
 

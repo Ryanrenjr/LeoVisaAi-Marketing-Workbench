@@ -5,6 +5,7 @@ import {
   getComplianceReviews,
   getContentAssets,
   getLatestResearchPack,
+  getResearchOptimizationCount,
   getResearchSources,
   getResearchSourcesForPacks,
   getTopicActivity,
@@ -30,20 +31,18 @@ import { groupContentAssetsByLineage, groupSourcesByPackId } from "@/lib/content
 import { CONTENT_PLATFORM_LABEL, TOPIC_ACTIVITY_LABEL } from "@/lib/status";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import { PendingSubmitButton } from "@/components/pending-submit-button";
-import { PlatformChoiceRadios } from "@/components/platform-choice-radios";
 import { RunActionButton } from "@/components/ai/run-action-button";
 import { getEmployee } from "@/lib/boss-language";
 import { ResearchPackView } from "@/components/research-pack-view";
+import { ResearchDecisionActions } from "@/components/research-decision-actions";
 import { TopicTabs, type TabDef } from "@/components/content/topic-tabs";
 import { VideoContentView } from "@/components/content/video-content-view";
 import { XiaohongshuContentView } from "@/components/content/xiaohongshu-content-view";
 import { WechatArticleView, WechatFullArticleView, WechatOutlineView } from "@/components/content/wechat-content-view";
 import { ComplianceReviewResult } from "@/components/compliance-review-result";
-import { discardTopic, startResearch } from "../actions";
+import { startResearch } from "../actions";
 import { runResearch } from "../research-actions";
 import { regeneratePlatformContent } from "../content-actions";
-import { approveAndGoHome } from "../pipeline-actions";
 import { runComplianceReview } from "../compliance-actions";
 import { reviseContentAsset } from "../revision-actions";
 import { CONTENT_TYPE_REVISION } from "@/lib/content-mapping";
@@ -81,7 +80,7 @@ export default async function TopicDetailPage({
 
   if (!topic) notFound();
 
-  const [activity, profiles, researchPack, contentAssets, complianceReviews, contentImages, brandConfig] =
+  const [activity, profiles, researchPack, contentAssets, complianceReviews, contentImages, brandConfig, researchOptimizationCount] =
     await Promise.all([
       getTopicActivity(topic.id),
       getAllProfiles(),
@@ -90,6 +89,7 @@ export default async function TopicDetailPage({
       getComplianceReviews(topic.id),
       getContentImagesForTopic(topic.id),
       getBrandConfig(),
+      getResearchOptimizationCount(topic.id),
     ]);
   const imagesByAssetId = new Map<string, typeof contentImages>();
   for (const image of contentImages) {
@@ -123,11 +123,12 @@ export default async function TopicDetailPage({
   const showRunResearch =
     canShowActions && canRunResearch(user.role) && canRunResearchFromStatus(topic.status);
   const showEditResearch = canShowActions && canRunResearch(user.role) && Boolean(researchPack);
-  const showApproval =
-    canShowActions &&
-    canApproveResearch(user.role) &&
-    canApproveResearchFromStatus(topic.status) &&
-    Boolean(researchPack);
+  const showApproval = Boolean(
+    canShowActions && canApproveResearch(user.role) && canApproveResearchFromStatus(topic.status) && researchPack,
+  );
+  const showOptimize = Boolean(
+    canShowActions && canRunResearch(user.role) && canApproveResearchFromStatus(topic.status) && researchPack,
+  );
 
   // --- Content Agent -----------------------------------------------------
   const contentGateOpen = canGenerateContent(topic.status);
@@ -372,18 +373,22 @@ export default async function TopicDetailPage({
                 </Link>
               )}
             </div>
-            {showApproval && researchPack && (
-              <div className="flex gap-3">
-                <form action={discardTopic.bind(null, topic.id)} className="flex-1">
-                  <PendingSubmitButton variant="secondary" className="w-full">
-                    淘汰
-                  </PendingSubmitButton>
-                </form>
-                <form action={approveAndGoHome.bind(null, topic.id, researchPack.id)} className="flex flex-[2] flex-col gap-2">
-                  <PlatformChoiceRadios />
-                  <PendingSubmitButton className="w-full">通过，开始生成</PendingSubmitButton>
-                </form>
-              </div>
+            {(showApproval || showOptimize) && researchPack && (
+              <>
+                {researchOptimizationCount > 0 && (
+                  <p className="text-xs text-[var(--muted)]">已优化 {researchOptimizationCount} 次</p>
+                )}
+                <ResearchDecisionActions
+                  topicId={topic.id}
+                  researchPackId={researchPack.id}
+                  scoreTotal={researchPack.score_total ?? 0}
+                  suggestedTopicRevision={researchPack.suggested_topic_revision}
+                  currentTitle={topic.title}
+                  currentAudience={topic.audience}
+                  canDecide={showApproval}
+                  canOptimize={showOptimize}
+                />
+              </>
             )}
           </div>
         ),

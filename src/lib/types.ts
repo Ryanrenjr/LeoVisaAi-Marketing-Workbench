@@ -93,7 +93,12 @@ export type TopicActivityType =
   | "content_edited"
   | "full_article_generated"
   | "content_revised"
-  | "content_revision_failed";
+  | "content_revision_failed"
+  | "research_optimization_started"
+  | "research_optimization_completed"
+  | "research_optimization_failed"
+  | "research_topic_revision_suggested"
+  | "research_topic_revision_accepted";
 
 export interface TopicActivity {
   id: string;
@@ -117,10 +122,22 @@ export interface CurrentUser {
 
 export type ResearchRunStatus = "running" | "completed" | "failed";
 
+/**
+ * "initial" = the first research run for a topic (or a plain re-run from
+ * scratch); "optimization" = B｜政策研究员's second-stage mode — targeted
+ * follow-up research aimed at the specific gaps a low score exposed (see
+ * src/lib/ai/research-optimization.ts), including a re-research triggered
+ * by accepting a suggested topic revision. Purely a label for the activity
+ * log / "已优化 N 次" UI hint — every run still produces a fully independent
+ * research_packs row and a fully independent re-score.
+ */
+export type ResearchRunType = "initial" | "optimization";
+
 export interface ResearchRun {
   id: string;
   topic_id: string;
   status: ResearchRunStatus;
+  run_type: ResearchRunType;
   model_alias: string;
   requested_by: string | null;
   started_at: string;
@@ -165,6 +182,24 @@ export interface ResearchScoreBreakdown {
   externalSafety: ResearchScoreItem;
 }
 
+/**
+ * B｜政策研究员's optimization mode found the evidence solid but the
+ * topic's own title/question (and, when the audience itself was
+ * over-scoped, its audience too) stated a firmer conclusion than the
+ * evidence supports (see docs/ai-workflows.md "研究优化" RESULT 2) — a
+ * suggestion, never applied automatically. Null on every pack where this
+ * never came up (the overwhelmingly common case, and every pack from
+ * before this feature existed). `audience` is null whenever B did not find
+ * it necessary to change — acceptSuggestedTopicRevision (research-actions.ts)
+ * leaves topics.audience untouched in that case, never blanking it out.
+ */
+export interface SuggestedTopicRevision {
+  title: string;
+  question: string;
+  audience: string | null;
+  reason: string;
+}
+
 export interface ResearchPack {
   id: string;
   research_run_id: string;
@@ -176,6 +211,7 @@ export interface ResearchPack {
   /** Null for packs generated before this scoring feature existed. */
   score_total: number | null;
   score_breakdown: ResearchScoreBreakdown | null;
+  suggested_topic_revision: SuggestedTopicRevision | null;
   edited_by: string | null;
   edited_at: string | null;
   created_at: string;

@@ -63,6 +63,88 @@ export function hasScoreData(breakdown: ResearchScoreBreakdown | null | undefine
   return RESEARCH_SCORE_DIMENSIONS.every((dim) => breakdown[dim.field] !== undefined);
 }
 
+/**
+ * B｜政策研究员's own Skill (docs/digital-employee-skills.md "11. 总分对应
+ * 结果") already defines what a total score means — 90-100 APPROVED,
+ * 80-89 APPROVED WITH CAUTION, 70-79 RESEARCH MORE, below 70 REJECT. The
+ * app-level "gate" only ever needed to collapse that into one boolean: can
+ * this pack normally proceed to content generation? A production incident
+ * (2026-09) showed the answer used to always be "yes" regardless of score
+ * — the real six-dimension score existed and was displayed, but nothing
+ * server-side ever consulted it before approving. `RESEARCH_APPROVAL_THRESHOLD`
+ * and `canApproveResearchScore` are the single source of truth for that
+ * boundary — the research review UI (which tier's buttons to show) and the
+ * approve_research gate (research-actions.ts + the DB function) both read
+ * from here, so they can never drift apart the way "UI says approvable,
+ * backend silently allows a lower bar anyway" would require.
+ */
+export const RESEARCH_APPROVAL_THRESHOLD = 80;
+
+export function canApproveResearchScore(scoreTotal: number | null | undefined): boolean {
+  return (scoreTotal ?? 0) >= RESEARCH_APPROVAL_THRESHOLD;
+}
+
+/** Mirrors the Skill's own four bands exactly — never invents a fifth tier or a different boundary. */
+export type ResearchDecisionTier = "APPROVED" | "APPROVED_WITH_CAUTION" | "RESEARCH_MORE" | "REJECT";
+
+export function researchDecisionTier(scoreTotal: number | null | undefined): ResearchDecisionTier {
+  const score = scoreTotal ?? 0;
+  if (score >= 90) return "APPROVED";
+  if (score >= RESEARCH_APPROVAL_THRESHOLD) return "APPROVED_WITH_CAUTION";
+  if (score >= 70) return "RESEARCH_MORE";
+  return "REJECT";
+}
+
+export interface ResearchDiagnosisItem {
+  /** 🔴 for a dimension scoring below half its max, 🟡 for below the healthy (80%) bar but at least half. */
+  severity: "HIGH" | "MEDIUM";
+  label: string;
+  detail: string;
+}
+
+/** Short, stable Chinese label for each dimension's own kind of problem — deliberately distinct from RESEARCH_SCORE_DIMENSIONS' neutral column headers ("官方来源可靠度"), since a diagnosis bullet needs to read as a problem statement, not a category name. */
+const DIAGNOSIS_LABEL: Record<(typeof RESEARCH_SCORE_DIMENSIONS)[number]["field"], string> = {
+  officialSources: "官方来源不足",
+  factAccuracy: "事实准确度存疑",
+  policyTimeline: "时间线不明确",
+  scopeExceptions: "适用范围不明确",
+  dataReliability: "数据可信度不足",
+  externalSafety: "表达风险",
+};
+
+/**
+ * Deterministic UI mapping from the six-dimension score straight to "研究
+ * 诊断" — no AI call, just picking out the worst-scoring dimensions and
+ * surfacing their own `reason` text (which the model already wrote,
+ * grounded in what it actually found). Live product instruction: a user
+ * shouldn't have to read six separate score bars and infer for themselves
+ * which ones actually matter — this does that inference once,
+ * deterministically, the same way every time for the same scores.
+ * Dimensions at or above 80% of their max are healthy and never surface
+ * here; the rest are sorted worst-first and capped at `maxItems` so the
+ * panel stays a glance, not a report.
+ */
+export function diagnoseResearchScore(
+  breakdown: ResearchScoreBreakdown | null | undefined,
+  maxItems = 4,
+): ResearchDiagnosisItem[] {
+  if (!hasScoreData(breakdown)) return [];
+
+  return RESEARCH_SCORE_DIMENSIONS.map((dim) => {
+    const item = breakdown[dim.field];
+    const ratio = item.max > 0 ? item.score / item.max : 0;
+    return { dim, item, ratio };
+  })
+    .filter(({ ratio }) => ratio < 0.8)
+    .sort((a, b) => a.ratio - b.ratio)
+    .slice(0, maxItems)
+    .map(({ dim, item, ratio }) => ({
+      severity: ratio < 0.5 ? ("HIGH" as const) : ("MEDIUM" as const),
+      label: DIAGNOSIS_LABEL[dim.field],
+      detail: item.reason || `${dim.label}得分较低（${item.score}/${item.max}），建议补充证据或修正表达。`,
+    }));
+}
+
 export interface ResearchPackClaim {
   summary: string;
   key_findings: string[];

@@ -3,7 +3,11 @@ import { selectSearchProvider } from "./search-selection";
 import { isSearchProviderConfigured } from "./registry";
 import { runBraveSearch } from "./providers/brave-provider";
 import { runTavilySearch } from "./providers/tavily-provider";
-import type { SearchErrorCode, SearchProviderId, SearchTaskResult } from "./types";
+import type { ResearchSearchInput, SearchErrorCode, SearchProviderId, SearchTaskResult } from "./types";
+
+function normalizeQuery(input: ResearchSearchInput): { query: string; includeDomains?: readonly string[] } {
+  return typeof input === "string" ? { query: input } : input;
+}
 
 /**
  * The Search Router: Research Task → Search Router → Search Provider →
@@ -39,7 +43,7 @@ function classifySearchError(error: string): SearchErrorCode {
  * does not — no silent substitution once a provider is actually in use.
  */
 export async function runResearchSearch(
-  queries: readonly string[],
+  queries: readonly ResearchSearchInput[],
   executionOverride?: SearchProviderId | null,
 ): Promise<SearchTaskResult> {
   const resolution = resolveSearchProvider(executionOverride);
@@ -58,9 +62,19 @@ export async function runResearchSearch(
   }
 
   const executions = [];
-  for (const query of queries) {
+  for (const rawQuery of queries) {
+    const { query, includeDomains } = normalizeQuery(rawQuery);
+    // Tavily supports include_domains natively (runTavilySearch). Brave
+    // has no domain-filtering support in this app's implementation — it
+    // genuinely ignores includeDomains here rather than pretending to
+    // honor it; see brave-provider.test.ts / router.test.ts for the
+    // explicit coverage of that.
     const execution =
-      provider === "TAVILY" ? await runTavilySearch(query) : provider === "BRAVE" ? await runBraveSearch(query) : null;
+      provider === "TAVILY"
+        ? await runTavilySearch(query, includeDomains ? { includeDomains: [...includeDomains] } : undefined)
+        : provider === "BRAVE"
+          ? await runBraveSearch(query)
+          : null;
     if (!execution) {
       return { ok: false, errorCode: "SEARCH_FAILED", error: "未知搜索服务。" };
     }

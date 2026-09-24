@@ -20,6 +20,8 @@ export type TaskType =
   | "TOPIC_PLANNING"
   | "TOPIC_DISCOVERY"
   | "RESEARCH"
+  | "RESEARCH_QUERY_PLANNING"
+  | "RESEARCH_AUDIT"
   | "VIDEO_WRITING"
   | "XIAOHONGSHU_WRITING"
   | "XIAOHONGSHU_PAGES_PLANNING"
@@ -37,6 +39,8 @@ export const TASK_TYPES: readonly TaskType[] = [
   "TOPIC_PLANNING",
   "TOPIC_DISCOVERY",
   "RESEARCH",
+  "RESEARCH_QUERY_PLANNING",
+  "RESEARCH_AUDIT",
   "VIDEO_WRITING",
   "XIAOHONGSHU_WRITING",
   "XIAOHONGSHU_PAGES_PLANNING",
@@ -56,6 +60,8 @@ export const TASK_TYPE_EMPLOYEE: Record<TaskType, EmployeeId> = {
   TOPIC_PLANNING: "planner",
   TOPIC_DISCOVERY: "planner",
   RESEARCH: "researcher",
+  RESEARCH_QUERY_PLANNING: "researcher",
+  RESEARCH_AUDIT: "researcher",
   VIDEO_WRITING: "video-editor",
   XIAOHONGSHU_WRITING: "xiaohongshu-editor",
   XIAOHONGSHU_PAGES_PLANNING: "xiaohongshu-image-planner",
@@ -74,6 +80,8 @@ export const TASK_TYPE_LABEL: Record<TaskType, string> = {
   TOPIC_PLANNING: "选题分析",
   TOPIC_DISCOVERY: "今日选题搜索",
   RESEARCH: "联网研究",
+  RESEARCH_QUERY_PLANNING: "研究检索词生成",
+  RESEARCH_AUDIT: "研究独立复核评分",
   VIDEO_WRITING: "视频号",
   XIAOHONGSHU_WRITING: "小红书标题文案",
   XIAOHONGSHU_PAGES_PLANNING: "小红书图文规划",

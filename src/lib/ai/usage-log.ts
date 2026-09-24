@@ -18,6 +18,7 @@ type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 export interface UsageLogInput {
   workflow_type:
     | "research"
+    | "research_optimization"
     | "content"
     | "content_revision"
     | "compliance"

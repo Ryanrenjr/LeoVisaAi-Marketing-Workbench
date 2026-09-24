@@ -158,7 +158,7 @@ writes to **both**.
 |-----------------|-------------|------------------------------------------------------------------|
 | `id`            | uuid, PK    |                                                                    |
 | `topic_id`      | uuid, FK → `topics.id`                                              |
-| `activity_type` | `topic_activity_type` enum: `topic_created` \| `topic_edited` \| `topic_scored` \| `score_manually_changed` \| `research_requested` \| `topic_archived` \| `research_run_started` \| `research_run_completed` \| `research_run_failed` \| `research_edited` \| `research_approved` \| `research_changes_requested` \| `content_generation_started` \| `content_generated` \| `content_generation_failed` \| `content_regenerated` \| `content_edited` \| `full_article_generated` | |
+| `activity_type` | `topic_activity_type` enum: `topic_created` \| `topic_edited` \| `topic_scored` \| `score_manually_changed` \| `research_requested` \| `topic_archived` \| `research_run_started` \| `research_run_completed` \| `research_run_failed` \| `research_edited` \| `research_approved` \| `research_changes_requested` \| `content_generation_started` \| `content_generated` \| `content_generation_failed` \| `content_regenerated` \| `content_edited` \| `full_article_generated` \| `content_revised` \| `content_revision_failed` \| `research_optimization_started` \| `research_optimization_completed` \| `research_optimization_failed` \| `research_topic_revision_suggested` \| `research_topic_revision_accepted` | |
 | `actor_id`      | uuid, FK → `profiles.id`, not null | must equal the caller's own id (enforced by RLS) |
 | `detail`        | jsonb, nullable | free-form context, e.g. `{ from, to }` for a manual score change, `{ error }` for a failed run |
 | `created_at`    | timestamptz |                                                                    |
@@ -175,6 +175,7 @@ deleting run history, and so `supabase/seed.sql` can seed a demo run.
 | `id` | uuid, PK | |
 | `topic_id` | uuid, FK → `topics.id` | |
 | `status` | `research_run_status` enum: `running` \| `completed` \| `failed` | |
+| `run_type` | text, not null, default `'initial'`, check `in ('initial', 'optimization')` | `'optimization'` = B's second-stage 研究优化 pass (including the re-research triggered by accepting a suggested topic revision) — purely descriptive, drives the review page's "已优化 N 次" hint; never treated differently by any gate. See `supabase/migrations/0036_research_optimization_and_score_gate.sql`. |
 | `model_alias` | text | e.g. `claude-opus-5` — from `RESEARCH_MODEL` env, see `docs/architecture.md` |
 | `requested_by` | uuid, FK → `profiles.id`, nullable | |
 | `started_at` / `completed_at` | timestamptz | `completed_at` null while `running` |
@@ -193,9 +194,18 @@ over time (re-runs); the UI shows the latest.
 UI disclaimer), `confidence` (`research_confidence` enum: `LOW` \| `MEDIUM`
 \| `HIGH`, not null, **defaults to `LOW`** — a missing or unreadable
 confidence claim from the model is never silently treated as trustworthy;
-see `src/lib/ai/research-pack.ts` → `normalizeConfidence`), `edited_by`/
-`edited_at` (nullable, set when an ADMIN edits the narrative fields),
-`created_at`.
+see `src/lib/ai/research-pack.ts` → `normalizeConfidence`), `score_total`
+(integer 0-100) / `score_breakdown` (jsonb — B's six-dimension research-
+quality score, see `src/lib/ai/research-pack.ts`'s `RESEARCH_SCORE_DIMENSIONS`;
+**`score_total >= 80` is required before this pack's topic can move to
+`RESEARCH_APPROVED`**, enforced inside the `approve_research()` Postgres
+function, not just the UI — see `supabase/migrations/0036_research_optimization_and_score_gate.sql`),
+`suggested_topic_revision` (jsonb, nullable — set only when a 研究优化 pass
+concludes the topic's own title/question overstates what the evidence
+supports; `{ title, question, reason }`, a suggestion a human must
+explicitly accept via `acceptSuggestedTopicRevision`, never applied
+automatically), `edited_by`/`edited_at` (nullable, set when an ADMIN edits
+the narrative fields), `created_at`.
 
 `research_sources`: `id`, `research_pack_id` (FK), `title`, `url`, `note`
 (one-sentence relevance note), `page_age` (text, nullable — freshness as

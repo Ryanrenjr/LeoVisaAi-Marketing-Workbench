@@ -21,9 +21,28 @@ You do NOT have your own web search access for this task. You are given a manife
 Hard rules:
 - This is general marketing research to inform a piece of educational content. It is NOT individualized legal advice and NOT an assessment of any specific person's immigration case.
 - Never fabricate a fact, statistic, policy detail, Immigration Rule paragraph, date, or URL. Reference evidence ONLY by its exact label from the manifest below (e.g. "S1") in source_references. Never invent a label or cite a label not present in the manifest.
-- The manifest gives you titles and short snippets, NOT the full text of each page. You have not read any complete official document. Do not write as if you have — treat snippet-level evidence as partial, and be conservative about claims that would require the full page to verify.
+
+## Evidence type — read the "Evidence type" line on every manifest entry
+
+Each entry is one of two types, and they carry different weight:
+
+- **OFFICIAL_EXTRACT** — real content actually retrieved from that official page (may be the full text, or a relevance-ranked excerpt of it — never assume it's necessarily the complete document). You may treat this as read and reason from it directly, but only about what is actually shown in the extract. Do not claim a section, exception, or detail exists if it isn't present in what you were given.
+- **SEARCH_SNIPPET** — a short search-engine snippet only, not the page itself. Keep treating this as partial: don't treat it as the full page, don't infer hidden exceptions, don't invent a paragraph number, and lower confidence for any important claim that rests only on a snippet.
+
+## Evidence hierarchy — when sources conflict, higher wins
+
+1. Legislation / Immigration Rules / other official statutory text
+2. Home Office caseworker guidance
+3. GOV.UK official public guidance
+4. Parliament or other official material
+5. Reputable professional secondary material (e.g. law firm commentary)
+6. Commercial immigration websites
+7. Social media / forums
+
+An OFFICIAL_EXTRACT from an official source always outweighs a SEARCH_SNIPPET (or even another OFFICIAL_EXTRACT) from a lower-ranked source on the same question — do not let a commercial immigration website's explanation override or dilute what an official extract directly shows. Secondary/commercial sources still have a real job: spotting genuine user confusion, common misconceptions, or real ambiguity worth addressing — they just can't override a clear official answer.
+
 - If the evidence doesn't clearly and sufficiently support a claim, do NOT state it. Instead note the gap in "warnings" (what's uncertain, what a human should verify against the full source, what requires expert review before publishing) and reflect it in your confidence level.
-- Self-assess confidence honestly: HIGH requires multiple consistent primary-source (gov.uk / legislation.gov.uk / parliament.uk / official Home Office guidance) results clearly supporting the findings; MEDIUM means some support exists but with gaps, reliance on non-primary sources, or only snippet-level evidence for an important point; LOW means evidence is thin, conflicting, off-topic, or from non-primary sources only. When in doubt, choose the lower confidence level.
+- Self-assess confidence based on evidence LEVEL, not a fixed assumption about what this system can retrieve: multiple consistent OFFICIAL_EXTRACT entries from primary sources (gov.uk / legislation.gov.uk / parliament.uk / official Home Office guidance) directly supporting the findings can justify HIGH confidence even with few secondary sources. Relying only on SEARCH_SNIPPET-level evidence should stay conservative — MEDIUM at best for anything beyond a well-established basic fact, LOW where evidence is thin, conflicting, off-topic, or non-primary. Do not mechanically cap confidence at MEDIUM/LOW out of habit — base it purely on what this manifest actually shows this time.
 - Score your own research honestly across six dimensions, each with a max score and a one-sentence reason grounded in what the evidence manifest actually shows (see the Skill's full scoring rubric for what each dimension means) — a low score on a dimension is a legitimate, useful outcome, not a failure to hide.
 
 Output format: your reply must be ONLY a single JSON object — no markdown code fences, no prose before or after it — matching exactly this shape:
@@ -83,25 +102,58 @@ export function buildExternalResearchUserPrompt(
   return lines.join("\n");
 }
 
+/** OFFICIAL_EXTRACT = real content actually retrieved from that page (Round 4 — see src/lib/search/extraction.ts). SEARCH_SNIPPET = only ever had the search engine's short snippet. Never conflate the two — see EXTERNAL_RESEARCH_SYSTEM_PROMPT's "Evidence type" section. */
+export type EvidenceType = "OFFICIAL_EXTRACT" | "SEARCH_SNIPPET";
+
 export interface SearchManifestEntry {
   label: string;
   result: SearchResult;
+  evidenceType: EvidenceType;
+  /** Only set when evidenceType is OFFICIAL_EXTRACT. */
+  extractedContent: string | null;
 }
 
-export function buildSearchResultManifest(results: readonly SearchResult[]): {
+function formatManifestEntry(entry: SearchManifestEntry): string {
+  const { label, result, evidenceType, extractedContent } = entry;
+  const lines = [
+    `[${label}] ${result.title}`,
+    `URL: ${result.url}`,
+    result.publisher ? `Publisher: ${result.publisher}` : null,
+    `Evidence type: ${evidenceType}`,
+    evidenceType === "OFFICIAL_EXTRACT"
+      ? `Extracted page content (relevance-ranked excerpt from the real page — not necessarily the complete document):\n${extractedContent}`
+      : `Search snippet:\n${result.snippet || "(no snippet provided)"}`,
+  ];
+  return lines.filter((line): line is string => line !== null).join("\n");
+}
+
+/**
+ * `extractedByUrl` carries any real page content Round 4's official-source
+ * extraction step (src/lib/search/extraction.ts) retrieved, keyed by the
+ * exact URL it was extracted from. A result whose URL isn't in the map
+ * (extraction wasn't attempted for it, or it failed) stays a
+ * SEARCH_SNIPPET — never silently upgraded.
+ */
+export function buildSearchResultManifest(
+  results: readonly SearchResult[],
+  extractedByUrl: ReadonlyMap<string, string> = new Map(),
+): {
   entries: SearchManifestEntry[];
   labelToResult: Map<string, SearchResult>;
   manifestText: string;
 } {
-  const entries = results.map((result, i) => ({ label: `S${i + 1}`, result }));
+  const entries: SearchManifestEntry[] = results.map((result, i) => {
+    const extractedContent = extractedByUrl.get(result.url) ?? null;
+    return {
+      label: `S${i + 1}`,
+      result,
+      evidenceType: extractedContent ? "OFFICIAL_EXTRACT" : "SEARCH_SNIPPET",
+      extractedContent,
+    };
+  });
   const labelToResult = new Map(entries.map((e) => [e.label, e.result]));
   const manifestText = entries.length
-    ? entries
-        .map(
-          (e) =>
-            `[${e.label}] ${e.result.title} — ${e.result.url}${e.result.snippet ? ` — ${e.result.snippet}` : ""}`,
-        )
-        .join("\n")
+    ? entries.map((e) => formatManifestEntry(e)).join("\n\n")
     : "（本次搜索没有返回可用结果，内容生成时不得引用任何来源标签）";
   return { entries, labelToResult, manifestText };
 }
@@ -114,9 +166,31 @@ export function buildSearchResultManifest(results: readonly SearchResult[]): {
  * keyed by label instead of by claimed URL (since here the model never
  * saw a real URL to begin with).
  */
+/** How much real page content Round 4's official-source extraction actually retrieved for this run — drives buildExternalGroundedPack's disclosure note so it reflects real retrieval state instead of a fixed "snippet-only" claim. Defaults to "nothing was extracted" so every existing caller/test that doesn't pass this keeps the old (still-accurate for that case) behavior. */
+export interface RetrievalMeta {
+  officialExtractCount: number;
+  failedExtractionCount: number;
+}
+
+function buildRetrievalDisclosure(meta: RetrievalMeta): string[] {
+  const notes: string[] = [];
+  notes.push(
+    meta.officialExtractCount > 0
+      ? `（本次研究已读取 ${meta.officialExtractCount} 个官方来源中与本题相关的提取内容；其余来源仍可能仅为搜索摘要，如涉及重要细节，请人工核实原始页面。）`
+      : "（本次研究仅基于搜索结果标题与摘要，未读取官方页面正文；如涉及重要细节，请人工核实原始页面。）",
+  );
+  if (meta.failedExtractionCount > 0) {
+    notes.push(
+      `（其中 ${meta.failedExtractionCount} 个官方来源尝试读取正文失败，已改用搜索摘要继续研究，不影响本次结果生成。）`,
+    );
+  }
+  return notes;
+}
+
 export function buildExternalGroundedPack(
   claim: ExternalResearchClaim,
   labelToResult: Map<string, SearchResult>,
+  retrievalMeta: RetrievalMeta = { officialExtractCount: 0, failedExtractionCount: 0 },
 ): GroundedResearchPack {
   const sources: GroundedSource[] = [];
   const seenUrls = new Set<string>();
@@ -139,9 +213,7 @@ export function buildExternalGroundedPack(
   if (droppedCount > 0) {
     notes.push(`（系统已自动移除 ${droppedCount} 条未在检索结果中找到的引用标签）`);
   }
-  notes.push(
-    "（本次研究基于搜索结果标题与摘要生成，AI 未完整阅读原始网页全文；如涉及重要细节，请人工核实原始页面。）",
-  );
+  notes.push(...buildRetrievalDisclosure(retrievalMeta));
 
   const scoreBreakdown = normalizeScoreBreakdown(claim.scores);
 

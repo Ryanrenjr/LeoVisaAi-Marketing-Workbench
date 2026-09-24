@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canArchive,
   canStartResearch,
+  changesInvalidateResearch,
   isAllowedTransition,
   isAtOrPastStage,
   nextStatus,
@@ -91,5 +92,37 @@ describe("isAtOrPastStage", () => {
 
   it("is false for an archived topic even if it was past the milestone before archiving", () => {
     expect(isAtOrPastStage("ARCHIVED", "RESEARCH_APPROVED")).toBe(false);
+  });
+});
+
+/**
+ * Live audit finding: a research pack is grounded in the exact title/
+ * question/audience/business it was researched against. Changing any of
+ * these while a pack sits at RESEARCH_READY left that (now-stale) pack
+ * approvable — this is the pure predicate both updateTopic (actions.ts)
+ * and acceptSuggestedTopicRevision (research-actions.ts) use to decide
+ * whether an edit must force a fresh research pass.
+ */
+describe("changesInvalidateResearch", () => {
+  const BASE = { title: "t", question: "q", audience: "a", business: "b" };
+
+  it("is false when nothing changed", () => {
+    expect(changesInvalidateResearch(BASE, { ...BASE })).toBe(false);
+  });
+
+  it("is true when title changes", () => {
+    expect(changesInvalidateResearch(BASE, { ...BASE, title: "new title" })).toBe(true);
+  });
+
+  it("is true when question changes", () => {
+    expect(changesInvalidateResearch(BASE, { ...BASE, question: "new question" })).toBe(true);
+  });
+
+  it("is true when audience changes", () => {
+    expect(changesInvalidateResearch(BASE, { ...BASE, audience: "new audience" })).toBe(true);
+  });
+
+  it("is true when business changes", () => {
+    expect(changesInvalidateResearch(BASE, { ...BASE, business: "new business" })).toBe(true);
   });
 });

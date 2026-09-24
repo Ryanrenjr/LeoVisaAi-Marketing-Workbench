@@ -8,7 +8,7 @@ import { getTopicById } from "@/lib/topics";
 import { computeTopicScore } from "@/lib/scoring";
 import { validateTopicInput } from "@/lib/topic-validation";
 import { canApproveResearch, canArchiveTopic } from "@/lib/permissions";
-import { canArchive, canStartResearch } from "@/lib/topic-workflow";
+import { canArchive, canStartResearch, changesInvalidateResearch } from "@/lib/topic-workflow";
 import type { ContentPillar, TopicInput, TopicPriority, TopicStatus } from "@/lib/types";
 
 export interface TopicFormState {
@@ -94,6 +94,17 @@ export async function updateTopic(
     input.content_pillar !== current.content_pillar ||
     input.priority !== current.priority;
 
+  // Live audit finding: a research pack is grounded in the exact title/
+  // question/audience/business it was researched against. Editing any of
+  // those while a pack already sits at RESEARCH_READY must force a fresh
+  // research pass before that (now-stale) pack can ever be approved —
+  // otherwise a pack researched for "Topic A" stays approvable after the
+  // topic itself becomes "Topic B". Only applies at RESEARCH_READY: before
+  // that there's no pack yet to go stale, and once approved (or later),
+  // rewinding the whole content pipeline is a different, bigger decision
+  // this edit form was never meant to make on its own.
+  const invalidatesResearch = current.status === "RESEARCH_READY" && changesInvalidateResearch(current, input);
+
   const supabase = await createClient();
   const update: Record<string, unknown> = {
     title: input.title,
@@ -104,15 +115,26 @@ export async function updateTopic(
     priority: input.priority,
   };
   if (scoreChanged) update.topic_score = nextScore;
+  if (invalidatesResearch) update.status = "RESEARCHING";
 
   const { error } = await supabase.from("topics").update(update).eq("id", topicId);
   if (error) return { error: "保存失败，请重试。" };
+
+  if (invalidatesResearch) {
+    await supabase.from("topic_status_events").insert({
+      topic_id: topicId,
+      from_status: "RESEARCH_READY",
+      to_status: "RESEARCHING",
+      approved_by: user.id,
+    });
+  }
 
   if (fieldsChanged) {
     await supabase.from("topic_activity_log").insert({
       topic_id: topicId,
       activity_type: "topic_edited",
       actor_id: user.id,
+      detail: invalidatesResearch ? { invalidatedResearch: true } : null,
     });
   }
   if (scoreChanged) {

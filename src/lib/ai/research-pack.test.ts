@@ -3,9 +3,12 @@ import {
   RESEARCH_SCORE_DIMENSIONS,
   buildGroundedPack,
   buildResearchUserPrompt,
+  canApproveResearchScore,
+  diagnoseResearchScore,
   groundSources,
   normalizeScoreBreakdown,
   parseResearchPackJson,
+  researchDecisionTier,
   totalScore,
 } from "./research-pack";
 
@@ -393,5 +396,114 @@ describe("buildResearchUserPrompt", () => {
     });
     expect(prompt).not.toContain("Question this content should answer:");
     expect(prompt).not.toContain("Business / practice area:");
+  });
+});
+
+/**
+ * Live audit finding: B｜政策研究员's own Skill (docs/digital-employee-
+ * skills.md "11. 总分对应结果") has always defined 90-100 = APPROVED, 80-89
+ * = APPROVED WITH CAUTION, 70-79 = RESEARCH MORE, <70 = REJECT, but
+ * nothing server-side ever actually enforced the 80-point line before
+ * approving a research pack. canApproveResearchScore is the single source
+ * of truth both the review UI and the approve-research server action read
+ * from, so they can't drift apart.
+ */
+describe("canApproveResearchScore / researchDecisionTier — the real approval boundary", () => {
+  it("46/100 cannot be approved, and is REJECT-tier", () => {
+    expect(canApproveResearchScore(46)).toBe(false);
+    expect(researchDecisionTier(46)).toBe("REJECT");
+  });
+
+  it("75/100 cannot be approved, and is RESEARCH_MORE-tier", () => {
+    expect(canApproveResearchScore(75)).toBe(false);
+    expect(researchDecisionTier(75)).toBe("RESEARCH_MORE");
+  });
+
+  it("exactly 79 cannot be approved (the RESEARCH_MORE/APPROVED_WITH_CAUTION boundary)", () => {
+    expect(canApproveResearchScore(79)).toBe(false);
+    expect(researchDecisionTier(79)).toBe("RESEARCH_MORE");
+  });
+
+  it("exactly 80 can be approved, and is APPROVED_WITH_CAUTION-tier", () => {
+    expect(canApproveResearchScore(80)).toBe(true);
+    expect(researchDecisionTier(80)).toBe("APPROVED_WITH_CAUTION");
+  });
+
+  it("82/100 can be approved", () => {
+    expect(canApproveResearchScore(82)).toBe(true);
+    expect(researchDecisionTier(82)).toBe("APPROVED_WITH_CAUTION");
+  });
+
+  it("exactly 90 is APPROVED-tier (not just APPROVED_WITH_CAUTION)", () => {
+    expect(researchDecisionTier(90)).toBe("APPROVED");
+  });
+
+  it("95/100 can be approved, and is APPROVED-tier", () => {
+    expect(canApproveResearchScore(95)).toBe(true);
+    expect(researchDecisionTier(95)).toBe("APPROVED");
+  });
+
+  it("treats a missing score as 0 (REJECT, cannot approve) rather than throwing or defaulting to approvable", () => {
+    expect(canApproveResearchScore(null)).toBe(false);
+    expect(canApproveResearchScore(undefined)).toBe(false);
+    expect(researchDecisionTier(null)).toBe("REJECT");
+  });
+});
+
+/**
+ * "研究诊断" — deterministic UI mapping from the six-dimension score to the
+ * 2-4 problems that actually matter. Live product instruction: this must
+ * NOT be another AI call just to restate `reason` more nicely — it's a
+ * pure function of scores already on the pack.
+ */
+describe("diagnoseResearchScore", () => {
+  it("returns nothing when every dimension is already healthy (>=80% of its max)", () => {
+    const breakdown = normalizeScoreBreakdown(FULL_SCORES);
+    expect(diagnoseResearchScore(breakdown)).toEqual([]);
+  });
+
+  it("returns nothing for a pack with no real score data (predates scoring, or scoring failed)", () => {
+    expect(diagnoseResearchScore(null)).toEqual([]);
+    expect(diagnoseResearchScore(undefined)).toEqual([]);
+  });
+
+  it("flags a dimension below 50% of its max as HIGH severity, using the model's own reason text", () => {
+    const breakdown = normalizeScoreBreakdown({
+      ...FULL_SCORES,
+      official_sources: { score: 5, reason: "核心改革问题缺少官方原始文件直接支持" },
+    });
+    const diagnosis = diagnoseResearchScore(breakdown);
+    expect(diagnosis).toHaveLength(1);
+    expect(diagnosis[0].severity).toBe("HIGH");
+    expect(diagnosis[0].label).toBe("官方来源不足");
+    expect(diagnosis[0].detail).toBe("核心改革问题缺少官方原始文件直接支持");
+  });
+
+  it("flags a dimension between 50% and 80% of its max as MEDIUM severity", () => {
+    const breakdown = normalizeScoreBreakdown({
+      ...FULL_SCORES,
+      policy_timeline: { score: 12, reason: "过渡安排尚未确认" },
+    });
+    const diagnosis = diagnoseResearchScore(breakdown);
+    expect(diagnosis).toHaveLength(1);
+    expect(diagnosis[0].severity).toBe("MEDIUM");
+    expect(diagnosis[0].label).toBe("时间线不明确");
+  });
+
+  it("sorts worst-scoring dimensions first and caps at maxItems", () => {
+    const breakdown = normalizeScoreBreakdown({
+      official_sources: { score: 18, reason: "ok" }, // healthy (90%)
+      fact_accuracy: { score: 4, reason: "worst" }, // 20%
+      policy_timeline: { score: 10, reason: "mid" }, // 50%
+      scope_exceptions: { score: 3, reason: "second worst" }, // 20%
+      data_reliability: { score: 2, reason: "third worst" }, // 20%
+      external_safety: { score: 6, reason: "fourth worst" }, // 40%
+    });
+    const diagnosis = diagnoseResearchScore(breakdown, 3);
+    expect(diagnosis).toHaveLength(3);
+    // fact_accuracy and scope_exceptions/data_reliability all tie at 20% —
+    // what matters is official_sources (healthy) is excluded and only the
+    // 3 worst make it in.
+    expect(diagnosis.map((d) => d.label)).not.toContain("官方来源不足");
   });
 });

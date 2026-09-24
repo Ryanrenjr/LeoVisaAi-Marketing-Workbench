@@ -14,8 +14,25 @@ import { generateOpenRouterStructured } from "./providers/openrouter-provider";
 import { generateOpenAIStructured, generateOpenAIImage, generateOpenAIImageEdit } from "./providers/openai-provider";
 import { buildSourceManifest, buildEvidenceContextBlock, buildOutlineContextBlock, buildRevisionContextBlock } from "./content-schemas";
 import { applyGroundingAndSafety, CONTENT_TASK_CONFIG, REVISION_TASK_CONFIG, WECHAT_FULL_ARTICLE_SYSTEM_PROMPT, WechatFullArticleSchema } from "./content-schemas";
-import { runResearchSearch } from "../search/router";
-import { buildResearchQueries, rankSearchResults } from "./research-queries";
+import { runResearchSearch, resolveSearchProvider } from "../search/router";
+import { isSearchProviderConfigured } from "../search/registry";
+import { extractOfficialSources } from "../search/extraction";
+import {
+  buildResearchSearchQueries,
+  buildOptimizationSearchQueries,
+  dedupeSearchResultsByUrl,
+  rankSearchResults,
+  tagSearchHitsByLane,
+  selectOfficialExtractionTargets,
+  buildExtractionQuery,
+  MAX_OFFICIAL_EXTRACTS,
+} from "./research-queries";
+import {
+  RESEARCH_QUERY_PLANNER_SYSTEM_PROMPT,
+  ResearchQueryPlanSchema,
+  buildResearchQueryPlannerUserPrompt,
+  planToResearchSearchQueries,
+} from "./research-query-planner";
 import {
   EXTERNAL_RESEARCH_SYSTEM_PROMPT,
   ExternalResearchClaimSchema,
@@ -23,6 +40,17 @@ import {
   buildExternalResearchUserPrompt,
   buildSearchResultManifest,
 } from "./research-external";
+import {
+  RESEARCH_OPTIMIZATION_SYSTEM_PROMPT,
+  ResearchOptimizationContentClaimSchema,
+  buildResearchOptimizationUserPrompt,
+  buildOptimizedContent,
+  RESEARCH_AUDIT_SYSTEM_PROMPT,
+  ResearchAuditClaimSchema,
+  buildResearchAuditUserPrompt,
+  combineAuditedOptimizationPack,
+} from "./research-optimization";
+import type { OptimizedResearchPack } from "./research-optimization";
 import type { EvidenceInput } from "./content-agent";
 import type { GroundedResearchPack } from "./research-pack";
 import type {
@@ -47,11 +75,15 @@ import {
 import type { ComplianceReview } from "./compliance-schemas";
 import {
   TOPIC_DISCOVERY_SYSTEM_PROMPT,
-  TopicDiscoveryResultSchema,
+  DirectedTopicDiscoveryResultSchema,
+  AutoTopicDiscoveryResultSchema,
+  AutoSparseTopicDiscoveryResultSchema,
   buildDiscoveryManifest,
   buildDiscoveryQueries,
   buildTopicDiscoveryUserPrompt,
   filterCandidatesByValidLabels,
+  poolDiscoveryResults,
+  hasSufficientAutoEvidence,
 } from "./topic-discovery";
 import type { TopicDiscoveryResult } from "./topic-discovery";
 import { getEmployeeInstruction } from "../employee-instructions";
@@ -59,8 +91,8 @@ import { appendCustomInstructions } from "./prompt-addendum";
 import { buildSkillPrompt } from "./skills";
 import type { SearchProviderId } from "../search/types";
 import { TASK_TYPE_EMPLOYEE } from "./providers/types";
-import type { AIExecutionResult, ModelRef, TaskType } from "./providers/types";
-import type { ResearchConfidence } from "../types";
+import type { AIExecutionResult, AIProviderId, ModelRef, TaskType } from "./providers/types";
+import type { ResearchConfidence, ResearchScoreBreakdown } from "../types";
 import type { EmployeeId } from "../boss-language";
 
 /**
@@ -164,11 +196,66 @@ async function runNativeResearchTask(
 }
 
 /**
- * Research Task → Search Router → Retrieved Sources → Model Router → AI
- * Model → Research Pack. This is the new default path: Brave (or whatever
- * Search Router resolves) retrieves real sources first, then the resolved
- * AI model analyses them via structured generation — it does NOT run its
- * own native web-search tool for this path (see research-external.ts).
+ * Round 4C — Research Query Planner. A narrow, separate AI call
+ * (RESEARCH_QUERY_PLANNING, resolved through the Model Router exactly
+ * like any other task — never a hard-coded provider/model) that only
+ * rewrites the topic into English retrieval queries; see
+ * research-query-planner.ts. This is quality enrichment, not a
+ * search-availability gate: any failure — no model resolved, the
+ * generation call itself failing, or malformed/schema-invalid output
+ * (dispatchStructuredAnyProvider already validates against
+ * ResearchQueryPlanSchema before returning ok:true) — falls back to
+ * Round 4B's deterministic buildResearchSearchQueries(topic), never to a
+ * failed Research task. The planner never uses buildSkillPrompt/B's
+ * RESEARCHER_SKILL — it's infrastructure, not the digital-employee-facing
+ * Skill.
+ */
+async function resolveResearchSearchQueries(topic: {
+  title: string;
+  question: string;
+  business: string;
+  audience: string;
+}) {
+  // Don't spend a planner call on queries nothing will use — if no search
+  // provider is even going to run (native-grounding fallback territory,
+  // e.g. no TAVILY_API_KEY configured), the deterministic queries are
+  // just as unused as AI-planned ones would be, and the fallback path
+  // doesn't touch researchQueries at all.
+  const searchResolution = resolveSearchProvider();
+  const searchAvailable = searchResolution.ok && isSearchProviderConfigured(searchResolution.provider.provider);
+  if (!searchAvailable) {
+    return buildResearchSearchQueries(topic);
+  }
+
+  const plannerResolution = await resolveModelForTask("RESEARCH_QUERY_PLANNING", null);
+  if (!plannerResolution.ok) {
+    console.info(`[research] query planning fallback used (no model resolved): ${plannerResolution.error}`);
+    return buildResearchSearchQueries(topic);
+  }
+
+  const { model } = plannerResolution;
+  const planResult = await dispatchStructuredAnyProvider(model.provider, model.modelId, {
+    systemPrompt: RESEARCH_QUERY_PLANNER_SYSTEM_PROMPT,
+    userMessage: buildResearchQueryPlannerUserPrompt(topic),
+    schema: ResearchQueryPlanSchema,
+    maxTokens: 500,
+  });
+
+  if (!planResult.ok || !planResult.data) {
+    console.info(`[research] query planning fallback used (generation failed): ${planResult.error}`);
+    return buildResearchSearchQueries(topic);
+  }
+
+  return planToResearchSearchQueries(planResult.data);
+}
+
+/**
+ * Research Task → Query Planner (Round 4C) → Search Router → Retrieved
+ * Sources → Model Router → AI Model → Research Pack. This is the new
+ * default path: Brave (or whatever Search Router resolves) retrieves real
+ * sources first, then the resolved AI model analyses them via structured
+ * generation — it does NOT run its own native web-search tool for this
+ * path (see research-external.ts).
  *
  * If no search provider is configured at all, this falls through to the
  * original native-grounding path (runAnthropicResearch /
@@ -184,8 +271,8 @@ export async function runResearchTask(
   executionOverride?: ModelRef | null,
 ): Promise<ResearchTaskOutcome> {
   const started = Date.now();
-  const queries = buildResearchQueries(topic);
-  const searchOutcome = await runResearchSearch(queries);
+  const researchQueries = await resolveResearchSearchQueries(topic);
+  const searchOutcome = await runResearchSearch(researchQueries);
 
   if (!searchOutcome.ok) {
     // "Never actually reached a provider" (not configured, or no FREE
@@ -201,7 +288,7 @@ export async function runResearchTask(
       result: resolutionFailure(searchOutcome.error, started),
       searchMeta: {
         provider: "BRAVE",
-        queryCount: queries.length,
+        queryCount: researchQueries.length,
         resultCount: 0,
         latencyMs: Date.now() - started,
         success: false,
@@ -210,11 +297,22 @@ export async function runResearchTask(
     };
   }
 
-  const allResults = rankSearchResults(searchOutcome.executions.flatMap((e) => e.results));
+  // Tag each raw result with which lane (OFFICIAL_PRIMARY/OFFICIAL_LEGAL/
+  // GENERAL) produced it and its rank within that query's own results
+  // (Round 4D) — used only for extraction-target selection below, before
+  // any cross-query dedup/ranking collapses that per-query identity.
+  const laneHits = tagSearchHitsByLane(searchOutcome.executions, researchQueries);
+
+  // De-duplicate before ranking (Round 4B) — the official-only and
+  // guidance-only queries can both legitimately return the same official
+  // page; it must enter the evidence manifest exactly once. This is the
+  // EVIDENCE view (everything Sol sees as SEARCH_SNIPPET/OFFICIAL_EXTRACT)
+  // — separate from extraction-target selection, which uses laneHits above.
+  const allResults = rankSearchResults(dedupeSearchResultsByUrl(searchOutcome.executions.flatMap((e) => e.results)));
   const searchLatencyMs = searchOutcome.executions.reduce((sum, e) => sum + e.latencyMs, 0);
   const searchMeta: SearchUsageMeta = {
     provider: searchOutcome.provider,
-    queryCount: queries.length,
+    queryCount: researchQueries.length,
     resultCount: allResults.length,
     latencyMs: searchLatencyMs,
     success: true,
@@ -226,8 +324,34 @@ export async function runResearchTask(
     return { result: resolutionFailure(modelResolution.error, started), searchMeta };
   }
 
-  const { labelToResult, manifestText } = buildSearchResultManifest(allResults);
-  const userMessage = buildExternalResearchUserPrompt(topic, queries, manifestText);
+  // Official source enrichment (Round 4A, lane-aware selection since
+  // Round 4D): read real page content for a few extraction-worthy
+  // primary-source URLs before handing evidence to Sol — see
+  // docs/search-router.md "Official source extraction" and "Query-aware
+  // official extraction selection". Extraction is quality enrichment, not
+  // a search-availability gate: a failure here never fails the whole
+  // Research task, it just leaves that source as a SEARCH_SNIPPET
+  // (extractOfficialSources itself never throws).
+  const officialCandidates = selectOfficialExtractionTargets(laneHits, MAX_OFFICIAL_EXTRACTS);
+  const extractionOutcome = officialCandidates.length
+    ? await extractOfficialSources(
+        officialCandidates.map((r) => r.url),
+        buildExtractionQuery(topic),
+      )
+    : { extracted: [], failed: [], latencyMs: 0 };
+  const extractedByUrl = new Map(extractionOutcome.extracted.map((e) => [e.url, e.content]));
+  if (officialCandidates.length > 0) {
+    console.info(
+      `[research] official extraction: attempted=${officialCandidates.length} succeeded=${extractedByUrl.size} failed=${extractionOutcome.failed.length} latencyMs=${extractionOutcome.latencyMs}`,
+    );
+  }
+
+  const { labelToResult, manifestText } = buildSearchResultManifest(allResults, extractedByUrl);
+  const userMessage = buildExternalResearchUserPrompt(
+    topic,
+    researchQueries.map((q) => q.query),
+    manifestText,
+  );
   const { model } = modelResolution;
   const customInstructions = await getEmployeeInstruction("researcher");
 
@@ -243,8 +367,203 @@ export async function runResearchTask(
   }
 
   return {
-    result: { ...genResult, data: buildExternalGroundedPack(genResult.data, labelToResult) },
+    result: {
+      ...genResult,
+      data: buildExternalGroundedPack(genResult.data, labelToResult, {
+        officialExtractCount: extractedByUrl.size,
+        failedExtractionCount: extractionOutcome.failed.length,
+      }),
+    },
     searchMeta,
+  };
+}
+
+/** Usage stats for the SEPARATE, independent audit call (see runResearchOptimizationTask) — null whenever the audit never ran (the content call itself failed or was never dispatched). research-actions.ts logs this as its own ai_usage_log row, since it's a genuinely separate model call from the content call `result` reflects. */
+export interface ResearchAuditUsage {
+  provider: AIProviderId;
+  modelId: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  latencyMs: number;
+  ok: boolean;
+  error: string | null;
+}
+
+/**
+ * Which category a failed optimization attempt falls into — lets
+ * research-actions.ts pick the right user-facing message without sniffing
+ * error text (fragile) or collapsing every failure into "search
+ * unavailable" (misleading — an audit-call schema error has nothing to do
+ * with search). Only meaningful when `result.ok` is false.
+ */
+export type ResearchOptimizationFailureReason = "SEARCH_UNAVAILABLE" | "AI_FAILURE";
+
+export interface ResearchOptimizationTaskOutcome {
+  result: RouterResult<OptimizedResearchPack>;
+  searchMeta: SearchUsageMeta | null;
+  auditUsage: ResearchAuditUsage | null;
+  failureReason?: ResearchOptimizationFailureReason;
+}
+
+/**
+ * B｜政策研究员's "研究优化" mode (see docs/ai-workflows.md "研究优化") —
+ * NOT a parallel research system: reuses the exact same Search Router →
+ * lane tagging → official extraction → Model Router pipeline runResearchTask
+ * uses, just with two differences: the search queries are generated from
+ * the PREVIOUS pack's low-scoring dimensions (buildOptimizationSearchQueries)
+ * instead of the fixed 3-query cold-start template, and the model is shown
+ * the previous round's full result (not just told to start fresh) via
+ * RESEARCH_OPTIMIZATION_SYSTEM_PROMPT / buildResearchOptimizationUserPrompt.
+ *
+ * Deliberately has no native-grounding fallback (unlike runResearchTask) —
+ * optimization's entire value proposition is targeted NEW evidence aimed at
+ * a specific gap; without a configured search provider there is nothing
+ * genuinely new to target the gap with, and falling back to the native
+ * Anthropic/Google web-search agent would silently re-run a completely
+ * different, un-targeted research process under the "optimization" label.
+ * research-actions.ts surfaces this as a clear, honest error instead.
+ */
+export async function runResearchOptimizationTask(
+  topic: { title: string; question: string; business: string; audience: string },
+  previousPack: {
+    summary: string;
+    keyFindings: readonly string[];
+    warnings: string;
+    confidence: ResearchConfidence;
+    scoreBreakdown: ResearchScoreBreakdown;
+  },
+  executionOverride?: ModelRef | null,
+): Promise<ResearchOptimizationTaskOutcome> {
+  const started = Date.now();
+  const searchResolution = resolveSearchProvider();
+  if (!searchResolution.ok || !isSearchProviderConfigured(searchResolution.provider.provider)) {
+    return {
+      result: resolutionFailure("优化研究需要联网搜索能力，当前未配置搜索服务提供商，无法针对性补充证据。", started),
+      searchMeta: null,
+      auditUsage: null,
+      failureReason: "SEARCH_UNAVAILABLE",
+    };
+  }
+
+  const researchQueries = buildOptimizationSearchQueries(topic, previousPack.scoreBreakdown);
+  const searchOutcome = await runResearchSearch(researchQueries);
+
+  if (!searchOutcome.ok) {
+    return {
+      result: resolutionFailure(searchOutcome.error, started),
+      searchMeta: {
+        provider: "TAVILY",
+        queryCount: researchQueries.length,
+        resultCount: 0,
+        latencyMs: Date.now() - started,
+        success: false,
+        error: searchOutcome.error,
+      },
+      auditUsage: null,
+      failureReason: "SEARCH_UNAVAILABLE",
+    };
+  }
+
+  const laneHits = tagSearchHitsByLane(searchOutcome.executions, researchQueries);
+  const allResults = rankSearchResults(dedupeSearchResultsByUrl(searchOutcome.executions.flatMap((e) => e.results)));
+  const searchLatencyMs = searchOutcome.executions.reduce((sum, e) => sum + e.latencyMs, 0);
+  const searchMeta: SearchUsageMeta = {
+    provider: searchOutcome.provider,
+    queryCount: researchQueries.length,
+    resultCount: allResults.length,
+    latencyMs: searchLatencyMs,
+    success: true,
+    error: null,
+  };
+
+  const contentModelResolution = await resolveModelForTask("RESEARCH", executionOverride);
+  if (!contentModelResolution.ok) {
+    return {
+      result: resolutionFailure(contentModelResolution.error, started),
+      searchMeta,
+      auditUsage: null,
+      failureReason: "AI_FAILURE",
+    };
+  }
+
+  const officialCandidates = selectOfficialExtractionTargets(laneHits, MAX_OFFICIAL_EXTRACTS);
+  const extractionOutcome = officialCandidates.length
+    ? await extractOfficialSources(
+        officialCandidates.map((r) => r.url),
+        buildExtractionQuery(topic),
+      )
+    : { extracted: [], failed: [], latencyMs: 0 };
+  const extractedByUrl = new Map(extractionOutcome.extracted.map((e) => [e.url, e.content]));
+
+  const { labelToResult, manifestText } = buildSearchResultManifest(allResults, extractedByUrl);
+  const contentUserMessage = buildResearchOptimizationUserPrompt(
+    topic,
+    previousPack,
+    researchQueries.map((q) => q.query),
+    manifestText,
+  );
+  const { model: contentModel } = contentModelResolution;
+  const customInstructions = await getEmployeeInstruction("researcher");
+
+  const contentResult = await dispatchStructuredAnyProvider(contentModel.provider, contentModel.modelId, {
+    systemPrompt: appendCustomInstructions(buildSkillPrompt("researcher", RESEARCH_OPTIMIZATION_SYSTEM_PROMPT), customInstructions),
+    userMessage: contentUserMessage,
+    schema: ResearchOptimizationContentClaimSchema,
+    maxTokens: 8000,
+  });
+
+  if (!contentResult.ok || !contentResult.data) {
+    return { result: { ...contentResult, data: null }, searchMeta, auditUsage: null, failureReason: "AI_FAILURE" };
+  }
+
+  const retrievalMeta = { officialExtractCount: extractedByUrl.size, failedExtractionCount: extractionOutcome.failed.length };
+  const optimizedContent = buildOptimizedContent(contentResult.data, labelToResult, retrievalMeta);
+
+  // Independent audit — resolved separately from CONTENT above (its own
+  // Model Router entry, RESEARCH_AUDIT), so it can land on a different
+  // provider and never shares the content call's context.
+  const auditModelResolution = await resolveModelForTask("RESEARCH_AUDIT", null);
+  if (!auditModelResolution.ok) {
+    return {
+      result: resolutionFailure(`研究内容已生成，但无法进行独立复核评分：${auditModelResolution.error}`, started),
+      searchMeta,
+      auditUsage: null,
+      failureReason: "AI_FAILURE",
+    };
+  }
+
+  const { model: auditModel } = auditModelResolution;
+  const auditUserMessage = buildResearchAuditUserPrompt(topic, optimizedContent, manifestText);
+  const auditResult = await dispatchStructuredAnyProvider(auditModel.provider, auditModel.modelId, {
+    systemPrompt: buildSkillPrompt("researcher", RESEARCH_AUDIT_SYSTEM_PROMPT),
+    userMessage: auditUserMessage,
+    schema: ResearchAuditClaimSchema,
+    maxTokens: 2000,
+  });
+
+  const auditUsage: ResearchAuditUsage = {
+    provider: auditResult.provider,
+    modelId: auditResult.modelId,
+    inputTokens: auditResult.inputTokens,
+    outputTokens: auditResult.outputTokens,
+    latencyMs: auditResult.latencyMs,
+    ok: auditResult.ok,
+    error: auditResult.error,
+  };
+
+  if (!auditResult.ok || !auditResult.data) {
+    return {
+      result: { ...contentResult, ok: false, data: null, error: `研究内容已生成，但独立复核评分失败：${auditResult.error}` },
+      searchMeta,
+      auditUsage,
+      failureReason: "AI_FAILURE",
+    };
+  }
+
+  return {
+    result: { ...contentResult, data: combineAuditedOptimizationPack(optimizedContent, auditResult.data) },
+    searchMeta,
+    auditUsage,
   };
 }
 
@@ -498,7 +817,10 @@ export async function runTopicDiscoveryTask(
     return resolutionFailure(searchOutcome.error, started);
   }
 
-  const allResults = searchOutcome.executions.flatMap((e) => e.results);
+  // Round 3C: round-robin pooled across all 5 AUTO-discovery editorial
+  // lanes (directed search's single execution is unaffected), deduped by
+  // normalized URL — see poolDiscoveryResults in topic-discovery.ts.
+  const allResults = poolDiscoveryResults(searchOutcome.executions);
   const labeled = allResults.map((r, i) => ({
     label: `N${i + 1}`,
     title: r.title,
@@ -511,12 +833,27 @@ export async function runTopicDiscoveryTask(
   const modelResolution = await resolveModelForTask("TOPIC_DISCOVERY", executionOverride);
   if (!modelResolution.ok) return resolutionFailure(modelResolution.error, started);
 
+  // Round 3D: AUTO and DIRECTED use different structured-output schemas —
+  // this is what actually forces AUTO to return 5-6 candidates when
+  // evidence supports it, instead of relying on prompt wording alone
+  // (which a real production run showed the model happily undershooting).
+  // Directed search keeps its existing 0-3, never-forced schema
+  // unconditionally. See docs/search-router.md-style rationale in
+  // topic-discovery.ts's schema comments.
+  const trimmedKeyword = keyword?.trim();
+  const isSparse = !trimmedKeyword && !hasSufficientAutoEvidence(allResults.length, searchOutcome.executions.map((e) => e.results.length));
+  const schema = trimmedKeyword
+    ? DirectedTopicDiscoveryResultSchema
+    : isSparse
+      ? AutoSparseTopicDiscoveryResultSchema
+      : AutoTopicDiscoveryResultSchema;
+
   const { model } = modelResolution;
   const customInstructions = await getEmployeeInstruction("planner");
   const genResult = await dispatchStructuredAnyProvider(model.provider, model.modelId, {
     systemPrompt: appendCustomInstructions(buildSkillPrompt("planner", TOPIC_DISCOVERY_SYSTEM_PROMPT), customInstructions),
-    userMessage: buildTopicDiscoveryUserPrompt(manifestText, keyword),
-    schema: TopicDiscoveryResultSchema,
+    userMessage: buildTopicDiscoveryUserPrompt(manifestText, keyword, { sparse: isSparse }),
+    schema,
     maxTokens: 4000,
   });
 

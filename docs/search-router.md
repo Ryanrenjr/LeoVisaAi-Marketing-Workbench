@@ -13,13 +13,27 @@ Provider → Model. This adds a parallel, independent abstraction for
 Research specifically:
 
 ```
-Research Task → Search Router → Search Provider → Retrieved Sources → Model Router → AI Model → Research Pack
+Research Task → Query Planner (Round 4C) → Search Router → Search Provider → Retrieved Sources → Model Router → AI Model → Research Pack
 ```
 
 Do not write code that couples a search provider to a specific AI model
 (`GeminiResearchAgent`, `TavilyResearchAgent`). `src/lib/search/` knows
-nothing about AI models; `src/lib/ai/router.ts` orchestrates both
-independently for the RESEARCH task.
+nothing about AI models; `src/lib/ai/router.ts` orchestrates all three —
+Query Planner, Search, and analysis — independently for the RESEARCH
+task.
+
+## What the Query Planner is (and is very much not)
+
+**RESEARCH_QUERY_PLANNING** is a narrow, separate task type resolved
+through the same Model Router as everything else — production default
+`OPENAI`/`gpt-5.6-terra` (see `docs/model-router.md`), never a
+hard-coded provider. Its only job: rewrite the Chinese (or bilingual)
+research topic into three English retrieval queries, before Search ever
+runs. It does **not** research, browse, cite evidence, judge policy
+status, or produce anything resembling a Research Pack — see
+`research-query-planner.ts`'s `RESEARCH_QUERY_PLANNER_SYSTEM_PROMPT` for
+the exact narrow contract. See "Research Query Planner" below for why it
+exists and how it fails safely.
 
 ## Current development stack (as of 2026-08-20)
 
@@ -55,19 +69,31 @@ src/lib/search/
   router.ts               async orchestration: resolves a provider, runs every
                            query, classifies failures — server-only
   search-health.ts         ADMIN-only real connectivity check — server-only
+  extraction.ts            (Round 4) the official-source-extraction seam the
+                            AI layer goes through — server-only
   providers/
-    tavily-provider.ts       real Tavily Search API implementation — server-only
+    tavily-provider.ts       real Tavily Search + Extract API implementation — server-only
     brave-provider.ts        real Brave Search API implementation — server-only
 
 src/lib/ai/
-  research-queries.ts      pure: derives up to 3 search queries from topic context,
-                            ranks results toward primary sources
+  research-query-planner.ts (Round 4C) pure: schema/prompt/conversion for the
+                             narrow Query Planner AI call — no network, no Skill
+  research-queries.ts      pure: derives up to 3 deterministic search queries
+                            (the fallback path) from topic context, ranks
+                            results toward primary sources, and (Round 4B)
+                            selects which few official URLs are worth extracting
   research-external.ts      pure: the external-search Research prompt, Zod schema,
-                             label-manifest (S1/S2...), and anti-hallucination
-                             grounding — mirrors content-schemas.ts's pattern
-  router.ts                 (extended) runResearchTask() tries the Search Router
-                             first, dispatching the resolved AI model via
-                             structured (non-native-grounding) generation
+                             label-manifest (S1/S2... with an OFFICIAL_EXTRACT/
+                             SEARCH_SNIPPET evidence type each), and
+                             anti-hallucination grounding — mirrors
+                             content-schemas.ts's pattern
+  router.ts                 (extended) runResearchTask() tries the Query
+                             Planner, falls back to deterministic queries on
+                             any failure, runs the Search Router, then
+                             (Round 4B) extracts real content for a
+                             few top official sources, then dispatches the
+                             resolved AI model via structured
+                             (non-native-grounding) generation
 ```
 
 No file outside `src/lib/search/` and `src/lib/ai/research-*.ts`/`router.ts`
@@ -167,38 +193,288 @@ of running its own search tool:
    manifest, and the system prompt explicitly forbids answering from
    memory, inventing rules/dates/paragraph numbers/URLs.
 
-### Query strategy
+### Research Query Planner (Round 4C)
 
-`buildResearchQueries()` derives **up to 3** queries (a deliberately tight
-smoke-test-stage budget, not a research-depth ceiling) from topic title,
-question, business, and audience, via a **deterministic template** — not
-an extra LLM call, so it never spends model quota deciding what to search
-for. Results across all queries are pooled and re-ranked
-(`rankSearchResults`) to put `gov.uk`/`legislation.gov.uk`/
-`parliament.uk`/`gov.scot`/`immigrationadviceauthority.gov.uk` results
-first, **without discarding secondary sources** — they can still help the
-model triangulate.
+Round 4B's hard `include_domains` filter genuinely restricts search to
+official domains, but a re-test of the Returning Resident case showed
+that alone still isn't enough: Tavily's own semantic ranking *within*
+that domain-restricted set didn't favor the actually relevant GOV.UK page
+for the Chinese-language question — it surfaced unrelated `gov.scot`
+documents instead — while the same page was directly findable with a
+well-phrased **English** query. Rather than translate with a fixed
+dictionary or a query-rewrite regex, this round adds one narrow AI call:
 
-Tavily's native `include_domains` parameter is wired into
-`tavily-provider.ts` (`RunTavilySearchOptions.includeDomains`) but not
-currently applied by default — its "prioritize vs. hard-filter" behavior
-wasn't independently confirmed, and a hard filter risks silently zeroing
-out results for a query where the real answer lives outside the listed
-domains. Text-embedded hints (`"${base} gov.uk"`) plus post-retrieval
-ranking achieve the same practical prioritization without that risk. Safe
-to revisit once Tavily's exact `include_domains` semantics are confirmed.
+```
+Topic (Chinese/bilingual) → Query Planner (Terra) → 3 English search queries → Search Router → ... → Research Model (Sol)
+```
 
-### The snippet-only limitation
+`research-query-planner.ts` — pure schema/prompt/conversion, no network,
+no "server-only" import:
 
-Tavily (like every search API here) returns titles and short content
-snippets, not the full page. There is no page-fetching step this
-milestone — deliberately: a safe, sandboxed fetcher (HTTP/HTTPS only,
-size/timeout limits, no SSRF, text/html only, no JS execution, no headless
-browser) was assessed as unnecessary complexity for the current
-smoke-test milestone. Instead, `EXTERNAL_RESEARCH_SYSTEM_PROMPT`
-explicitly instructs the model not to claim it has read a full document,
-and `buildExternalGroundedPack()` **always** appends a disclosure note to
-`warnings` regardless of confidence: "本次研究基于搜索结果标题与摘要生成，AI 未完整阅读原始网页全文".
+- `ResearchQueryPlanSchema` — exactly three required, non-empty,
+  length-capped string fields: `official_query`, `legal_query`,
+  `general_query`. Nothing else — no `analysis`/`reasoning`/`sources`/
+  `confidence`/`route`/`rule_number`/etc.
+- `RESEARCH_QUERY_PLANNER_SYSTEM_PROMPT` — a deliberately narrow contract:
+  English-only output, preserve the real relationship in the question
+  (comparison/causal/eligibility/absence/exception/fee-logic/etc.), never
+  answer the question or output a legal conclusion, never invent a
+  URL or an Immigration Rules paragraph number, and never treat the
+  user's own stated premise (e.g. a specific £ figure) as verified fact —
+  it's a direction to investigate, not a confirmed claim. No hard-coded
+  Chinese→English dictionary — official terminology comes from the
+  model's own domain knowledge.
+- `planToResearchSearchQueries()` — converts the validated plan into the
+  same 3-query `ResearchSearchQuery[]` shape Round 4B already uses:
+  `official_query`/`legal_query` restricted to `PRIMARY_SOURCE_DOMAINS`,
+  `general_query` unrestricted. Still exactly 3 searches, never 4 or 5.
+
+**Resolved through the Model Router like any other task** — task type
+`RESEARCH_QUERY_PLANNING`, employee `researcher`, production default
+`OPENAI`/`gpt-5.6-terra` (see `docs/model-router.md`). The planner does
+**not** use `buildSkillPrompt("researcher", ...)` — it's infrastructure,
+not B｜政策研究员's Skill-governed behavior; B's formal research call
+(`RESEARCH`/Sol) still gets the full `GLOBAL_SKILL` +
+`RESEARCHER_SKILL` + `EXTERNAL_RESEARCH_SYSTEM_PROMPT` stack, unchanged.
+
+**Fails safe, never blocks Research**: any failure — no model resolves,
+the generation call itself errors, or the output fails
+`ResearchQueryPlanSchema` validation (handled automatically by
+`dispatchStructuredAnyProvider`'s existing Zod check) — falls back to
+Round 4B's deterministic `buildResearchSearchQueries(topic)`, logged via
+`console.info("[research] query planning fallback used...")`. It is never
+a second point of failure for the whole Research task. It's also skipped
+entirely (no wasted AI call) when no search provider is even configured
+— see `resolveResearchSearchQueries()` in `router.ts`.
+
+**Cost**: exactly one extra AI call on the success path — a normal
+Research execution is now 2 AI calls total (Query Planner + Sol), never
+3. Topic Discovery (Employee A) is completely unaffected; it never
+resolves `RESEARCH_QUERY_PLANNING`.
+
+### Query strategy — official-first Research Search (Round 4B)
+
+`buildResearchSearchQueries()` in `research-queries.ts` derives **up to
+3** search queries — the deterministic fallback used when the Query
+Planner isn't available or fails — still a template, never an extra LLM
+call — but Round 4B changed *how* "search official sources" is expressed.
+
+**What broke the old approach.** Round 4 originally expressed "prefer
+official domains" as a text suffix — `"${base} gov.uk"`,
+`"${base} Home Office guidance ${audience}"`. A real production run
+(Returning Resident case, 2026-09) showed this failing on a
+Chinese-language question: Tavily matched the literal string "gov.uk"
+and returned `https://www.gov.uk`'s bare homepage, even though the real
+page (`gov.uk/returning-resident-visa`) existed and was directly
+findable — just not via that diluted text query.
+
+**The fix**: express "official domain" through the Search Provider's own
+domain-filtering capability (Tavily's `include_domains`, wired into
+`tavily-provider.ts`'s `RunTavilySearchOptions.includeDomains` since
+Round 4A but not applied until now) instead of a text keyword. Each
+search query is now a `ResearchSearchQuery` (`{ query, includeDomains? }`,
+`search/types.ts`) rather than a bare string.
+
+**`include_domains` alone is a soft ranking preference, not a filter —
+confirmed live.** Tavily's own API reference documents `include_domains`
+as a *boost* by default; it only becomes a hard filter when
+`include_domains_mode: "filter"` is also sent (`"boost"` is the
+documented default otherwise). A real test with `include_domains:
+["gov.uk"]` and no mode set still returned results from unrelated
+commercial law-firm domains — confirming this live, not just from the
+docs. `runTavilySearch` now always sends `include_domains_mode: "filter"`
+alongside `include_domains` whenever any are given.
+
+The three queries:
+
+1. **Official primary search** — the real question/title itself, with no
+   suffix at all, restricted to `PRIMARY_SOURCE_DOMAINS` via
+   `includeDomains`.
+2. **Official legal/guidance search** — the same topic plus a light
+   legal-retrieval-intent phrase ("Immigration Rules"), also restricted
+   to `PRIMARY_SOURCE_DOMAINS` — catches cases where the bare question
+   doesn't match official wording but a legal-intent phrasing does.
+3. **General secondary search** — the same question, no domain
+   restriction at all — professional commentary, common misconceptions,
+   news background. Still real evidence, never allowed to outrank an
+   official extract (see the evidence hierarchy above).
+
+Results across all three are pooled, **de-duplicated by URL**
+(`dedupeSearchResultsByUrl` — queries 1 and 2 can legitimately return the
+same official page) and re-ranked (`rankSearchResults`) — primary domains
+first, **and, within the primary group, a specific page ranks ahead of a
+bare domain homepage** (`isBareHomepage`: `pathname === "/"` or empty —
+generic, not hard-coded to any one topic's URL; a homepage is still kept,
+never discarded, for when nothing more specific was found). Secondary
+sources are never discarded — they can still help the model triangulate.
+
+`runResearchSearch()` (`search/router.ts`) accepts a plain `string` or a
+`ResearchSearchQuery` object per query — Topic Discovery (Employee A,
+`buildDiscoveryQueries`) is completely unaffected and still only ever
+passes plain strings. Brave has no domain-filtering support in this app;
+`includeDomains` on a Brave-routed query is genuinely ignored (not
+pretended to be honored) — see `router.test.ts`'s explicit coverage.
+
+This round deliberately did **not** add a translation step, a fixed
+Chinese↔English immigration-term dictionary, or a second AI call to plan
+queries — the goal was to test whether Tavily's own (correctly
+hard-filtered) domain restriction, combined with the real (often
+bilingual/Chinese) question text, is already enough.
+
+**Finding (Returning Resident case, re-tested with the corrected hard
+filter): official domain filtering alone is insufficient.** With
+`include_domains_mode: "filter"` genuinely restricting Search 1/2 to
+`PRIMARY_SOURCE_DOMAINS`, the Chinese-language query still did not
+surface `gov.uk/returning-resident-visa` — it surfaced unrelated
+`gov.scot` documents (refugee integration strategy, Scottish
+independence citizenship papers) instead, because Tavily's own semantic
+ranking *within* the domain-restricted set didn't favor the actually
+relevant page for this query's wording. The same page IS directly
+findable with a well-phrased **English** query. This is reported as a
+known limitation rather than silently patched with a translation step,
+per the explicit decision to stop and report here rather than add a
+query-planning agent, translation agent, or query-rewrite LLM this round.
+
+### Official source extraction (Round 4)
+
+Tavily Search alone (like every search API here) only ever returns a
+title and a short content snippet, not the page itself. Before Round 4,
+that meant the analysis model reasoned entirely from snippets, even for
+questions GOV.UK/Immigration Rules/Home Office guidance already answers
+directly — a real production case found the model landing on `LOW
+confidence, 59/100` for exactly this reason, since it genuinely hadn't
+been given anything beyond a snippet to work with.
+
+Round 4 adds one enrichment step between Search and the Model Router:
+
+```
+Research Task → Search Router (discover sources) → Official Source Extraction (read a few top primary sources' real content) → Model Router → AI Model → Research Pack
+```
+
+**Search discovers. Extraction reads. The model only ever analyses
+what was actually retrieved this run** — it is never told, and never
+assumes, that "official extraction always happens" or "every source gets
+read." Concretely:
+
+1. `research-queries.ts`'s `selectOfficialExtractionTargets()` (Round 4D —
+   see "Query-aware official extraction selection" below) picks up to
+   `MAX_OFFICIAL_EXTRACTS` (**3**) distinct, deduplicated URLs — reusing
+   `isPrimarySourceUrl()` (no second official-domain list) so only
+   `gov.uk`/`legislation.gov.uk`/`parliament.uk`/`gov.scot`/
+   `immigrationadviceauthority.gov.uk` results are ever candidates.
+   Commercial immigration sites, forums, and news outlets are never
+   extracted — only ever discovered and passed through as snippets.
+2. `src/lib/search/extraction.ts`'s `extractOfficialSources(urls, query)`
+   is the *search-layer* seam the AI/business layer goes through instead
+   of importing `tavily-provider.ts` directly (mirrors how `router.ts`
+   is the only seam for search itself). It defensively re-validates
+   https-only + the same cap + dedupe before calling Tavily — no
+   localhost/private-network/arbitrary-scheme URL, and never more than 3
+   real Search Router results, ever reach the extraction call.
+3. That calls **Tavily's Extract endpoint** (`POST
+   https://api.tavily.com/extract`, confirmed against Tavily's official
+   API reference on 2026-09-15) via `tavily-provider.ts`'s
+   `runTavilyExtract()` — a separate operation from `runTavilySearch()`,
+   never folded into it. `query` (Tavily's own "user intent for
+   reranking extracted content chunks") is built by
+   `buildExtractionQuery()` from the real topic's title/question/business
+   — never a hard-coded, scenario-specific term list — so the returned
+   content is relevance-ranked toward the actual research question, not
+   just the top of the page. A per-source character cap
+   (`MAX_CHARS_PER_SOURCE` in `extraction.ts`) is a defensive backstop,
+   not the primary quality mechanism — `chunks_per_source` is.
+4. `research-external.ts`'s `buildSearchResultManifest()` now tags every
+   manifest entry with an **Evidence type**: `OFFICIAL_EXTRACT` (real
+   content came back for that URL) or `SEARCH_SNIPPET` (it didn't —
+   extraction wasn't attempted for it, or it failed). The two are never
+   conflated in the manifest text sent to the model.
+5. `EXTERNAL_RESEARCH_SYSTEM_PROMPT` tells the model it may reason
+   directly from an `OFFICIAL_EXTRACT` entry — but only about what is
+   actually shown, never a section/exception/detail that isn't present in
+   it, since an "extract" may itself be a relevance-ranked excerpt rather
+   than the complete document. `SEARCH_SNIPPET` entries keep the original
+   conservative treatment (partial, no inferred exceptions, no invented
+   paragraph numbers). An explicit **evidence hierarchy** (legislation >
+   Home Office guidance > GOV.UK guidance > other official material >
+   professional secondary material > commercial immigration sites >
+   social/forums) means an official extract always outweighs a commercial
+   site's explanation of the same question — a QC Immigration blog post
+   can no longer out-argue what a GOV.UK extract directly shows.
+   Confidence is scored against evidence *level*, not a fixed assumption
+   about what this system can retrieve: several consistent
+   `OFFICIAL_EXTRACT` entries can justify HIGH even with little secondary
+   material; snippet-only evidence stays conservative, same as before.
+6. `buildExternalGroundedPack()`'s disclosure note in `warnings` now
+   reflects real retrieval state instead of a fixed claim: "未读取官方页面
+   正文" when nothing was extracted this run, or "已读取 N 个官方来源中与
+   本题相关的提取内容；其余来源仍可能仅为搜索摘要" when some were — plus a
+   separate note when an extraction attempt genuinely failed for a source
+   (extraction failure never fails the whole Research task; that source
+   just stays a `SEARCH_SNIPPET`).
+
+**What does NOT change:** `GroundedSource` (the row shape written toward
+`research_sources`) still only ever stores `title`/`url`/`note` (the
+short snippet)/`pageAge` — real extracted page content is used once, for
+this one Sol/Gemini call, and is never persisted anywhere (no
+`research_sources` column, no `content_assets`, no activity log). Label
+grounding (`S1`/`S2`... citation, hallucinated-label dropping) is
+unchanged. Extraction-target selection is a deterministic, rank-based
+step plus one Tavily Extract call, never a second model call, reranker,
+or embedding step — it costs zero extra AI calls (a normal Research
+execution is 2 AI calls total: Query Planner + Sol, see "Research Query
+Planner" above).
+
+A safe, general-purpose page fetcher (arbitrary URL, arbitrary domain)
+remains explicitly out of scope — extraction only ever runs against URLs
+that came from a real Search Router result for *this* run, capped at 3,
+deduplicated, https-only.
+
+### Query-aware official extraction selection (Round 4D)
+
+The original selector (`selectOfficialSourcesForExtraction`, Round 4A)
+picked the first `MAX_OFFICIAL_EXTRACTS` primary-source URLs from the
+pooled, cross-query-deduplicated result list, in pooling order. A real
+production case exposed the flaw: `OFFICIAL_PRIMARY` (query 1, always
+pooled first) returned 3 weakly-relevant Parliament petition pages, while
+`OFFICIAL_LEGAL` (query 2) found the single most relevant page — the
+exact target GOV.UK guidance page — but all 3 extraction slots had
+already gone to query 1's results purely because of pooling order, not
+relevance.
+
+**The fix**: `research-queries.ts`'s `tagSearchHitsByLane()` zips each
+raw search result with which of the 3 Research Search lanes
+(`OFFICIAL_PRIMARY` / `OFFICIAL_LEGAL` / `GENERAL`) produced it and its
+rank within that lane's own results — transient, execution-only metadata
+carried on `ResearchSearchQuery.lane` (`search/types.ts`), never
+persisted. `selectOfficialExtractionTargets()` then applies a
+deterministic "coverage before depth" strategy — no relevance AI, no
+embeddings, no new domain-authority scoring beyond what
+`isPrimarySourceUrl` already does:
+
+1. The best (specific-page-first, then lowest in-lane rank) valid
+   candidate from `OFFICIAL_LEGAL` — a Research pipeline's Home
+   Office guidance / Immigration Rules / statutory material is worth the
+   first extraction opportunity for *every* topic (Student Visa, Skilled
+   Worker, EUSS, Citizenship, ...), not a Returning-Resident-specific
+   rule.
+2. The best valid candidate from `OFFICIAL_PRIMARY`.
+3. Any remaining slots: the next-best remaining candidates from
+   `OFFICIAL_LEGAL` + `OFFICIAL_PRIMARY` combined.
+4. Only if those two lanes together can't fill every slot: fall back to
+   `GENERAL`'s own primary-source results (never its commercial ones —
+   `isPrimarySourceUrl` already excludes those; a `GENERAL` lane's
+   Free Movement blog post is never an extraction candidate).
+
+Homepage demotion (a specific page always outranks a bare official
+homepage) and cross-lane URL dedup (the same page found by both official
+queries is only ever extracted once) both still apply, now scoped inside
+this lane-aware selection instead of the old flat one.
+
+**What does NOT change**: this only affects which ~3 URLs get a real
+page-content fetch. Every real search result across all 3 lanes still
+enters the Evidence Manifest as `OFFICIAL_EXTRACT` or `SEARCH_SNIPPET` —
+extraction-target selection and evidence coverage are separate concerns;
+narrowing the former never narrows the latter.
 
 ## Search usage logging
 
@@ -267,12 +543,8 @@ shape, which assumes a pure retrieval step.
 
 ## Future improvements (explicitly out of scope)
 
-- A conservative, sandboxed official-page fetcher for higher-confidence
-  claims (see "The snippet-only limitation" above).
 - A persisted `search_routing_config` default (mirrors `model_routing_config`)
   and a UI control for the task-level search-provider override (would let
   ADMIN choose Brave for one run without a code-level override).
-- Confirming Tavily's `include_domains` prioritize-vs-filter semantics and
-  wiring it in if safe.
 - Exa, or any other additional Search Provider.
 - Automatic full-page verification, vector search/RAG, a search-result cache.

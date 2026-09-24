@@ -76,6 +76,11 @@ export const TOPIC_ACTIVITY_LABEL: Record<TopicActivityType, string> = {
   full_article_generated: "生成了公众号完整文章",
   content_revised: "生成了修改版内容",
   content_revision_failed: "内容修改失败",
+  research_optimization_started: "开始优化研究",
+  research_optimization_completed: "完成优化研究",
+  research_optimization_failed: "优化研究失败",
+  research_topic_revision_suggested: "研究建议修改选题",
+  research_topic_revision_accepted: "采用了选题修改建议",
 };
 
 export const CONTENT_PLATFORM_LABEL: Record<ContentPlatform, string> = {

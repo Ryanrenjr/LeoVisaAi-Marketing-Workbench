@@ -23,6 +23,38 @@ export interface SearchResult {
   provider: SearchProviderId;
 }
 
+/**
+ * One query for the Search Router (Round 4B). A plain `string` is a
+ * domain-unrestricted search — unchanged, and still all Topic Discovery
+ * (Employee A) ever passes. An object additionally restricts the search
+ * to specific domains via the provider's own domain-filtering capability
+ * (Tavily's `include_domains`) — expressing "search official domains"
+ * through the Search Provider itself instead of appending a domain name
+ * as a text keyword (which a real production run showed just matches the
+ * bare domain string rather than finding a relevant page on it). A
+ * provider without domain-filtering support ignores `includeDomains`
+ * rather than fabricating support for it — see docs/search-router.md
+ * "Official-first Research Search".
+ */
+/**
+ * Which of the 3 Research Search queries a result came from (Round 4D) —
+ * transient execution-time metadata only, never persisted. Lets
+ * extraction-target selection give OFFICIAL_PRIMARY and OFFICIAL_LEGAL
+ * each a fair shot at the limited extraction budget instead of whichever
+ * query happens to be pooled first winning by accident. See
+ * docs/search-router.md "Query-aware official extraction selection".
+ */
+export type ResearchSearchLane = "OFFICIAL_PRIMARY" | "OFFICIAL_LEGAL" | "GENERAL";
+
+export interface ResearchSearchQuery {
+  query: string;
+  includeDomains?: readonly string[];
+  /** Optional — set by buildResearchSearchQueries / planToResearchSearchQueries so extraction selection knows which lane a query belongs to. Absent for Topic Discovery's plain-string queries, which never use lanes. */
+  lane?: ResearchSearchLane;
+}
+
+export type ResearchSearchInput = string | ResearchSearchQuery;
+
 export interface SearchExecutionResult {
   provider: SearchProviderId;
   query: string;

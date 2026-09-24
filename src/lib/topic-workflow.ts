@@ -64,3 +64,30 @@ export function isAtOrPastStage(status: TopicStatus, milestone: TopicStatus): bo
   const milestoneIndex = PIPELINE_ORDER.indexOf(milestone);
   return statusIndex !== -1 && milestoneIndex !== -1 && statusIndex >= milestoneIndex;
 }
+
+/**
+ * A research pack is grounded in the exact title/question/audience/
+ * business it was researched against — B literally searches for and
+ * writes about that specific framing. Live audit finding: changing any of
+ * these four fields (via updateTopic, or via B's own
+ * acceptSuggestedTopicRevision) while a pack already sits at
+ * RESEARCH_READY left that pack approvable even though it now describes a
+ * topic that no longer exists — Pack A (research on "Topic A") could be
+ * approved onto "Topic B" just because nothing forced a re-research.
+ *
+ * `content_pillar`/`priority`/`topic_score` deliberately excluded — those
+ * don't change what needs to be researched, only how the topic is
+ * categorized/prioritized, so editing them alone must never invalidate an
+ * otherwise-still-accurate research pack.
+ */
+export function changesInvalidateResearch(
+  before: { title: string; question: string; audience: string; business: string },
+  after: { title: string; question: string; audience: string; business: string },
+): boolean {
+  return (
+    before.title !== after.title ||
+    before.question !== after.question ||
+    before.audience !== after.audience ||
+    before.business !== after.business
+  );
+}

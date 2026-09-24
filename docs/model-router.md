@@ -33,6 +33,7 @@ instruction.
 |---|---|---|
 | `TOPIC_PLANNING` | A 选题策划员 | structured output (not wired to any business logic yet — see "What's prepared but not built" below) |
 | `TOPIC_DISCOVERY` | A 选题策划员 | structured output — real news search (`src/lib/ai/topic-discovery.ts`) → candidate topics, never auto-written to `topics` |
+| `RESEARCH_QUERY_PLANNING` | B 政策研究员 (infrastructure, not the Skill-governed role) | structured output — Round 4C's narrow Query Planner: rewrites the topic into English search queries before Search runs; never researches, cites, or answers anything. Does NOT use `buildSkillPrompt("researcher", ...)`. See `docs/search-router.md` "Research Query Planner" |
 | `RESEARCH` | B 政策研究员 | structured output only — see "RESEARCH's capability requirement" below, the hard `supportsWebSearch` gate applies only to the native-grounding fallback, not the default Search Router path |
 | `VIDEO_WRITING` / `VIDEO_REVISION` | C 内容编辑 | structured output |
 | `XIAOHONGSHU_WRITING` / `XIAOHONGSHU_REVISION` | D 小红书文案员 | structured output |
@@ -188,17 +189,21 @@ Development Mode state, and the same free-model privacy notice as
 
 Persisted in `model_routing_config` — bootstrapped by
 `supabase/migrations/0032_model_routing_defaults_seed.sql` (`on conflict
-do nothing`, fresh-environment only) and brought to the current values by
+do nothing`, fresh-environment only), brought to the Round 2 values by
 `supabase/migrations/0034_model_routing_active_defaults.sql` (`on
 conflict do update` — an intentional change to already-configured
-production values, not just a bootstrap). An ADMIN can still override any
-of these in `/admin/ai-models`; this table is the deliberate product
-default, not a hard-coded restriction.
+production values, not just a bootstrap), and given `RESEARCH_QUERY_PLANNING`
+its first default by `supabase/migrations/0035_model_routing_research_query_planning.sql`
+(Round 4C — written but **not yet applied** to the live database; see
+that migration's own comment). An ADMIN can still override any of these
+in `/admin/ai-models`; this table is the deliberate product default, not
+a hard-coded restriction.
 
 | Task type | Provider / Model |
 |---|---|
 | `TOPIC_DISCOVERY` | OPENAI / `gpt-5.6-terra` |
-| `RESEARCH` | OPENAI / `gpt-5.6-sol` (+ Search Router — see above) |
+| `RESEARCH_QUERY_PLANNING` | OPENAI / `gpt-5.6-terra` (Round 4C — migration not yet applied) |
+| `RESEARCH` | OPENAI / `gpt-5.6-sol` (+ Query Planner + Search Router — see `docs/search-router.md`) |
 | `VIDEO_WRITING` / `VIDEO_REVISION` | OPENAI / `gpt-5.6-terra` |
 | `XIAOHONGSHU_WRITING` / `XIAOHONGSHU_REVISION` | OPENAI / `gpt-5.6-terra` |
 | `XIAOHONGSHU_PAGES_PLANNING` / `XIAOHONGSHU_PAGES_REVISION` | OPENAI / `gpt-5.6-terra` |

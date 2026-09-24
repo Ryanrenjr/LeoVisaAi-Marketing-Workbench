@@ -129,6 +129,45 @@ describe("runResearchSearch — Tavily (Development Mode default)", () => {
     expect(runTavilySearchMock).toHaveBeenCalledTimes(1);
     expect(runBraveSearchMock).not.toHaveBeenCalled();
   });
+
+  // Round 4B — official-first Research Search: a query can now be an
+  // object carrying includeDomains, not just a plain string.
+  it("passes includeDomains through to Tavily when a query object is given", async () => {
+    runTavilySearchMock.mockResolvedValueOnce({
+      provider: "TAVILY",
+      query: "q1",
+      results: [],
+      latencyMs: 5,
+      success: true,
+      error: null,
+    });
+    await runResearchSearch([{ query: "q1", includeDomains: ["gov.uk", "legislation.gov.uk"] }]);
+    expect(runTavilySearchMock).toHaveBeenCalledWith("q1", { includeDomains: ["gov.uk", "legislation.gov.uk"] });
+  });
+
+  it("still works with a plain string query (no includeDomains) — Topic Discovery's existing calls are unaffected", async () => {
+    runTavilySearchMock.mockResolvedValueOnce({
+      provider: "TAVILY",
+      query: "q1",
+      results: [],
+      latencyMs: 5,
+      success: true,
+      error: null,
+    });
+    await runResearchSearch(["q1"]);
+    expect(runTavilySearchMock).toHaveBeenCalledWith("q1", undefined);
+  });
+
+  it("mixes plain-string and includeDomains queries in the same call", async () => {
+    runTavilySearchMock
+      .mockResolvedValueOnce({ provider: "TAVILY", query: "official", results: [], latencyMs: 5, success: true, error: null })
+      .mockResolvedValueOnce({ provider: "TAVILY", query: "general", results: [], latencyMs: 5, success: true, error: null });
+
+    await runResearchSearch([{ query: "official", includeDomains: ["gov.uk"] }, "general"]);
+
+    expect(runTavilySearchMock).toHaveBeenNthCalledWith(1, "official", { includeDomains: ["gov.uk"] });
+    expect(runTavilySearchMock).toHaveBeenNthCalledWith(2, "general", undefined);
+  });
 });
 
 describe("runResearchSearch — Brave (available but not preferred; requires explicit override)", () => {
@@ -169,5 +208,20 @@ describe("runResearchSearch — Brave (available but not preferred; requires exp
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.errorCode).toBe("SEARCH_RATE_LIMITED");
     expect(runBraveSearchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("genuinely ignores includeDomains rather than pretending to support domain filtering (Brave has no such capability in this app)", async () => {
+    runBraveSearchMock.mockResolvedValueOnce({
+      provider: "BRAVE",
+      query: "q1",
+      results: [],
+      latencyMs: 5,
+      success: true,
+      error: null,
+    });
+    await runResearchSearch([{ query: "q1", includeDomains: ["gov.uk"] }], "BRAVE");
+    // runBraveSearch's signature has no domain-filtering parameter at all —
+    // it's called with just the query text, exactly as for a plain string query.
+    expect(runBraveSearchMock).toHaveBeenCalledWith("q1");
   });
 });

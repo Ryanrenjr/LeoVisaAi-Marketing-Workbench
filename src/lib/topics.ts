@@ -199,6 +199,27 @@ export async function getLatestResearchPack(topicId: string): Promise<ResearchPa
   return data;
 }
 
+/**
+ * Just enough for the review page's very light "已优化 N 次" hint (live
+ * product instruction: "不需要做复杂版本管理页面") — not a history browser,
+ * just a count. Demo mode has no optimization runs to count, so 0 is
+ * always correct there rather than a special case.
+ */
+export async function getResearchOptimizationCount(topicId: string): Promise<number> {
+  if (!isSupabaseConfigured()) return 0;
+
+  const supabase = await createClient();
+  const { count, error } = await supabase
+    .from("research_runs")
+    .select("id", { count: "exact", head: true })
+    .eq("topic_id", topicId)
+    .eq("run_type", "optimization")
+    .eq("status", "completed");
+
+  if (error || count === null) return 0;
+  return count;
+}
+
 export async function getResearchSources(researchPackId: string): Promise<ResearchSource[]> {
   if (!isSupabaseConfigured()) {
     return DEMO_RESEARCH_SOURCES.filter((s) => s.research_pack_id === researchPackId);

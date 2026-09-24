@@ -1,22 +1,25 @@
-import { RESEARCH_SCORE_DIMENSIONS, hasScoreData } from "@/lib/ai/research-pack";
+import { RESEARCH_SCORE_DIMENSIONS, diagnoseResearchScore, hasScoreData } from "@/lib/ai/research-pack";
 import { CONFIDENCE_LABEL } from "@/lib/status";
 import { bossScoreLabel } from "@/lib/boss-language";
 import type { ResearchPack, ResearchScoreBreakdown, ResearchSource } from "@/lib/types";
 
 /**
- * `topic_score`/`score_breakdown` (see src/lib/scoring.ts) — surfaced here
- * so the researcher sees it right next to the research quality signal
- * (ConfidenceBadge), rather than buried in a collapsed admin-only panel.
+ * `topic.topic_score` — A｜选题策划员's "值不值得做" score, set BEFORE
+ * research even starts (see src/lib/scoring.ts). Live product instruction:
+ * this used to render as its own big card, the same visual weight as
+ * 研究可靠度 below (`ResearchScoreBoard`) — a user could not tell at a
+ * glance which number was "is this a good idea" versus "can we publish
+ * this yet", and the two can legitimately disagree (a great topic idea
+ * can still have thin evidence; solid evidence can back a mediocre idea).
+ * Deliberately understated here — a single muted line, not a card — so
+ * 研究可靠度 is unambiguously the page's primary number.
  */
-function ScoreCard({ score }: { score: number }) {
+function TopicValueNote({ score }: { score: number }) {
   return (
-    <div className="card flex flex-col gap-1 px-4 py-3">
-      <div className="flex items-baseline gap-2">
-        <span className="text-2xl font-semibold">{score}</span>
-        <span className="text-sm text-[var(--muted)]">/ 100 分 · 选题分数</span>
-      </div>
-      <p className="text-base">{bossScoreLabel(score)}</p>
-    </div>
+    <p className="text-sm text-[var(--muted)]">
+      选题价值 {score}/100 · {bossScoreLabel(score)}
+      <span className="ml-1.5">（这个题值不值得做——与下面的研究可靠度是两个独立的判断）</span>
+    </p>
   );
 }
 
@@ -28,10 +31,13 @@ function scoreTone(ratio: number): { text: string; bar: string } {
 }
 
 /**
- * B｜政策研究员的六项打分——每一项从哪个方面打分、打了几分，直接摆出来，
- * 不用点开、不用猜。字号刻意放大（live user instruction: "字大一点，UI设计
- * 智障友好一点"）。旧的研究结果（这个功能上线之前生成的）没有打分数据，
- * 显示一句说明而不是硬凑一个误导人的 0 分。
+ * "研究可靠度" — B｜政策研究员的六项打分，这个页面上唯一决定"现在能不能发"
+ * 的分数（见 research-pack.ts 的 canApproveResearchScore/
+ * researchDecisionTier）。每一项从哪个方面打分、打了几分，直接摆出来，不用
+ * 点开、不用猜。字号刻意放大（live user instruction: "字大一点，UI设计智障
+ * 友好一点"），且是页面视觉上的主角——不要和下面的"选题价值"（TopicValueNote，
+ * 那是完全不同的、选题阶段就定了的分数）混在一起。旧的研究结果（这个功能上
+ * 线之前生成的）没有打分数据，显示一句说明而不是硬凑一个误导人的 0 分。
  */
 function ResearchScoreBoard({ total, breakdown }: { total: number; breakdown: ResearchScoreBreakdown | null }) {
   if (!hasScoreData(breakdown)) {
@@ -46,9 +52,12 @@ function ResearchScoreBoard({ total, breakdown }: { total: number; breakdown: Re
 
   return (
     <div className="card flex flex-col gap-5 px-5 py-5">
-      <div className="flex items-baseline gap-3">
-        <span className={`text-5xl font-bold ${tone.text}`}>{total}</span>
-        <span className="text-lg text-[var(--muted)]">/ 100 分 · 研究质量评分</span>
+      <div className="flex flex-col gap-1">
+        <div className="flex items-baseline gap-3">
+          <span className={`text-5xl font-bold ${tone.text}`}>{total}</span>
+          <span className="text-lg text-[var(--muted)]">/ 100 分 · 研究可靠度</span>
+        </div>
+        <p className="text-sm text-[var(--muted)]">现有证据是否足够支持公开内容</p>
       </div>
 
       <div className="flex flex-col gap-4">
@@ -76,6 +85,38 @@ function ResearchScoreBoard({ total, breakdown }: { total: number; breakdown: Re
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * "研究诊断" — a deterministic UI mapping from the six-dimension score to
+ * the 2-4 problems that actually matter, so a user never has to read six
+ * separate score bars and infer for themselves what's wrong (live product
+ * instruction: this must NOT be another AI call just to restate `reason`
+ * more nicely — see diagnoseResearchScore's own doc comment). Renders
+ * nothing when every dimension is already healthy — a clean pack doesn't
+ * need a diagnosis section telling it so.
+ */
+function ResearchDiagnosisBoard({ breakdown }: { breakdown: ResearchScoreBreakdown | null }) {
+  const items = diagnoseResearchScore(breakdown);
+  if (items.length === 0) return null;
+
+  return (
+    <div className="card flex flex-col gap-3 px-5 py-4">
+      <p className="text-base font-medium">研究诊断</p>
+      <ul className="flex flex-col gap-2.5">
+        {items.map((item, i) => (
+          <li key={i} className="flex flex-col gap-0.5">
+            <span
+              className={`text-base font-medium ${item.severity === "HIGH" ? "text-red-700 dark:text-red-400" : "text-amber-700 dark:text-amber-400"}`}
+            >
+              {item.severity === "HIGH" ? "🔴" : "🟡"} {item.label}
+            </span>
+            <span className="text-sm text-[var(--muted)]">{item.detail}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -121,10 +162,11 @@ export function ResearchPackView({
 }) {
   return (
     <div className="flex flex-col gap-4">
-      {topic && <ScoreCard score={topic.topic_score} />}
       <ExpertWarningBanner />
       <ConfidenceBadge confidence={pack.confidence} />
       <ResearchScoreBoard total={pack.score_total ?? 0} breakdown={pack.score_breakdown} />
+      <ResearchDiagnosisBoard breakdown={pack.score_breakdown} />
+      {topic && <TopicValueNote score={topic.topic_score} />}
 
       <div>
         <p className="text-sm text-[var(--muted)]">研究摘要</p>
