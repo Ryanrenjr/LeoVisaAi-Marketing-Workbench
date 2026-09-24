@@ -199,7 +199,8 @@ describe("buildExternalGroundedPack", () => {
       { officialExtractCount: 2, failedExtractionCount: 0 },
     );
     expect(pack.warnings).not.toContain("本次研究仅基于搜索结果标题与摘要");
-    expect(pack.warnings).toContain("已读取 2 个官方来源");
+    expect(pack.warnings).toContain("已提取 2 个官方页面的正文");
+    expect(pack.warnings).not.toContain("与本题相关的提取内容");
   });
 
   it("notes when an official extraction attempt failed, without failing the pack", () => {
@@ -209,7 +210,7 @@ describe("buildExternalGroundedPack", () => {
       labelToResult,
       { officialExtractCount: 1, failedExtractionCount: 1 },
     );
-    expect(pack.warnings).toContain("已读取 1 个官方来源");
+    expect(pack.warnings).toContain("已提取 1 个官方页面的正文");
     expect(pack.warnings).toContain("1 个官方来源尝试读取正文失败");
   });
 

@@ -176,7 +176,7 @@ function buildRetrievalDisclosure(meta: RetrievalMeta): string[] {
   const notes: string[] = [];
   notes.push(
     meta.officialExtractCount > 0
-      ? `（本次研究已读取 ${meta.officialExtractCount} 个官方来源中与本题相关的提取内容；其余来源仍可能仅为搜索摘要，如涉及重要细节，请人工核实原始页面。）`
+      ? `（本次研究已提取 ${meta.officialExtractCount} 个官方页面的正文；页面是否直接支持本题，仍以上述研究结论为准。）`
       : "（本次研究仅基于搜索结果标题与摘要，未读取官方页面正文；如涉及重要细节，请人工核实原始页面。）",
   );
   if (meta.failedExtractionCount > 0) {

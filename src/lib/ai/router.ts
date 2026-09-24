@@ -445,7 +445,12 @@ export async function runResearchOptimizationTask(
     };
   }
 
-  const researchQueries = buildOptimizationSearchQueries(topic, previousPack.scoreBreakdown);
+  // Optimization needs the same English official/legal terminology as an
+  // initial research run. Using the raw Chinese question here previously
+  // produced six mixed-language queries and ranked unrelated official pages
+  // (while the initial path correctly found Returning Resident guidance).
+  const plannedQueries = await resolveResearchSearchQueries(topic);
+  const researchQueries = buildOptimizationSearchQueries(topic, previousPack.scoreBreakdown, plannedQueries);
   const searchOutcome = await runResearchSearch(researchQueries);
 
   if (!searchOutcome.ok) {

@@ -440,6 +440,26 @@ describe("buildOptimizationSearchQueries", () => {
     expect(queries.length).toBeLessThanOrEqual(6);
   });
 
+  it("uses planner-generated English terminology when optimizing a Chinese topic", () => {
+    const breakdown = fullBreakdown({
+      officialSources: { score: 2, max: 20, reason: "low" },
+      policyTimeline: { score: 2, max: 20, reason: "low" },
+      scopeExceptions: { score: 2, max: 15, reason: "low" },
+    });
+    const planned = [
+      { query: "indefinite leave lapsing after absence returning resident", lane: "OFFICIAL_PRIMARY" as const },
+      { query: "Home Office returning resident caseworker guidance strong ties", lane: "OFFICIAL_LEGAL" as const },
+      { query: "UK ILR long absence property children returning resident", lane: "GENERAL" as const },
+    ];
+
+    const queries = buildOptimizationSearchQueries(TOPIC, breakdown, planned);
+
+    expect(queries).toHaveLength(6);
+    expect(queries[0].query).toBe(planned[0].query);
+    expect(queries[1].query).toBe(planned[1].query);
+    expect(queries.every((query) => !query.query.includes(TOPIC.question))).toBe(true);
+  });
+
   it("returns nothing when the topic has neither a question nor a title to search from", () => {
     const breakdown = fullBreakdown({ officialSources: { score: 0, max: 20, reason: "low" } });
     const queries = buildOptimizationSearchQueries({ title: "", question: "", business: "b", audience: "a" }, breakdown);

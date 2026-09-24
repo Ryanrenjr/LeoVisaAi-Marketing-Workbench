@@ -114,17 +114,25 @@ function dedupeQueries(candidates: readonly ResearchSearchQuery[]): ResearchSear
 export function buildOptimizationSearchQueries(
   topic: { title: string; question: string; business: string; audience: string },
   breakdown: ResearchScoreBreakdown,
+  plannedQueries?: readonly ResearchSearchQuery[],
 ): ResearchSearchQuery[] {
   const base = (topic.question || topic.title).trim();
   if (!base) return [];
+
+  const plannedOfficial = plannedQueries?.find((query) => query.lane === "OFFICIAL_PRIMARY")?.query;
+  const plannedLegal = plannedQueries?.find((query) => query.lane === "OFFICIAL_LEGAL")?.query;
+  const plannedGeneral = plannedQueries?.find((query) => query.lane === "GENERAL")?.query;
+  const officialBase = plannedOfficial ?? base;
+  const legalBase = plannedLegal ?? `${base} Home Office guidance Immigration Rules Statement of Changes`;
+  const generalBase = plannedGeneral ?? base;
 
   const candidates: ResearchSearchQuery[] = [];
 
   if (dimensionRatio(breakdown.officialSources) < 0.8) {
     candidates.push(
-      { query: `${base} site:gov.uk`, includeDomains: PRIMARY_SOURCE_DOMAINS, lane: "OFFICIAL_PRIMARY" },
+      { query: officialBase, includeDomains: PRIMARY_SOURCE_DOMAINS, lane: "OFFICIAL_PRIMARY" },
       {
-        query: `${base} Home Office guidance Immigration Rules Statement of Changes`,
+        query: legalBase,
         includeDomains: PRIMARY_SOURCE_DOMAINS,
         lane: "OFFICIAL_LEGAL",
       },
@@ -134,22 +142,22 @@ export function buildOptimizationSearchQueries(
   if (dimensionRatio(breakdown.policyTimeline) < 0.8) {
     candidates.push(
       {
-        query: `${base} implementation date commencement transitional arrangements`,
+        query: `${legalBase} implementation date commencement transitional arrangements`,
         includeDomains: PRIMARY_SOURCE_DOMAINS,
         lane: "OFFICIAL_LEGAL",
       },
-      { query: `${base} statement of changes consultation white paper Home Office announcement`, lane: "GENERAL" },
+      { query: `${generalBase} statement of changes consultation white paper Home Office announcement`, lane: "GENERAL" },
     );
   }
 
   if (dimensionRatio(breakdown.scopeExceptions) < 0.8) {
     candidates.push(
       {
-        query: `${base} existing visa holders transitional arrangements dependants grandfathering`,
+        query: `${officialBase} existing visa holders transitional arrangements dependants grandfathering`,
         includeDomains: PRIMARY_SOURCE_DOMAINS,
         lane: "OFFICIAL_PRIMARY",
       },
-      { query: `${base} EUSS BN(O) current route existing applicants exceptions`, lane: "GENERAL" },
+      { query: `${generalBase} EUSS BN(O) current route existing applicants exceptions`, lane: "GENERAL" },
     );
   }
 
