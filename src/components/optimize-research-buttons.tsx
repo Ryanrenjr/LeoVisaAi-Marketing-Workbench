@@ -4,6 +4,7 @@ import { useActionState } from "react";
 import { optimizeResearchAction, acceptSuggestedTopicRevisionAction } from "@/app/topics/research-actions";
 import type { OptimizeActionState } from "@/app/topics/research-actions";
 import { PendingSubmitButton } from "./pending-submit-button";
+import { ThinkingRow } from "./ai/thinking-row";
 
 const INITIAL_STATE: OptimizeActionState = { ok: true };
 
@@ -35,7 +36,12 @@ export function OptimizeResearchButton({
   return (
     <form action={formAction} className="flex flex-col gap-2">
       <input type="hidden" name="topicId" value={topicId} />
-      <PendingSubmitButton variant={variant} className={className} pendingLabel={OPTIMIZING_LABEL}>
+      <PendingSubmitButton
+        variant={variant}
+        className={className}
+        pendingLabel={OPTIMIZING_LABEL}
+        pendingContent={<ThinkingRow avatarId="researcher" name="政策研究员" />}
+      >
         {label}
       </PendingSubmitButton>
       {!state.ok && state.error && <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>}
@@ -58,7 +64,11 @@ export function AcceptSuggestedTopicRevisionButton({
     <form action={formAction} className="flex flex-col gap-2">
       <input type="hidden" name="topicId" value={topicId} />
       <input type="hidden" name="researchPackId" value={researchPackId} />
-      <PendingSubmitButton className={className} pendingLabel={OPTIMIZING_LABEL}>
+      <PendingSubmitButton
+        className={className}
+        pendingLabel={OPTIMIZING_LABEL}
+        pendingContent={<ThinkingRow avatarId="researcher" name="政策研究员" />}
+      >
         采用建议并重新研究
       </PendingSubmitButton>
       {!state.ok && state.error && <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>}

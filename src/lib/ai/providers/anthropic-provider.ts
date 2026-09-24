@@ -113,6 +113,41 @@ function formatError(err: unknown): string {
       : "未知错误";
 }
 
+export function parseStructuredResponse<T>(
+  response: Anthropic.Message & { parsed_output?: unknown | null },
+  schema: ZodType<T>,
+): T {
+  if (response.parsed_output) {
+    const parsed = schema.safeParse(response.parsed_output);
+    if (parsed.success) return parsed.data;
+    const issues = parsed.error.issues.map((issue) => issue.message).join("; ");
+    throw new Error(`模型输出未通过结构校验：${issues}`);
+  }
+
+  const text = response.content
+    .filter((block): block is Anthropic.TextBlock => block.type === "text")
+    .map((block) => block.text)
+    .join("\n")
+    .trim();
+  const jsonText = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1] ?? text;
+
+  if (jsonText) {
+    try {
+      const parsed = schema.safeParse(JSON.parse(jsonText));
+      if (parsed.success) return parsed.data;
+      const issues = parsed.error.issues.map((issue) => issue.message).join("; ");
+      throw new Error(`模型输出未通过结构校验：${issues}`);
+    } catch (err) {
+      if (err instanceof SyntaxError) {
+        throw new Error(`模型输出未能解析为预期结构（停止原因：${response.stop_reason ?? "unknown"}）。`);
+      }
+      throw err;
+    }
+  }
+
+  throw new Error(`模型输出未能解析为预期结构（停止原因：${response.stop_reason ?? "unknown"}）。`);
+}
+
 /**
  * Generic structured-output call, not tied to any content-schemas.ts task
  * config — used by the external-search Research path (Brave → analysis
@@ -153,17 +188,11 @@ export async function generateAnthropicStructured<T>(params: {
       output_config: { format: zodOutputFormat(params.schema) },
     });
 
-    if (!response.parsed_output) throw new Error("模型输出未能解析为预期结构。");
-
-    const revalidated = params.schema.safeParse(response.parsed_output);
-    if (!revalidated.success) {
-      const issues = revalidated.error.issues.map((i) => i.message).join("; ");
-      throw new Error(`模型输出未通过结构校验：${issues}`);
-    }
+    const data = parseStructuredResponse(response, params.schema);
 
     return {
       ok: true,
-      data: revalidated.data,
+      data,
       error: null,
       provider: "ANTHROPIC",
       modelId: params.modelId,
@@ -234,17 +263,11 @@ export async function generateAnthropicStructuredFromImage<T>(params: {
       output_config: { format: zodOutputFormat(params.schema) },
     });
 
-    if (!response.parsed_output) throw new Error("模型输出未能解析为预期结构。");
-
-    const revalidated = params.schema.safeParse(response.parsed_output);
-    if (!revalidated.success) {
-      const issues = revalidated.error.issues.map((i) => i.message).join("; ");
-      throw new Error(`模型输出未通过结构校验：${issues}`);
-    }
+    const data = parseStructuredResponse(response, params.schema);
 
     return {
       ok: true,
-      data: revalidated.data,
+      data,
       error: null,
       provider: "ANTHROPIC",
       modelId: params.modelId,

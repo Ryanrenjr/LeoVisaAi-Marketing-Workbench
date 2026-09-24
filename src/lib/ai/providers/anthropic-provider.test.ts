@@ -2,6 +2,7 @@
 // purely so this file is importable under Vitest.
 
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 vi.mock("server-only", () => ({}));
 
@@ -22,7 +23,7 @@ vi.mock("../content-agent", () => ({
   generateWechatFullArticle: generateWechatFullMock,
 }));
 
-const { runAnthropicResearch, runAnthropicContentTask, runAnthropicWechatFullArticle } = await import(
+const { runAnthropicResearch, runAnthropicContentTask, runAnthropicWechatFullArticle, parseStructuredResponse } = await import(
   "./anthropic-provider"
 );
 
@@ -32,6 +33,36 @@ const EVIDENCE_INPUT = {
   researchPack: { summary: "s", key_findings: [], warnings: "", confidence: "HIGH" as const },
   sources: [],
 };
+
+function structuredMessage(content: string, parsedOutput?: unknown) {
+  return {
+    content: content ? [{ type: "text", text: content, citations: null }] : [],
+    parsed_output: parsedOutput,
+    stop_reason: "end_turn",
+  } as never;
+}
+
+describe("parseStructuredResponse", () => {
+  const schema = z.object({ title: z.string() });
+
+  it("uses the SDK parsed output when available", () => {
+    expect(parseStructuredResponse(structuredMessage("", { title: "SDK" }), schema)).toEqual({ title: "SDK" });
+  });
+
+  it("recovers valid JSON text when the SDK leaves parsed_output empty", () => {
+    expect(parseStructuredResponse(structuredMessage('{"title":"文本"}', null), schema)).toEqual({ title: "文本" });
+  });
+
+  it("recovers JSON wrapped in a markdown fence", () => {
+    expect(parseStructuredResponse(structuredMessage('```json\n{"title":"围栏"}\n```', null), schema)).toEqual({
+      title: "围栏",
+    });
+  });
+
+  it("reports the stop reason when neither parsed nor text output is usable", () => {
+    expect(() => parseStructuredResponse(structuredMessage("not json", null), schema)).toThrow(/end_turn/);
+  });
+});
 
 describe("runAnthropicResearch", () => {
   it("normalizes a successful research-agent.ts result into AIExecutionResult", async () => {

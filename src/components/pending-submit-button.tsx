@@ -2,7 +2,7 @@
 
 import { useFormStatus } from "react-dom";
 import { Button } from "./ui/button";
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 /**
  * A plain `<form action={...}>` submit button gives zero feedback between
@@ -15,14 +15,18 @@ import type { ButtonHTMLAttributes } from "react";
 export function PendingSubmitButton({
   children,
   pendingLabel = "处理中…",
+  pendingContent,
   variant = "primary",
   className = "",
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   pendingLabel?: string;
+  pendingContent?: ReactNode;
   variant?: "primary" | "secondary";
 }) {
   const { pending } = useFormStatus();
+  if (pending && pendingContent) return pendingContent;
+
   return (
     <Button type="submit" variant={variant} className={className} disabled={pending} {...props}>
       {pending ? pendingLabel : children}
